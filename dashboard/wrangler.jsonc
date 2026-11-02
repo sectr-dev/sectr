@@ -3,7 +3,7 @@
 // Assets is the supported path).
 //
 // Deploys: CF Workers Builds on push (root dir dashboard/):
-//   build:  npm run build:worker   (inlines NEXT_PUBLIC_* env)
+//   build:  npm ci && npm run build:worker   (inlines NEXT_PUBLIC_* env)
 //   deploy: npx wrangler deploy    (uploads .open-next/)
 {
     "$schema": "node_modules/wrangler/config-schema.json",
