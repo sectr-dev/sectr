@@ -106,14 +106,13 @@ pub fn container_run_for(
         "no runner image: manifest.runner.image missing and SECTR_RUNNER_IMAGE unset".into(),
       )
     })?;
-  let mut env = vec![
+  let env = vec![
     (
       "SECTR_INGEST_URL".to_owned(),
       config.runner_server_url.clone(),
     ),
     ("SECTR_INGEST_TOKEN".to_owned(), ingest_token.to_owned()),
   ];
-  env.extend(super::otlp_sidecar_envs());
   Ok(ContainerRun {
     image,
     // Auto-remove: the sidecar exits itself at the turn boundary
@@ -484,8 +483,8 @@ mod tests {
     assert_eq!(env["SECTR_INGEST_TOKEN"], "sit_tok");
     assert_eq!(
       env.len(),
-      2 + crate::platform::otlp_sidecar_envs().len(),
-      "secrets must NOT ride the container env; the only optional additions are the OTLP passthrough vars"
+      2,
+      "secrets and platform credentials must NOT ride the container env"
     );
     assert_eq!(run.labels["sectr.session"], session.to_string());
     assert_eq!(run.labels["sectr.deployment"], deployment.to_string());

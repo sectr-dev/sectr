@@ -3,7 +3,7 @@
 //!
 //! Protocol (`schema/sidecar.schema.json`):
 //! one connection per sidecar container, dialed by the sidecar with a
-//! session-scoped ingest token on the upgrade request. No heartbeat frames
+//! per-turn ingest token on the upgrade request. No heartbeat frames
 //! — **ingest traffic IS the lease heartbeat**: every `event` batch is
 //! gated on `heartbeat_lease` BEFORE the journal append (the prod mirror
 //! of `LeaseRefreshingSink`'s hook point), so a reclaimed lease rejects

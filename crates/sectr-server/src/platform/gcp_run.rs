@@ -48,13 +48,8 @@ use crate::platform::{BuildError, BuildOutput, BuildRequest, RunnerPlatform};
 /// so the URL would survive the token alone, but carrying both is
 /// explicit and robust). Args are NOT touched: the job template's sidecar
 /// cmd stands. Pure — unit-tested.
-fn run_request(
-  job_name: &str,
-  ingest_url: &str,
-  ingest_token: &str,
-  extra_env: &[(String, String)],
-) -> run::RunJobRequest {
-  let mut env = vec![
+fn run_request(job_name: &str, ingest_url: &str, ingest_token: &str) -> run::RunJobRequest {
+  let env = vec![
     run::EnvVar::default()
       .set_name("SECTR_INGEST_URL")
       .set_value(ingest_url.to_owned()),
@@ -62,11 +57,6 @@ fn run_request(
       .set_name("SECTR_INGEST_TOKEN")
       .set_value(ingest_token.to_owned()),
   ];
-  env.extend(extra_env.iter().map(|(name, value)| {
-    run::EnvVar::default()
-      .set_name(name.clone())
-      .set_value(value.clone())
-  }));
   run::RunJobRequest::default()
     .set_name(job_name.to_owned())
     .set_overrides(
@@ -126,11 +116,10 @@ impl GcpPlatform {
     ingest_url: &str,
     ingest_token: &str,
   ) -> Result<String, DispatchError> {
-    let extra_env = super::otlp_sidecar_envs();
     let mut poller = self
       .jobs
       .run_job()
-      .with_request(run_request(job_name, ingest_url, ingest_token, &extra_env))
+      .with_request(run_request(job_name, ingest_url, ingest_token))
       .poller();
     // Exactly ONE cycle: sends the request and reads the initial
     // state. Dropping the poller afterwards leaves the execution
@@ -247,7 +236,6 @@ mod tests {
       JOB,
       "wss://ingest.example.com/ingest",
       "sit_test-token-bytes",
-      &[],
     );
     assert_eq!(req.name, JOB);
     let overrides = req.overrides.expect("overrides must be set");

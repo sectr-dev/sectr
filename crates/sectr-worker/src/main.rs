@@ -3,7 +3,7 @@
 //! `SessionSpawner`):
 //!
 //! - `SECTR_INGEST_URL` — the server's ingest endpoint (`ws://…/ingest`).
-//! - `SECTR_INGEST_TOKEN` — the session-scoped ingest token (`sit_…`).
+//! - `SECTR_INGEST_TOKEN` — this turn's ingest token (`sit_…`).
 //! - `SECTR_RUNNER_BASE` — optional; the user process's invoke URL the
 //!   engine dials (default `http://127.0.0.1:8081`, matching
 //!   [`SubprocessRunnerConfig::port`]).
@@ -44,7 +44,7 @@ async fn main() {
   let ingest_url = std::env::var("SECTR_INGEST_URL")
     .expect("SECTR_INGEST_URL is required (server's ws://…/ingest endpoint)");
   let ingest_token = std::env::var("SECTR_INGEST_TOKEN")
-    .expect("SECTR_INGEST_TOKEN is required (session-scoped ingest token)");
+    .expect("SECTR_INGEST_TOKEN is required (this turn's ingest token)");
   let runner_base =
     std::env::var("SECTR_RUNNER_BASE").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
 

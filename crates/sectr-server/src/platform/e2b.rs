@@ -1131,16 +1131,13 @@ impl E2bPlatform {
   ) -> Result<i64, DispatchError> {
     let (cmd, args) = split_sidecar_cmd(&self.runner_sidecar_cmd)
       .ok_or_else(|| DispatchError::Spawn("SECTR_RUNNER_SIDECAR_CMD is empty".into()))?;
-    let mut envs = BTreeMap::from([
+    let envs = BTreeMap::from([
       (
         "SECTR_INGEST_URL".to_owned(),
         self.runner_server_url.clone(),
       ),
       ("SECTR_INGEST_TOKEN".to_owned(), ingest_token.to_owned()),
     ]);
-    for (k, v) in super::otlp_sidecar_envs() {
-      envs.insert(k, v);
-    }
     let pid = self
       .client
       .start_process(
