@@ -47,12 +47,6 @@ if [ "$tier" = release ]; then
   cred "gcloud authenticated" "gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q ." "gcloud auth login"
   need bws "Bitwarden Secrets Manager CLI: https://bitwarden.com/help/secrets-manager-cli/"
   cred "BWS_ACCESS_TOKEN" '[ -n "${BWS_ACCESS_TOKEN:-}" ]' "export BWS_ACCESS_TOKEN (keychain/env; never in the repo)"
-  # deploy-server's ssh client and options (lib.sh find_openssh; -F /dev/null)
-  . scripts/lib.sh
-  if find_openssh; then printf '  ok       upstream OpenSSH (%s)\n' "$ssh_bin"
-  else printf '  MISSING  upstream OpenSSH (macOS'"'"'s bundled ssh corrupts large uploads)  ->  brew install openssh\n'; ok=0; fi
-  cred "ssh to vm.sectr.dev" "${ssh_bin:-ssh} -F /dev/null -i ${SSH_KEY:-${SECTR_OPS_DIR:-../sectr-ops}/infra/control-plane/ssh-key-2026-09-18.key} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=5 opc@vm.sectr.dev true" "put infra/control-plane/ssh-key-2026-09-18.key in place (gitignored) and make sure its public half is in the VM's authorized_keys (infra/CONTROL_PLANE.md §3)"
-  need envsubst "brew install gettext"
   need npm "brew install node@22 (publish-npm)"
 
   echo "release credentials (environment, else Bitwarden Secrets Manager by name):"
@@ -67,14 +61,18 @@ if [ "$tier" = release ]; then
     elif printf '%s\n' "$bw_keys" | grep -qx "$n"; then printf '  ok       %s (Bitwarden)\n' "$n"
     else printf '  MISSING  %s  ->  add a Bitwarden secret named %s, or export it\n' "$n" "$n"; ok=0; fi
   }
-  # deploy-server: rendered into the VM's server.env
-  for n in NEON_PASSWORD SECTR_MASTER_KEY SECTR_BOOTSTRAP_PLATFORM_KEY E2B_API_KEY GRAFANA_OTLP_API_KEY POSTHOG_API_KEY DISCORD_ALERTS_WEBHOOK; do secret_ok "$n"; done
-  # deploy-server: rendered into the VM's pgbackrest.conf (Postgres backups to R2)
-  for n in R2_BACKUP_ACCESS_KEY_ID R2_BACKUP_SECRET_ACCESS_KEY PGBACKREST_CIPHER_PASS; do secret_ok "$n"; done
   secret_ok PYPI_TOKEN UV_PUBLISH_TOKEN                # publish-sdk
   secret_ok NPM_TOKEN                                  # publish-npm: @sectr scope + the unscoped sectr
   secret_ok CLOUDFLARE_ACCOUNT_ID                      # publish-r2 (wrangler)
   secret_ok CF_R2_TOKEN CLOUDFLARE_API_TOKEN           # publish-r2: R2 Edit on sectr-releases
+
+  # The hosted deploy's own needs live with it, in the private ops repo.
+  ops="${SECTR_OPS_DIR:-../sectr-ops}"
+  if [ -x "$ops/scripts/doctor.sh" ]; then
+    SECTR_DIR="$PWD" "$ops/scripts/doctor.sh" || ok=0
+  else
+    printf '  MISSING  ops repo at %s  ->  clone it there, or set SECTR_OPS_DIR\n' "$ops"; ok=0
+  fi
 fi
 
 [ $ok = 1 ] && echo "all good" || { echo "some tools missing"; exit 1; }

@@ -72,7 +72,7 @@ inner tier must also pass under the outer ones.
 1. `git config core.hooksPath .githooks` (pre-commit: fast static gates;
    pre-push: `just test`).
 2. `brew install just uv node@22 postgresql@16 jq zig openssh` plus Docker Desktop
-   (`openssh`: `deploy-server` refuses macOS's bundled ssh, which corrupts large uploads);
+   (`openssh`: the hosted deploy refuses macOS's bundled ssh, which corrupts large uploads);
    Rust via rustup (the toolchain and cross targets are pinned by
    `rust-toolchain.toml`, Node by `.nvmrc`); `cargo install cargo-zigbuild
    --locked`; `dist` **0.33.0** (matches `cargo-dist-version` in
@@ -82,11 +82,9 @@ inner tier must also pass under the outer ones.
    keychain/env, `wrangler` (optional; `npx` otherwise), and the private ops repo checked out next to this one (`../sectr-ops`, or set
    `SECTR_OPS_DIR`), which holds the hosted deploy and its ssh access. Credentials are never stored in the repo: scripts read
    them from the environment first, then Bitwarden Secrets Manager by secret
-   name (`NEON_PASSWORD`, `SECTR_MASTER_KEY`, `SECTR_BOOTSTRAP_PLATFORM_KEY`,
-   `E2B_API_KEY`, `GRAFANA_OTLP_API_KEY`, `POSTHOG_API_KEY`,
-   `DISCORD_ALERTS_WEBHOOK`, `R2_BACKUP_ACCESS_KEY_ID`, `R2_BACKUP_SECRET_ACCESS_KEY`,
-   `PGBACKREST_CIPHER_PASS`, `PYPI_TOKEN`,
-   `NPM_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CF_R2_TOKEN`). `just doctor release` checks every one.
+   name (`PYPI_TOKEN`, `NPM_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CF_R2_TOKEN`, plus
+   the hosted deploy's, listed in the ops repo). `just doctor release` checks every
+   one, running the ops repo's own check for the hosted deploy.
 4. `just doctor` (or `just doctor release`) — lists anything missing with a
    fix hint.
 

@@ -276,4 +276,4 @@ deploy-server version="":
       echo "deploy-server: $ops/scripts/deploy-server.sh not found. It deploys the hosted service from the private ops repo; set SECTR_OPS_DIR if it's elsewhere." >&2
       exit 1
     fi
-    "$ops/scripts/deploy-server.sh" {{version}}
+    SECTR_DIR="{{justfile_directory()}}" "$ops/scripts/deploy-server.sh" {{version}}
