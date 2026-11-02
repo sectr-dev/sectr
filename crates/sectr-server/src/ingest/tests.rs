@@ -1658,7 +1658,7 @@ async fn deploy_builds_an_image_and_runs_it() {
 ///   1. journal + registry rows survive (reads, SSE `Last-Event-ID` replay
 ///      through the RESTARTED binary, follow-up turns);
 ///   2. an approval decision across the restart re-spawns a fresh container
-///      (the in-memory grant map died with the process — the session-scoped
+///      (the in-memory grant map died with the process — the turn's
 ///      token is gone, the deterministic container name collides with the
 ///      orphan, `remove-if-exists` wins);
 ///   3. a mid-turn crash is reclaimed by the reconciler (the hung runner

@@ -127,7 +127,6 @@ pub struct RunnerSpec {
   pub env: HashMap<String, String>,
 }
 
-/// Ingest-token prefix (`sit_...`). Session-scoped (the container persists
-/// across turns and must reconnect with the same
-/// token); minted by the server, verified at the WS upgrade.
+/// Ingest-token prefix (`sit_...`). Scoped to one turn;
+/// minted by the server, verified at the WS upgrade.
 pub const INGEST_TOKEN_PREFIX: &str = "sit_";

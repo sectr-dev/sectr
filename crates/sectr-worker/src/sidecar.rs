@@ -40,9 +40,8 @@ use sectr_common::sidecar::{AckEntry, Assignment, CompleteOutcome, ServerFrame, 
 
 use crate::turn::{TurnAssignment, TurnEngine};
 
-/// Sidecar runtime configuration. `ingest_token` is session-scoped (minted
-/// at the session's first dispatch, injected into the container env at
-/// spawn).
+/// Sidecar runtime configuration. `ingest_token` is scoped to one turn (minted
+/// at dispatch, injected into the sidecar's env at spawn).
 #[derive(Debug, Clone)]
 pub struct SidecarConfig {
   /// The server's ingest endpoint: `ws://host:port/ingest`.

@@ -11,6 +11,9 @@
 //!   manifest's runner env + `SECTR_APPROVAL_POLICY` (the JSON array of
 //!   `assignment.approval_tools`; the assignment carries everything,
 //!   nothing is re-read).
+//! - **The runner inherits none of the sidecar's `SECTR_*` env.** That env
+//!   holds the sidecar's own settings, including its ingest token. The values
+//!   above are set explicitly, so they still arrive.
 //! - **The runner's stderr** is forwarded to the sidecar's own (the
 //!   control-plane log) through a [`StderrTail`], whose end a startup
 //!   failure quotes: the sidecar journals it as the turn's `SESSION_ERROR`.
@@ -120,9 +123,13 @@ impl RunnerSpawner for SubprocessRunner {
     }
 
     let mut cmd = Command::new(&assignment.runner.command[0]);
-    cmd
-      .args(&assignment.runner.command[1..])
-      .env("SECTR_PORT", self.config.port.to_string());
+    cmd.args(&assignment.runner.command[1..]);
+    for key in std::env::vars_os().map(|(key, _)| key) {
+      if key.as_encoded_bytes().starts_with(b"SECTR_") {
+        cmd.env_remove(key);
+      }
+    }
+    cmd.env("SECTR_PORT", self.config.port.to_string());
     for (k, v) in &assignment.env {
       cmd.env(k, v);
     }
@@ -278,6 +285,67 @@ mod tests {
             env,
         );
     runner.start(&assignment).await.expect("start with secret");
+    runner.stop().await;
+  }
+
+  /// Runs in a child copy of this test binary, because a test can't safely
+  /// set its own process's env while others run.
+  #[tokio::test]
+  async fn the_runner_inherits_none_of_the_sidecars_sectr_env() {
+    const CHILD: &str = "SECTR_TEST_RUNNER_ENV_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+      let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+          "--exact",
+          "runner::tests::the_runner_inherits_none_of_the_sidecars_sectr_env",
+        ])
+        .env(CHILD, "1")
+        .env("SECTR_INGEST_TOKEN", "sit_secret")
+        .env("SECTR_INGEST_URL", "ws://server/ingest")
+        .env("SECTR_OTLP_HEADERS", "Authorization=Basic secret")
+        .output()
+        .unwrap();
+      assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+      );
+      return;
+    }
+
+    let config = SubprocessRunnerConfig {
+      port: 18094,
+      ready_deadline: Duration::from_secs(10),
+      ready_poll_interval: Duration::from_millis(25),
+    };
+    let runner = SubprocessRunner::new(config);
+    let env = HashMap::from([
+      ("MY_SECRET".to_string(), "s3cr3t".to_string()),
+      ("SECTR_FAKE".to_string(), "1".to_string()),
+    ]);
+    let assignment = assignment(
+      vec![
+        "python3".into(),
+        "-c".into(),
+        "import os, socket, sys, time; \
+         leaked = sorted(k for k in os.environ if k.startswith('SECTR_') \
+           and k not in ('SECTR_PORT', 'SECTR_APPROVAL_POLICY', 'SECTR_FAKE')); \
+         sys.exit(f'leaked={leaked}') if leaked else None; \
+         assert os.environ['MY_SECRET'] == 's3cr3t'; \
+         assert os.environ['SECTR_FAKE'] == '1'; \
+         assert os.environ['SECTR_APPROVAL_POLICY'] == '[]'; \
+         assert 'PATH' in os.environ; \
+         s=socket.socket(); s.bind(('127.0.0.1', int(os.environ['SECTR_PORT']))); s.listen(1); \
+         time.sleep(30)"
+          .into(),
+      ],
+      env,
+    );
+    runner
+      .start(&assignment)
+      .await
+      .expect("runner env is clean");
     runner.stop().await;
   }
 

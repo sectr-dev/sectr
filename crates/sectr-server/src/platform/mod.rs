@@ -37,66 +37,6 @@ use crate::dispatch::DispatchError;
 
 pub use docker::DockerPlatform;
 
-/// OTLP passthrough for the worker sidecar: the worker binary
-/// bootstraps its own telemetry pipeline from `SECTR_OTLP_*` (see
-/// `sectr-common::telemetry`), but nothing ever exported those vars INTO
-/// the spawned sidecar — so Grafana only ever received `sectr-server`,
-/// never `sectr-worker`. Every platform forwards the server's own OTLP
-/// config (set once in server.env; the values are the observability
-/// token, not journal content — no customer data) at spawn
-/// time; unset = nothing is added and the sidecar stays stdout-only.
-pub(crate) fn otlp_sidecar_envs() -> Vec<(String, String)> {
-  otlp_envs_from(|key| std::env::var(key).ok())
-}
-
-/// Pure core of [`otlp_sidecar_envs`] — takes the env lookup so the
-/// filtering discipline is unit-testable without process-env mutation.
-pub(crate) fn otlp_envs_from(lookup: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
-  [
-    "SECTR_OTLP_ENDPOINT",
-    "SECTR_OTLP_HEADERS",
-    "SECTR_OTLP_SAMPLE_RATIO",
-  ]
-  .into_iter()
-  .filter_map(|key| {
-    lookup(key)
-      .filter(|v| !v.trim().is_empty())
-      .map(|value| (key.to_owned(), value))
-  })
-  .collect()
-}
-
-#[cfg(test)]
-mod tests {
-  use super::otlp_envs_from;
-
-  use std::collections::HashMap;
-
-  #[test]
-  fn otlp_envs_passthrough_keeps_order_skips_unset_and_blank() {
-    let mut env = HashMap::new();
-    env.insert("SECTR_OTLP_ENDPOINT", "https://gw.grafana.net/otlp");
-    env.insert("SECTR_OTLP_HEADERS", "Authorization=Basic abc==");
-    env.insert("SECTR_OTLP_SAMPLE_RATIO", "   "); // blank = unset
-    env.insert("SECTR_OTLP_UNRELATED", "x");
-    let envs = otlp_envs_from(|k| env.get(k).map(|v| v.to_string()));
-    assert_eq!(
-      envs,
-      vec![
-        (
-          "SECTR_OTLP_ENDPOINT".to_owned(),
-          "https://gw.grafana.net/otlp".to_owned()
-        ),
-        (
-          "SECTR_OTLP_HEADERS".to_owned(),
-          "Authorization=Basic abc==".to_owned()
-        ),
-      ]
-    );
-    // Unset entirely → empty (the dev no-op path).
-    assert!(otlp_envs_from(|_| None).is_empty());
-  }
-}
 #[cfg(feature = "e2b")]
 pub use e2b::E2bPlatform;
 #[cfg(feature = "gcp")]
