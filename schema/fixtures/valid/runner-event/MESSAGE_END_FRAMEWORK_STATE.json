@@ -1,0 +1,23 @@
+{
+  "type": "MESSAGE_END",
+  "payload": {
+    "message_id": "msg_01",
+    "finish_reason": "tool_use",
+    "framework_state": {
+      "adapter": "pydantic_ai",
+      "v": 1,
+      "data": {
+        "thinking": [
+          {
+            "part_kind": "thinking",
+            "content": "They want order 42's status.",
+            "signature": "EqQBCkYIBhgCKkAz",
+            "provider_name": "anthropic",
+            "id": null,
+            "provider_details": null
+          }
+        ]
+      }
+    }
+  }
+}

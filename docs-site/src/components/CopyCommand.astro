@@ -1,0 +1,119 @@
+---
+// A one-line call to action: a short label and a shell command with a copy
+// button. Lighter than a code block (no terminal frame), for the landing
+// page's "add the skill" prompt.
+interface Props {
+    label: string;
+    command: string;
+}
+const { label, command } = Astro.props;
+---
+
+<p class="copy-command not-content">
+    <span class="copy-command-label">{label}</span>
+    <span class="copy-command-chip">
+        <code>{command}</code>
+        <button type="button" data-copy-command={command} aria-label={`Copy: ${command}`} title="Copy">
+            <svg class="icon-copy" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+                <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
+            </svg>
+            <svg class="icon-copied" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5"></path>
+            </svg>
+        </button>
+    </span>
+    <span class="copy-command-status" role="status"></span>
+</p>
+
+<style>
+    .copy-command {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem 0.75rem;
+        margin: 0;
+    }
+    .copy-command-label {
+        color: var(--sl-color-gray-2);
+    }
+    .copy-command-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        max-width: 100%;
+        padding: 0.25rem 0.25rem 0.25rem 0.875rem;
+        border: 1px solid var(--sl-color-hairline-light);
+        border-radius: 999px;
+        background: var(--sl-color-gray-6);
+    }
+    .copy-command-chip code {
+        font-family: var(--sl-font-mono);
+        font-size: var(--sl-text-sm);
+        color: var(--sl-color-white);
+        overflow-wrap: anywhere;
+    }
+    .copy-command-chip button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        flex: none;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--sl-color-gray-2);
+        cursor: pointer;
+    }
+    .copy-command-chip button:hover,
+    .copy-command-chip button:focus-visible {
+        background: var(--sl-color-gray-5);
+        color: var(--sl-color-white);
+    }
+    .copy-command-chip svg {
+        width: 1rem;
+        height: 1rem;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+    .icon-copied,
+    [data-copied] .icon-copy {
+        display: none;
+    }
+    [data-copied] .icon-copied {
+        display: block;
+        color: var(--sl-color-accent-high);
+    }
+    .copy-command-status {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+    }
+</style>
+
+<script>
+    // Delegated, so it works for every copy button on the page.
+    document.addEventListener("click", async (event) => {
+        const button = (event.target as Element).closest<HTMLButtonElement>("[data-copy-command]");
+        if (!button) return;
+        const status = button.closest(".copy-command")?.querySelector(".copy-command-status");
+        try {
+            await navigator.clipboard.writeText(button.dataset.copyCommand ?? "");
+        } catch {
+            if (status) status.textContent = "Couldn't copy: select the command instead.";
+            return;
+        }
+        button.setAttribute("data-copied", "");
+        if (status) status.textContent = "Copied";
+        setTimeout(() => {
+            button.removeAttribute("data-copied");
+            if (status) status.textContent = "";
+        }, 1500);
+    });
+</script>

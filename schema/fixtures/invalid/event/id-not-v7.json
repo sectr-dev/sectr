@@ -1,0 +1,12 @@
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+  "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+  "seq": 3,
+  "type": "MESSAGE_DELTA",
+  "payload": {
+    "message_id": "msg_01",
+    "delta": "hi"
+  },
+  "created_at": "2026-01-15T12:00:03.123456Z"
+}

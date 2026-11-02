@@ -1,0 +1,15 @@
+{
+  "name": "sectr-agui-conformance",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Replays Sectr's golden AG-UI streams through the real @ag-ui/client stream verifier + reducer. Not part of the product version train.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ag-ui/client": "1.0.1",
+    "@ag-ui/core": "1.0.1",
+    "rxjs": "^7.8.2"
+  }
+}

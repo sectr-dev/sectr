@@ -1,0 +1,12 @@
+Follow a session's journal (never stops until ctrl-c)
+
+Usage: sectr tail [OPTIONS] --session <SESSION>
+
+Options:
+      --path <PATH>        Project directory (must contain a `.agent/dev.json` from `sectr dev`) [default: .]
+      --session <SESSION>  Session to follow (all-sessions tail is future work)
+      --cloud              CLOUD mode: follow a session on a sectr-server (auth/server from --api/--key, the env, or `sectr auth login`)
+      --api <API>          Server base (cloud mode). Defaults through `sectr auth login`
+      --key <KEY>          Platform key (cloud mode). Defaults through `sectr auth login`
+      --json               Raw event envelopes (one JSON per line) instead of the human renderer
+  -h, --help               Print help

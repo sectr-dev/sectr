@@ -1,0 +1,4 @@
+{
+  "kind": "abort",
+  "reason": "turn abandoned: lease expired (reconciler reclaim)"
+}

@@ -1,0 +1,19 @@
+---
+// Version footer at the bottom of the sidebar. This override wraps
+// Starlight's default Sidebar component (configured via the `components`
+// option in astro.config.mjs) and appends the lockstep version as plain
+// text — no link, no compat wording. The version comes from package.json
+// at build time (astro.config.mjs `define`); set-version.sh keeps that
+// manifest in lockstep, so the footer doubles as proof that the live docs
+// are the latest release build.
+import StarlightSidebar from "@astrojs/starlight/components/Sidebar.astro";
+// Build-time read of the lockstep version (package.json is a lockstep
+// manifest). A direct JSON import is deterministic;
+// Astro's `define` doesn't reliably reach .astro frontmatter.
+import pkg from "../../../package.json" with { type: "json" };
+
+const version = pkg.version;
+---
+
+<StarlightSidebar />
+<div class="sidebar-version-footer">v{version}</div>

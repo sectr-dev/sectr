@@ -1,0 +1,177 @@
+{
+  "$id": "https://sectr.dev/schemas/sidecar.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sectr sidecar↔server protocol (Contract 4)",
+  "description": "One WebSocket connection per sidecar PROCESS (dialed by the sidecar), living for one turn — the always-terminate policy tears the process down at every turn boundary (sentinel or approval suspension), and the next dispatch re-dials with a fresh per-turn token. (The frame contracts themselves predate this policy, when a connection persisted across turns.) JSON frames reusing the schema types; the ingest token rides the WS upgrade request's Authorization header (Bearer sit_...), never a frame. Message kinds — sidecar→server: ready (post-dial), event (validated runner events in stream order; the server assigns seq, refreshes the lease, and acks), complete (turn end: sentinel journaled / suspension / failure). Server→sidecar: assignment (transcript, reason, env/secrets, runner spawn spec — sent when an invocation starts, possibly more than once per connection), ack (assigned seqs / event UUIDs / duplicate flags), abort (lease reclaimed or fatal — the sidecar's next append fails and its turn task exits via IngestFailed).\n\nReconnect semantics (within one turn — the grant lives while the turn is live): the sidecar reconnects with the same per-turn ingest token, sends ready, and replays its unacked in-flight event batch (same producer-minted UUIDv7 ids); the server dedupes by event id and acks with the originally stamped seqs. Mid-stream turns survive reconnect only through this batch replay; a turn whose WS died before its final batch is abandoned and ended by the server-side reconciler (lease expiry).\n\nLiveness is single-mechanism — the lease, refreshed by INGEST TRAFFIC: every `event` batch the server receives extends the session's live lease (heartbeat-before-append, mirroring the dev LeaseRefreshingSink). There are NO explicit heartbeat frames — a turn that streams events is alive by definition, and between turns no lease is live to keep alive (the lease is released at turn end, so an idle connection needs no liveness signal). A stalled runner stops producing events, its lease expires, and the reconciler ends the abandoned turn.\n\nRunner-event payloads inside `event` frames are NEW events (producer-minted id, no seq/created_at — the journal writer stamps those). The (type, payload) pairing under $defs/newEvent mirrors event.schema.json's $defs/typedEvent plus the id field; the conformance suite enforces that the mirror stays in sync. Forward compatibility: additionalProperties is deliberately NOT false — unknown fields are preserved, and unknown `kind` values MUST be ignored by receivers (additive protocol evolution).",
+  "type": "object",
+  "required": ["kind"],
+  "properties": {
+    "kind": {
+      "description": "Discriminator. Receivers MUST ignore frames with unknown kinds (forward compatibility).",
+      "type": "string"
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/event" },
+    { "$ref": "#/$defs/complete" },
+    { "$ref": "#/$defs/assignment" },
+    { "$ref": "#/$defs/ack" },
+    { "$ref": "#/$defs/abort" }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "uuidv7": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "newEvent": {
+      "description": "A producer-minted event awaiting the journal writer's stamp: (type, payload) as in event.schema.json's typedEvent, plus the dedup key `id` (UUIDv7, minted by the engine — never user code). Types are restricted to RUNNER-emitted events — platform events (SESSION_CREATED, INVOCATION_STARTED, approval decisions, SESSION_ERROR) are journaled by the server itself, never over the ingest path. No seq/created_at/session/deployment: those are assigned/stamped at ingest.",
+      "type": "object",
+      "required": ["id", "type", "payload"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuidv7" },
+        "type": {
+          "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/runnerEventType"
+        }
+      },
+      "oneOf": [
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/MESSAGE_START" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/MESSAGE_DELTA" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/MESSAGE_END" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/TOOL_CALL" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/TOOL_RESULT" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/TOOL_APPROVAL_REQUIRED" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/ERROR" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/NO_MORE_ACTIONS" },
+        { "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/TRANSCRIPT_COMPACTED" }
+      ]
+    },
+    "ready": {
+      "description": "sidecar→server, first frame after dialing. Authentication happened at upgrade (ingest token); this frame only marks the connection open for business.",
+      "type": "object",
+      "properties": { "kind": { "const": "ready" } },
+      "required": ["kind"]
+    },
+    "event": {
+      "description": "sidecar→server: a batch of validated runner events in stream order. Receiving this batch IS the lease heartbeat — the server extends the session's live lease FIRST (heartbeat-before-append: if the lease was reclaimed while the turn ran, the heartbeat fails and the batch is rejected with `abort`, so no runner event can land in the journal after the reconciler's sentinel), then journals (assigning seq, deduping by id), then answers with ack. One batch in flight at a time — the sidecar awaits the ack before the next append.",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "event" },
+        "batch_id": { "$ref": "#/$defs/uuid" },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/newEvent" }
+        }
+      },
+      "required": ["kind", "batch_id", "events"]
+    },
+    "complete": {
+      "description": "sidecar→server: the turn ended. The journal already carries the turn's end (sentinel / TOOL_APPROVAL_REQUIRED / synthesized SESSION_ERROR + sentinel) — complete is bookkeeping: the server releases the lease (idempotent) and marks the connection idle. outcome: completed = sentinel journaled; suspended = approval pending (lease already released server-side at the suspension); failed = SESSION_ERROR + sentinel journaled by the sidecar; ingest_lost = the WS died before the final batch (the reconciler owns the turn now).",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "complete" },
+        "outcome": {
+          "enum": ["completed", "suspended", "failed", "ingest_lost"]
+        },
+        "message": { "type": "string" }
+      },
+      "required": ["kind", "outcome"]
+    },
+    "assignment": {
+      "description": "server→sidecar: one invocation to execute. The transcript INCLUDES this invocation's INVOCATION_STARTED (the server journals it before dispatch — the ordering contract). env carries the app's resolved secrets (values, write-only — never returned by any read API). runner is the user-process spawn spec (command argv, no shell); the sidecar dials the spawned process on localhost:$SECTR_PORT. approval_tools are the tool names the platform requires approval for (injected to the runner as SECTR_APPROVAL_POLICY).",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "assignment" },
+        "session_id": { "$ref": "#/$defs/uuid" },
+        "deployment_id": { "$ref": "#/$defs/uuid" },
+        "invocation_id": { "$ref": "#/$defs/uuid" },
+        "route": { "type": "string" },
+        "reason": {
+          "$ref": "https://sectr.dev/schemas/event.schema.json#/$defs/invocationReason"
+        },
+        "transcript": {
+          "type": "array",
+          "items": {
+            "$ref": "https://sectr.dev/schemas/event.schema.json"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "runner": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1
+            },
+            "workdir": { "type": "string" },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "required": ["command"]
+        },
+        "approval_tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": [
+        "kind",
+        "session_id",
+        "deployment_id",
+        "invocation_id",
+        "route",
+        "reason",
+        "transcript",
+        "env",
+        "runner",
+        "approval_tools"
+      ]
+    },
+    "ack": {
+      "description": "server→sidecar: the batch is journaled. Per-event assigned seq and duplicate flag (true when the id was already journaled — a reconnect replay; the stamped row is the original, exactly-once).",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "ack" },
+        "batch_id": { "$ref": "#/$defs/uuid" },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "$ref": "#/$defs/uuid" },
+              "seq": { "type": "integer", "minimum": 0 },
+              "duplicate": { "type": "boolean" }
+            },
+            "required": ["id", "seq", "duplicate"]
+          }
+        }
+      },
+      "required": ["kind", "batch_id", "events"]
+    },
+    "abort": {
+      "description": "server→sidecar: the turn is no longer this sidecar's (lease reclaimed by the reconciler, or a fatal server-side ingest error). The sidecar stops feeding its turn task — the sink fails the append (IngestFailed) and the task exits without journaling anything further.",
+      "type": "object",
+      "properties": {
+        "kind": { "const": "abort" },
+        "reason": { "type": "string" }
+      },
+      "required": ["kind", "reason"]
+    }
+  }
+}

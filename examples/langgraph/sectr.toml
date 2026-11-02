@@ -1,0 +1,6 @@
+[app]
+name = "support-agent"
+
+[agent]
+entry = "main:app"
+python = "3.12"

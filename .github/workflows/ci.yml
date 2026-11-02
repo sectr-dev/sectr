@@ -1,0 +1,41 @@
+# PR/push CI: ONE job running `just check` (light, path-aware checks — see
+# the justfile and RELEASING.md). Full verification happens on the release
+# branch (`just verify`, or release-check.yml). NOT a deploy workflow.
+# All logic lives in the justfile; this file only sets up toolchains/caches.
+
+name: ci
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    check:
+        runs-on: ubuntu-24.04
+        env:
+            # Path-aware checks diff against this: PR → merge base with the
+            # target branch; push → the previous tip (all areas if unknown).
+            CHECK_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+            - uses: extractions/setup-just@v3
+            - uses: actions/setup-node@v4
+              with:
+                  node-version-file: .nvmrc
+            - uses: astral-sh/setup-uv@v6
+            # Toolchain comes from rust-toolchain.toml (rustup auto-installs).
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: check
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
+            - run: just check

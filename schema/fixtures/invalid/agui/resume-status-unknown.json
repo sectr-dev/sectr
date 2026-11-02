@@ -1,0 +1,16 @@
+{
+  "validate": "RunAgentInput",
+  "reason": "a resume entry's status is resolved | cancelled",
+  "expect_error_contains": "approved",
+  "document": {
+    "threadId": "t",
+    "runId": "r",
+    "messages": [],
+    "resume": [
+      {
+        "interruptId": "i",
+        "status": "approved"
+      }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+---
+title: Setting Up Sectr for Development
+description: Install the Sectr CLI and the Sectr Python SDK.
+---
+
+import { Code } from "astro-expressive-code/components";
+import topHelp from "../../../generated/cli/top.txt?raw";
+
+{/* skill: skip file — SKILL.md's "Before anything else" checklist covers installing and logging in, written for agents */}
+
+Developing agents requires the **`sectr`** CLI to be installed on your dev machine, to be able to run agents locally and deploy them to Sectr Cloud. Your agent itself only needs to depend on and import the **`sectr` Python SDK**.
+
+## Installing the `sectr` CLI
+
+One command, no runtime dependencies:
+
+```sh
+curl -fsSL https://sectr.dev/install.sh | sh
+```
+
+Verify it with `sectr --version`.
+
+## Authenticating the `sectr` CLI
+
+All cloud commands (`sectr deploy`, `sectr secrets`, etc.) authenticate with a **platform API key** (`skp_…`).
+Run `sectr auth login` so all future commands need no flags. It opens [app.sectr.dev](https://app.sectr.dev) in your browser: sign in with GitHub, Google, Vercel or an email code if asked, check that the code matches your terminal, and approve the request. The CLI finishes on its own.
+
+```sh
+sectr auth login
+```
+
+On a remote machine (SSH, a container), add `--no-browser`: it prints the link for you to open on any device. In CI, set `SECTR_PLATFORM_KEY` to a platform key created in Settings &rarr; API keys, or pass one with `--key`.
+
+## Giving your coding agent the Sectr skill
+
+If you build with a coding agent (Claude Code, Codex, Cursor, and others), install the `sectr` agent skill: these docs, packaged so your agent can look up the CLI, SDK and API while it works on your Sectr project.
+
+```sh
+npx skills add sectr-dev/skills
+```
+
+That installs it into the current project. Add `-g` to install it globally instead.

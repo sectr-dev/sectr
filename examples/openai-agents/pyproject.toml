@@ -1,0 +1,15 @@
+[project]
+name = "sectr-example-openai-agents"
+version = "0.1.0"
+description = "Sectr example: support agent on openai-agents"
+requires-python = ">=3.12"
+dependencies = [
+    "sectr[openai-agents]",
+]
+
+[dependency-groups]
+dev = ["mypy>=1"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true

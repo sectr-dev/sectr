@@ -1,0 +1,7 @@
+{
+  "type": "SESSION_CREATED",
+  "payload": {
+    "app_id": "0192f390-2222-7d3e-8b1c-9a0b1c2d3e4f",
+    "route": "/customer-support"
+  }
+}

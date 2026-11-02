@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Pre-push hook — runs `just test` (= check + fast unit tests), path-aware
+# against origin/main. Bypass with `git push --no-verify` (documented
+# exceptions only). Activate: git config core.hooksPath .githooks
+#
+# The last run's full output is kept in .git/pre-push.log, so a failure can
+# be read back even when the push's own output was filtered or lost.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if ! command -v just >/dev/null 2>&1; then
+  echo "pre-push: 'just' not installed (brew install just) — skipping" >&2
+  exit 0
+fi
+log="$(git rev-parse --git-dir)/pre-push.log"
+set -o pipefail
+if ! just test 2>&1 | tee "$log"; then
+  echo "pre-push: just test failed; full output in $log" >&2
+  exit 1
+fi

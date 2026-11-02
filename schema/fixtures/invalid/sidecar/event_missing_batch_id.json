@@ -1,0 +1,10 @@
+{
+  "kind": "event",
+  "events": [
+    {
+      "id": "0192f3a4-b600-7000-8000-000000000006",
+      "type": "MESSAGE_DELTA",
+      "payload": { "message_id": "msg_01", "delta": { "typed": "text", "text": "hi" } }
+    }
+  ]
+}

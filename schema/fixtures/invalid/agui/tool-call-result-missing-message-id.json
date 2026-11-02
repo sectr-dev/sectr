@@ -1,0 +1,11 @@
+{
+  "validate": "event",
+  "reason": "TOOL_CALL_RESULT mints a tool message, so `messageId` is required",
+  "expect_error_contains": "messageId",
+  "document": {
+    "type": "TOOL_CALL_RESULT",
+    "toolCallId": "c1",
+    "content": "ok",
+    "role": "tool"
+  }
+}

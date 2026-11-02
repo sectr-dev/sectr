@@ -1,0 +1,19 @@
+[project]
+name = "sectr-example-raw"
+version = "0.1.0"
+description = "Sectr example: framework-free agentic loop over OpenRouter"
+requires-python = ">=3.12"
+dependencies = [
+    "sectr",
+    "openai>=1",
+]
+
+[tool.uv.sources]
+sectr = { path = "../../sdk-python", editable = true }
+
+[dependency-groups]
+dev = ["mypy>=1"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true

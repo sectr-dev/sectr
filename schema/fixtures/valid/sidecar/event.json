@@ -1,0 +1,28 @@
+{
+  "kind": "event",
+  "batch_id": "0192f3a4-b700-7000-8000-0000000000aa",
+  "events": [
+    {
+      "id": "0192f3a4-b600-7000-8000-000000000006",
+      "type": "MESSAGE_DELTA",
+      "payload": {
+        "message_id": "msg_01",
+        "delta": {
+          "typed": "text",
+          "text": "Looking up your order…"
+        }
+      }
+    },
+    {
+      "id": "0192f3a4-b600-7000-8000-000000000007",
+      "type": "TOOL_CALL",
+      "payload": {
+        "tool_call_id": "call_01",
+        "name": "lookup_order",
+        "arguments": {
+          "order_id": "A-1234"
+        }
+      }
+    }
+  ]
+}

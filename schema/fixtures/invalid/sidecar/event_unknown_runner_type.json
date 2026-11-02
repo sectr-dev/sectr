@@ -1,0 +1,11 @@
+{
+  "kind": "event",
+  "batch_id": "0192f3a4-b700-7000-8000-0000000000aa",
+  "events": [
+    {
+      "id": "0192f3a4-b600-7000-8000-000000000008",
+      "type": "SESSION_CREATED",
+      "payload": { "app_id": "0192f3a0-2222-7abc-9def-0123456789cd", "route": "/assist" }
+    }
+  ]
+}

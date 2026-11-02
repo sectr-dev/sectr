@@ -1,0 +1,50 @@
+[package]
+name = "sectr-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The sectr command-line interface: deploying agents is as easy as `sectr deploy`"
+
+# The user-facing binary is `sectr` (the crate name is the internal one —
+# matching the workspace layout); docs and the runbook all say `sectr`.
+[[bin]]
+name = "sectr"
+path = "src/main.rs"
+
+[dependencies]
+sectr-common.workspace = true
+sectr-worker.workspace = true
+clap = { workspace = true, features = ["derive"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+toml = "0.8"
+tar = { workspace = true }
+flate2 = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+axum = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { workspace = true }
+rpassword = "7"
+tower-http = { workspace = true }
+sqlx = { workspace = true }
+# `sectr init` template picker: up/down arrows, enter — raw-mode
+# terminal input, no TUI framework.
+crossterm = "0.29"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# cargo-dist: this is the one workspace member that ships to users.
+# The workspace sets dist = false by default; this re-enables it here.
+[package.metadata.dist]
+dist = true

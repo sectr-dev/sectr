@@ -1,0 +1,50 @@
+# Advisory second opinion for a release branch: runs the full suite
+# (`just ci-full`) on Linux. The authoritative gate is the local marker from
+# `just verify` on the dev machine; this is only required under
+# `just release --require-gh`. Skips macOS-only artifact targets.
+# All logic lives in the justfile.
+
+name: release-check
+
+on:
+    push:
+        branches: ['release/**']
+    workflow_dispatch:
+
+concurrency:
+    group: release-check-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    verify:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 90
+        steps:
+            # ci-full builds debug + release workspaces, runs docker tests and
+            # builds an image: the default ~14 GB of free disk is not enough.
+            - name: Free disk space
+              run: |
+                  sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+                  df -h /
+            - uses: actions/checkout@v4
+            - uses: extractions/setup-just@v3
+            - uses: actions/setup-node@v4
+              with:
+                  node-version-file: .nvmrc
+            - uses: astral-sh/setup-uv@v6
+            # ci-full also builds + verifies the Linux release artifacts:
+            # dist (pinned to Cargo.toml's cargo-dist-version) and zigbuild.
+            - name: Install dist
+              run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-installer.sh | sh
+            - name: Install cargo-zigbuild (bundles zig)
+              run: pip3 install cargo-zigbuild
+            - uses: docker/setup-buildx-action@v3
+            # Restores main's cache (same shared-key as ci.yml); never saves.
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: check
+                  save-if: false
+            - run: just ci-full

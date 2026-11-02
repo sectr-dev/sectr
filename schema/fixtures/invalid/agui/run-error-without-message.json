@@ -1,0 +1,9 @@
+{
+  "validate": "event",
+  "reason": "RUN_ERROR requires `message`",
+  "expect_error_contains": "message",
+  "document": {
+    "type": "RUN_ERROR",
+    "code": "E1"
+  }
+}

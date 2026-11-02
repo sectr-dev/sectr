@@ -1,0 +1,9 @@
+{
+  "validate": "event",
+  "reason": "REASONING_MESSAGE_START requires role: \"reasoning\"",
+  "expect_error_contains": "role",
+  "document": {
+    "type": "REASONING_MESSAGE_START",
+    "messageId": "m1:reasoning"
+  }
+}

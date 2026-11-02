@@ -1,0 +1,10 @@
+{
+  "type": "MESSAGE_DELTA",
+  "payload": {
+    "message_id": "msg_01",
+    "delta": {
+      "type": "text",
+      "text": "Let me look up your order."
+    }
+  }
+}

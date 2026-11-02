@@ -1,0 +1,84 @@
+# Shared helpers for release scripts. Source it:  . "$(dirname "$0")/lib.sh"
+# DRY_RUN=1 makes `run` print instead of execute (publish/deploy scripts).
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+die() { echo "error: $*" >&2; exit 1; }
+log() { echo "==> $*" >&2; }
+
+# run CMD...  — execute, or just print under DRY_RUN=1.
+run() {
+  if [ "${DRY_RUN:-}" = 1 ]; then
+    printf '[dry-run]'; printf ' %q' "$@"; echo
+  else
+    "$@"
+  fi
+}
+
+# load_secrets NAME... — export each NAME not already in the environment from
+# Bitwarden Secrets Manager (`bws`, secret whose key == NAME; needs
+# BWS_ACCESS_TOKEN), all from ONE `bws secret list`: every call is a round
+# trip that can time out, so a script fetches what it needs at once. Bitwarden
+# answers `secret list` with an occasional 504 (several during the v0.0.9
+# deploy, fine seconds later), so a failed list is retried with backoff.
+load_secrets() {
+  local missing=() name json val
+  for name in "$@"; do [ -n "${!name:-}" ] || missing+=("$name"); done
+  [ ${#missing[@]} -gt 0 ] || return 0
+  command -v bws >/dev/null || die "${missing[*]} not set and bws is not installed (see RELEASING.md)"
+  [ -n "${BWS_ACCESS_TOKEN:-}" ] || die "${missing[*]} not set and BWS_ACCESS_TOKEN is not set"
+  # bws writes its errors to stderr, so only the successful attempt's JSON is captured.
+  json=$(retry 4 bws secret list -o json) || die "bws secret list failed 4 times (errors above); nothing was read"
+  for name in "${missing[@]}"; do
+    val=$(jq -r --arg k "$name" 'first(.[] | select(.key == $k) | .value) // empty' <<<"$json")
+    [ -n "$val" ] || die "secret $name not found in Bitwarden Secrets Manager"
+    export "$name=$val"
+  done
+}
+
+# retry ATTEMPTS CMD... — run CMD, retrying with backoff (5s, 10s, …) while it
+# fails; only for idempotent steps: the Bitwarden list above, R2 puts
+# (publish-r2), and the deploy's ssh/scp staging (SSH's integrity check means
+# a corrupted upload never lands, so retrying an upload is safe). Progress
+# goes to stderr, so `x=$(retry …)` captures only CMD's output.
+retry() {
+  local attempts=$1 attempt
+  shift
+  for ((attempt = 1; ; attempt++)); do
+    "$@" && return 0
+    [ "$attempt" -lt "$attempts" ] || { log "failed $attempt times: $*"; return 1; }
+    log "failed (attempt $attempt of $attempts); retrying in $((attempt * 5))s: $*"
+    sleep $((attempt * 5))
+  done
+}
+
+# find_openssh — set ssh_bin/scp_bin to an upstream OpenSSH (Homebrew's), never
+# macOS's bundled /usr/bin/ssh (OpenSSH_10.2p1 + LibreSSL 3.3.6): it corrupts
+# uploads now and then, about once per 30 MB, which the VM's sshd rejects with
+# "message authentication code incorrect". Homebrew's OpenSSH on the same
+# machine and network is clean (2026-10-23). Fails if there is no upstream one.
+find_openssh() {
+  local dir
+  ssh_bin=$(command -v ssh || true); scp_bin=$(command -v scp || true)
+  for dir in /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$dir/ssh" ] && [ -x "$dir/scp" ]; then ssh_bin=$dir/ssh; scp_bin=$dir/scp; break; fi
+  done
+  [ -n "$ssh_bin" ] && [ -n "$scp_bin" ] && ! "$ssh_bin" -V 2>&1 | grep -q LibreSSL
+}
+
+# secret NAME — value of NAME: the environment wins, else Bitwarden (above).
+secret() {
+  load_secrets "$1"
+  printf '%s' "${!1}"
+}
+
+# artifacts_dir VERSION — where `just build` leaves everything for a version.
+# SECTR_ARTIFACTS_DIR lets a build from a tag worktree land in the main checkout.
+artifacts_dir() { echo "${SECTR_ARTIFACTS_DIR:-$root/target/release-artifacts}/v$1"; }
+
+# need_artifacts VERSION — fail unless a build for VERSION exists.
+need_artifacts() {
+  [ -f "$(artifacts_dir "$1")/BUILT_FROM_SHA" ] \
+    || die "no build for v$1 at $(artifacts_dir "$1") — run: just build"
+}

@@ -1,0 +1,11 @@
+{
+  "kind": "assignment",
+  "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+  "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+  "invocation_id": "0192f3a4-b5d0-7000-8000-0000000000c1",
+  "route": "/assist",
+  "reason": "user_message",
+  "env": {},
+  "runner": { "command": ["python3", "-m", "agent"] },
+  "approval_tools": []
+}

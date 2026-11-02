@@ -1,0 +1,10 @@
+Sign in: opens the dashboard in your browser to approve the request (or pass --key / --with-key to store an API key instead)
+
+Usage: sectr auth login [OPTIONS]
+
+Options:
+      --with-key    Read the platform key from a hidden prompt or stdin instead of using the browser
+      --no-browser  Print the approval link without trying to open a browser (remote machines, coding agents)
+      --api <API>   The server base URL. Default: the public endpoint
+      --key <KEY>   Platform API key (`skp_…`). With `login`, stores that key instead of opening the browser
+  -h, --help        Print help

@@ -1,0 +1,5 @@
+{
+  "kind": "complete",
+  "outcome": "failed",
+  "message": "runner stream failed: connection reset"
+}

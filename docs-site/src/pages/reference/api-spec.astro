@@ -1,0 +1,112 @@
+---
+// The interactive full API reference: Scalar pointed at the
+// build-time bundled copy of schema/public-api.yaml (scripts/gen-spec.mjs
+// inlines sessions-api.yaml and event.schema.json — Scalar's browser
+// runtime cannot resolve external sibling $refs), drift-checked by
+// check:spec.
+//
+// Custom Starlight page (not a content page) because the body is a
+// component, not markdown. renderMode="client" mounts Scalar in the browser
+// and re-mounts around Starlight's view transitions — without it the
+// embedded static script only runs on a hard page load and renders blank
+// after sidebar navigation.
+//
+// Theming: Scalar resolves light/dark on its own (forceDarkModeState →
+// localStorage 'colorMode' → config.darkMode → prefers-color-scheme) and
+// paints the result as `dark-mode`/`light-mode` classes on <body> — it never
+// looks at the host page, so the Starlight chrome and the embedded reference
+// could disagree. The inline script below mirrors Starlight's resolved
+// <html data-theme> into Scalar's localStorage + body classes, live, and
+// hideDarkModeToggle removes Scalar's own bottom-right switch (Starlight's
+// header toggle is the single source of truth).
+//
+// Width: Starlight clamps .content-panel .sl-container to --sl-content-width
+// (67.5rem here, no TOC), which strangles the reference; the stylesheet
+// below lets it span the full content column (Scalar's own inner column
+// stays capped by its default --refs-content-max-width).
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import { ScalarComponent } from "@scalar/astro";
+
+const frontmatter = {
+    title: "Full API reference",
+    description:
+        "The complete public HTTP API spec (schema/public-api.yaml), rendered interactively.",
+    tableOfContents: false,
+};
+---
+
+<StarlightPage frontmatter={frontmatter}>
+    <style>
+        /* Scalar manages its own layout height; give it the page body. */
+        scalar-api-reference {
+            display: block;
+            height: calc(100vh);
+            min-height: 36rem;
+        }
+        /* Undo Starlight's content clamp so the reference isn't squeezed
+           into a 67.5rem column (applies to the title panel too). */
+        :global(.content-panel .sl-container) {
+            max-width: 100%;
+        }
+    </style>
+    <ScalarComponent
+        renderMode="client"
+        configuration={{
+            // Pinned: the API pages link to operations by Scalar's anchors
+            // (`#api-1/POST/sessions`), and the unpinned default (latest)
+            // can change their format under us. gen-skill checks each one
+            // against the spec, not against Scalar: re-check the anchors
+            // in a browser when bumping this.
+            cdn: "https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.72.4",
+            url: "/spec/public-api.yaml",
+            darkMode: true,
+            hideDarkModeToggle: true,
+            // Scalar's search defaults to ⌘K, which collides with Starlight's
+            // site-wide docs-search shortcut (both bind window keydown and both
+            // would fire). Starlight owns ⌘K everywhere; Scalar's search keeps
+            // its sidebar button and badge (rendered from this same config).
+            searchHotKey: "s",
+            hideModels: false,
+            withDefaultFonts: false,
+            mcp: {
+                disabled: true,
+            },
+        }}
+    />
+    <script is:inline data-astro-rerun>
+        (() => {
+            // Starlight resolves its theme (stored preference or 'auto' → OS
+            // preference) into <html data-theme> ("dark" | "light") on every
+            // change, before first paint. Scalar reads its mode from
+            // localStorage['colorMode'] and paints .dark-mode/.light-mode on
+            // <body>. Mirror one into the other.
+            const applyScalarColorMode = () => {
+                // The observer below is registered once per session and fires
+                // on every page's theme changes; only touch anything when a
+                // Scalar reference is actually on the page.
+                if (!document.querySelector("[data-scalar-client]")) return;
+                const mode =
+                    document.documentElement.dataset.theme === "light"
+                        ? "light"
+                        : "dark";
+                try {
+                    localStorage.setItem("colorMode", mode);
+                } catch {
+                    /* storage unavailable — Scalar falls back to its own resolution */
+                }
+                document.body.classList.toggle("dark-mode", mode === "dark");
+                document.body.classList.toggle("light-mode", mode !== "dark");
+            };
+
+            applyScalarColorMode();
+
+            if (!window.__scalarThemeSync) {
+                window.__scalarThemeSync = true;
+                new MutationObserver(applyScalarColorMode).observe(
+                    document.documentElement,
+                    { attributes: true, attributeFilter: ["data-theme"] },
+                );
+            }
+        })();
+    </script>
+</StarlightPage>

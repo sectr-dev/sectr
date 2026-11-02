@@ -1,0 +1,37 @@
+[package]
+name = "sectr-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sectr-common.workspace = true
+# `rustls-tls-webpki-roots`: the prod dial-out is `wss://` (the ingest
+# hostname is TLS-terminated by Caddy). Default features are TLS-less —
+# connect_async on wss:// fails with "TLS support not compiled in"
+# (found live, 2026-09-17 — every local/test dial was
+# plaintext ws://, so CI never noticed). webpki-roots bundles the Mozilla
+# roots: the base image needs no system ca-certificates.
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+# Process-level CryptoProvider install in the sidecar binary (see
+# src/main.rs): the workspace feature graph unifies BOTH rustls providers
+# (ring via reqwest's `rustls-tls`, aws-lc-rs via opentelemetry-otlp's
+# reqwest), and tokio-tungstenite resolves the process default at the
+# wss:// dial — ambiguous, rustls 0.23 panics unless one is installed
+# explicitly. Dev mode never hits this (the CLI installs it itself in
+# dev.rs), which is why only prod deployments crashed.
+rustls = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+bytes = "1"
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+sqlx = { workspace = true }

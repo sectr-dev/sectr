@@ -1,0 +1,9 @@
+{
+  "validate": "RunAgentInput",
+  "reason": "RunAgentInput requires threadId, runId and messages",
+  "expect_error_contains": "threadId",
+  "document": {
+    "runId": "r",
+    "messages": []
+  }
+}

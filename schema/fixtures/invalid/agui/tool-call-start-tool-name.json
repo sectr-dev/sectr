@@ -1,0 +1,11 @@
+{
+  "validate": "event",
+  "reason": "TOOL_CALL_START names the tool `toolCallName` in 1.0 (an earlier draft's `toolName` is not a field; the schema is closed)",
+  "expect_error_contains": "toolName",
+  "document": {
+    "type": "TOOL_CALL_START",
+    "toolCallId": "c1",
+    "toolName": "lookup",
+    "toolCallName": "lookup"
+  }
+}

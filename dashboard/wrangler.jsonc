@@ -1,0 +1,30 @@
+// Cloudflare Workers config — the dashboard deploys as a single Worker via
+// the OpenNext adapter (Cloudflare Pages is deprecated; Workers with Static
+// Assets is the supported path).
+//
+// Deploys: CF Workers Builds on push (root dir dashboard/):
+//   build:  npm run build:worker   (inlines NEXT_PUBLIC_* env)
+//   deploy: npx wrangler deploy    (uploads .open-next/)
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "sectr-dashboard",
+    "main": ".open-next/worker.js",
+    "compatibility_date": "2026-09-06",
+    "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+    "assets": {
+        "directory": ".open-next/assets",
+        "binding": "ASSETS",
+    },
+    // Runtime env for the /api rewrite (next.config.ts reads
+    // SECTR_SERVER_URL when the Worker executes the proxy). NEXT_PUBLIC_*
+    // are build-time (inlined — see the deploy script in package.json).
+    "vars": {
+        "SECTR_SERVER_URL": "https://api.sectr.dev",
+    },
+    // Workers Logs (native CF, $0) — console.log/error from the Worker and
+    // next.config.ts's /api proxy land in the CF dashboard → Logs.
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+    },
+}

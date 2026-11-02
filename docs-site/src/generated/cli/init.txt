@@ -1,0 +1,12 @@
+Scaffold a new agent project: framework and frontend pickers (or --template / --frontend), file emission, `uv sync`, and a smoke inspect. See `init --help`
+
+Usage: sectr init [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]  Project directory name (created if missing; refused if non-empty unless --force)
+
+Options:
+      --template <TEMPLATE>  Agent framework: `openai-agents`, `langgraph` or `pydantic-ai`. Given → fully non-interactive (docs/CI). Omitted → interactive picker (needs a terminal)
+      --frontend <FRONTEND>  Chat frontend: `none` (agent only) or `copilotkit` (a Next.js + CopilotKit app at the root, the agent in `agent/`; needs Node 20+). Omitted → `none` with --template, else an interactive picker
+      --force                Scaffold into a non-empty directory anyway
+  -h, --help                 Print help

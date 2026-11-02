@@ -1,0 +1,368 @@
+{
+  "created": false,
+  "description": "The resume run (resume[] answers the interrupt, payload true = grant) is a NEW run on the same thread: RUN_STARTED, a MESSAGES_SNAPSHOT of everything so far (the pending call is folded in as an unanswered tool call on the assistant message), then the resumed turn — TOOL_CALL_RESULT, text — to RUN_FINISHED success.",
+  "expected": [
+    {
+      "input": {
+        "context": [],
+        "messages": [
+          {
+            "content": "Refund order A-1234",
+            "id": "msg-user-1",
+            "role": "user"
+          },
+          {
+            "content": "I'll issue the refund.",
+            "id": "d4e5f60718293041",
+            "role": "assistant"
+          }
+        ],
+        "protocolVersion": "1.0",
+        "resume": [
+          {
+            "interruptId": "0192f3a4-0104-7000-8000-000000000005",
+            "payload": true,
+            "status": "resolved"
+          }
+        ],
+        "runId": "run-2",
+        "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+        "tools": []
+      },
+      "metadata": {
+        "seq": 7
+      },
+      "protocolVersion": "1.0",
+      "runId": "run-2",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478407123,
+      "type": "RUN_STARTED"
+    },
+    {
+      "messages": [
+        {
+          "content": "Refund order A-1234",
+          "id": "msg-user-1",
+          "role": "user"
+        },
+        {
+          "content": "I'll issue the refund.",
+          "id": "d4e5f60718293041",
+          "role": "assistant",
+          "toolCalls": [
+            {
+              "function": {
+                "arguments": "{\"amount\":42,\"order_id\":\"A-1234\"}",
+                "name": "issue_refund"
+              },
+              "id": "call_refund",
+              "type": "function"
+            }
+          ]
+        }
+      ],
+      "metadata": {
+        "seq": 7
+      },
+      "timestamp": 1768478407123,
+      "type": "MESSAGES_SNAPSHOT"
+    },
+    {
+      "content": "{\"refunded\":42}",
+      "messageId": "tool-result-call_refund",
+      "metadata": {
+        "seq": 8
+      },
+      "role": "tool",
+      "timestamp": 1768478408123,
+      "toolCallId": "call_refund",
+      "type": "TOOL_CALL_RESULT"
+    },
+    {
+      "messageId": "e5f6071829304152",
+      "metadata": {
+        "seq": 9
+      },
+      "role": "assistant",
+      "timestamp": 1768478409123,
+      "type": "TEXT_MESSAGE_START"
+    },
+    {
+      "delta": "Refunded $42.",
+      "messageId": "e5f6071829304152",
+      "metadata": {
+        "seq": 10
+      },
+      "timestamp": 1768478410123,
+      "type": "TEXT_MESSAGE_CONTENT"
+    },
+    {
+      "messageId": "e5f6071829304152",
+      "metadata": {
+        "seq": 11
+      },
+      "timestamp": 1768478411123,
+      "type": "TEXT_MESSAGE_END"
+    },
+    {
+      "metadata": {
+        "seq": 12
+      },
+      "outcome": {
+        "type": "success"
+      },
+      "runId": "run-2",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478412123,
+      "type": "RUN_FINISHED"
+    }
+  ],
+  "final_messages": [
+    {
+      "content": "Refund order A-1234",
+      "id": "msg-user-1",
+      "role": "user"
+    },
+    {
+      "content": "I'll issue the refund.",
+      "id": "d4e5f60718293041",
+      "role": "assistant",
+      "toolCalls": [
+        {
+          "function": {
+            "arguments": "{\"amount\":42,\"order_id\":\"A-1234\"}",
+            "name": "issue_refund"
+          },
+          "id": "call_refund",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "{\"refunded\":42}",
+      "id": "tool-result-call_refund",
+      "role": "tool",
+      "toolCallId": "call_refund"
+    },
+    {
+      "content": "Refunded $42.",
+      "id": "e5f6071829304152",
+      "role": "assistant"
+    }
+  ],
+  "invocation_id": "0192f3a5-0104-7c0d-9e2f-000000000002",
+  "journal": [
+    {
+      "created_at": "2026-01-15T12:00:00.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000000",
+      "payload": {
+        "app_id": "0192f3a0-2222-7abc-9def-0123456789ab",
+        "route": "/chat"
+      },
+      "seq": 0,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "SESSION_CREATED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:01.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000001",
+      "payload": {
+        "ag_ui": {
+          "client_message_id": "msg-user-1",
+          "run_id": "run-1"
+        },
+        "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+        "invocation_id": "0192f3a5-0104-7c0d-9e2f-000000000001",
+        "reason": {
+          "input": "Refund order A-1234",
+          "kind": "user_message"
+        },
+        "route": "/chat"
+      },
+      "seq": 1,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "INVOCATION_STARTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:02.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000002",
+      "payload": {
+        "message_id": "d4e5f60718293041",
+        "role": "assistant"
+      },
+      "seq": 2,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:03.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000003",
+      "payload": {
+        "delta": {
+          "text": "I'll issue the refund.",
+          "type": "text"
+        },
+        "message_id": "d4e5f60718293041"
+      },
+      "seq": 3,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:04.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000004",
+      "payload": {
+        "finish_reason": "tool_use",
+        "message_id": "d4e5f60718293041"
+      },
+      "seq": 4,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:05.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000005",
+      "payload": {
+        "arguments": {
+          "amount": 42,
+          "order_id": "A-1234"
+        },
+        "name": "issue_refund",
+        "reason": "Refunds over $25 need approval",
+        "tool_call_id": "call_refund"
+      },
+      "seq": 5,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "TOOL_APPROVAL_REQUIRED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:06.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000006",
+      "payload": {
+        "approver": "user-42",
+        "tool_call_id": "call_refund"
+      },
+      "seq": 6,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "TOOL_APPROVAL_GRANTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:07.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000007",
+      "payload": {
+        "ag_ui": {
+          "run_id": "run-2"
+        },
+        "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+        "invocation_id": "0192f3a5-0104-7c0d-9e2f-000000000002",
+        "reason": {
+          "decision": {
+            "approved": true,
+            "approver": "user-42"
+          },
+          "kind": "approval_decision"
+        },
+        "route": "/chat"
+      },
+      "seq": 7,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "INVOCATION_STARTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:08.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000008",
+      "payload": {
+        "result": {
+          "refunded": 42
+        },
+        "tool_call_id": "call_refund"
+      },
+      "seq": 8,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "TOOL_RESULT"
+    },
+    {
+      "created_at": "2026-01-15T12:00:09.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-000000000009",
+      "payload": {
+        "message_id": "e5f6071829304152",
+        "role": "assistant"
+      },
+      "seq": 9,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:10.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-00000000000a",
+      "payload": {
+        "delta": {
+          "text": "Refunded $42.",
+          "type": "text"
+        },
+        "message_id": "e5f6071829304152"
+      },
+      "seq": 10,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:11.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-00000000000b",
+      "payload": {
+        "finish_reason": "stop",
+        "message_id": "e5f6071829304152"
+      },
+      "seq": 11,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:12.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0104-7000-8000-00000000000c",
+      "payload": {},
+      "seq": 12,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "NO_MORE_ACTIONS"
+    }
+  ],
+  "request": {
+    "context": [],
+    "messages": [
+      {
+        "content": "Refund order A-1234",
+        "id": "msg-user-1",
+        "role": "user"
+      },
+      {
+        "content": "I'll issue the refund.",
+        "id": "d4e5f60718293041",
+        "role": "assistant"
+      }
+    ],
+    "protocolVersion": "1.0",
+    "resume": [
+      {
+        "interruptId": "0192f3a4-0104-7000-8000-000000000005",
+        "payload": true,
+        "status": "resolved"
+      }
+    ],
+    "runId": "run-2",
+    "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+    "tools": []
+  }
+}

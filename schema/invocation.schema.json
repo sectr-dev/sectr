@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sectr.dev/schemas/invocation.schema.json",
+  "title": "Sectr runner invocation contract",
+  "description": "The only thing a user process must implement.\n\nRequest: the sidecar POSTs this body to the user process at `http://localhost:$SECTR_PORT/invocations` (the process reads its port from $SECTR_PORT; the sidecar is the only expected caller \u2014 bind localhost). The transcript is passed in full and ALREADY INCLUDES this invocation's INVOCATION_STARTED (appended to the journal before the transcript is fetched) \u2014 so the canonical messages view already contains the current user message. The process performs NO journal/DB access and receives no platform credentials. LLM keys and other user secrets are injected as env vars by the sidecar.\n\n`reason` discriminates the invocation: `user_message` starts a turn (first or follow-up); `approval_decision` resumes a turn suspended by TOOL_APPROVAL_REQUIRED; `tool_result` (post-MVP) resumes with an externally-computed tool output.\n\nResponse: `200` with `Content-Type: text/event-stream`. Each SSE frame's `data:` is one JSON document matching `event.schema.json#/$defs/runnerEvent`. Stream ending = invocation ending. Turn lifecycle: the turn ends when NO_MORE_ACTIONS is emitted (the SDK driver emits it on generator exhaustion and after an unhandled error's ERROR event); an approval pause leaves TOOL_APPROVAL_REQUIRED as the final frame and does NOT end the turn. Raw (no-SDK) runners MUST end their stream with NO_MORE_ACTIONS when the turn is complete.\n\n`transcript` is the RAW JOURNAL EVENT STREAM \u2014 every envelope in seq order (all MESSAGE_DELTAs included), plus this invocation's INVOCATION_STARTED. The caller (sidecar) performs NO folding, filtering, or reinterpretation of conversation semantics: what is journaled is what the runner receives.\n\nFolding the event stream into a conversation is the RUNNER's job. The SDK's canonical view (`SessionContext.messages`) is the blessed fold; framework adapters project it into their native state. Crash-mid-turn continuation is DECIDED (see schema/README.md) as a PROJECTION RULE in that fold, not in the wire protocol or the journal: a crashed turn ends with SESSION_ERROR + a sidecar/reconciler-synthesized NO_MORE_ACTIONS while any MESSAGE_DELTAs already journaled stay put; when the trailing assistant message never received MESSAGE_END and a SESSION_ERROR follows it, the canonical fold emits that partial message as-is and appends a SYNTHESIZED user continuation prompt (\"An error interrupted the generation of your previous message. Please continue from where it left off.\"). The synthesized message is derived deterministically from the journal and is NEVER persisted \u2014 it exists only in the runner's LLM context, so clients/streams never see a fabricated user turn. Unanswered TOOL_CALLs follow the same principle (2026-10-02): every prefix of a valid journal is itself valid, so a TOOL_CALL with no TOOL_RESULT that is followed by more conversation (the turn crashed or the tool failed, and the user wrote again) gets a SYNTHESIZED tool output in the fold (\"This tool call did not complete; no result was recorded.\"), also never persisted. A trailing unanswered call is a suspended approval and is left for the approval-resume path; a later user_message invocation abandons it (pending_tool_call no longer reports it). Raw (no-SDK) runners receive the same raw journal and SHOULD implement an equivalent continuation rule; prefill-style continuation (Anthropic-style) is a legitimate per-adapter alternative post-MVP.",
+  "$ref": "#/$defs/invocationRequest",
+  "$defs": {
+    "invocationRequest": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "invocation_id",
+        "route",
+        "transcript",
+        "reason"
+      ],
+      "properties": {
+        "session_id": {
+          "$ref": "event.schema.json#/$defs/uuid"
+        },
+        "invocation_id": {
+          "$ref": "event.schema.json#/$defs/uuid"
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Agent route being invoked, e.g. \"/customer-support\"."
+        },
+        "transcript": {
+          "$ref": "event.schema.json#/$defs/transcript"
+        },
+        "reason": {
+          "description": "Why this invocation exists \u2014 mirrors the INVOCATION_STARTED event's reason.",
+          "$ref": "event.schema.json#/$defs/invocationReason"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+[project]
+name = "sectr-example-pydantic-ai"
+version = "0.1.0"
+description = "Sectr example: support agent on pydantic-ai"
+requires-python = ">=3.12"
+dependencies = [
+    "sectr[pydantic-ai]",
+    # real-model runs (OpenRouter); SECTR_FAKE=1 does not need the provider extra
+    "pydantic-ai-slim[openrouter]>=2.54",
+]
+
+[tool.uv.sources]
+sectr = { path = "../../sdk-python", editable = true }
+
+[dependency-groups]
+dev = ["mypy>=1"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true

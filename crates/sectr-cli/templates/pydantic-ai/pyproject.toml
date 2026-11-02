@@ -1,0 +1,10 @@
+[project]
+name = "__SECTR_PROJECT_NAME__"
+version = "0.1.0"
+description = "Sectr agent: __SECTR_APP_NAME__"
+requires-python = ">=3.12"
+dependencies = [
+    "sectr[pydantic-ai]>=__SECTR_VERSION__",
+    # OpenAIChatModel for the real-model path
+    "pydantic-ai-slim[openai] >= 2.54",
+]

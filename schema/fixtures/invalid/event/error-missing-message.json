@@ -1,0 +1,11 @@
+{
+  "id": "0192f3a4-b600-7000-8000-000000000012",
+  "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+  "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+  "seq": 12,
+  "type": "ERROR",
+  "payload": {
+    "code": "upstream_unavailable"
+  },
+  "created_at": "2026-01-15T12:00:12.123456Z"
+}

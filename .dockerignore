@@ -1,0 +1,15 @@
+.git
+target
+**/target
+**/__pycache__
+**/.venv
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+dashboard/node_modules
+dashboard/.next
+examples
+scratch
+docs
+*.md

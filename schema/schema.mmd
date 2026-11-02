@@ -1,0 +1,92 @@
+% Mermaid ER diagram of schema/data-model.sql — keep in sync with the DDL.
+% Render: https://mermaid.live  (or any Mermaid-aware viewer).
+erDiagram
+    orgs ||--o{ users : "has"
+    orgs ||--o{ apps : "has"
+    orgs ||--o{ api_keys : "has"
+    apps ||--o{ api_keys : "scoped-by (NULL for platform keys)"
+    apps ||--o{ deployments : "versioned"
+    apps ||--o{ secrets : "write-only"
+    apps ||--o{ sessions : "owns"
+    deployments ||--o{ sessions : "pins (started-on version)"
+    sessions ||--o{ events : "journal (UNIQUE session_id,seq)"
+    sessions ||--o{ leases : "at most one live"
+
+    orgs {
+        uuid id PK
+        text name
+        text slug UK
+        timestamptz created_at
+    }
+    users {
+        uuid id PK
+        uuid org_id FK
+        text email
+        text name
+        timestamptz created_at
+    }
+    apps {
+        uuid id PK
+        uuid org_id FK
+        text name
+        text slug UK
+        timestamptz created_at
+    }
+    api_keys {
+        uuid id PK
+        uuid org_id FK
+        uuid app_id FK "NULL iff kind=platform"
+        text kind "platform|invocation"
+        text name
+        text key_hash UK "never stored plaintext"
+        timestamptz created_at
+        timestamptz last_used_at
+        timestamptz revoked_at
+    }
+    deployments {
+        uuid id PK
+        uuid app_id FK
+        bigint version UK "UNIQUE with app_id"
+        text status "building|active|failed|retired"
+        jsonb manifest "authoritative, from SECTR_MANIFEST import"
+        text artifact_uri
+        timestamptz created_at
+    }
+    secrets {
+        uuid id PK
+        uuid app_id FK
+        text key UK "UNIQUE with app_id"
+        text value_encrypted "write-only by contract"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    sessions {
+        uuid id PK
+        uuid app_id FK
+        uuid deployment_id FK "pinned"
+        text route
+        text status "active|awaiting_approval|ended"
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz ended_at
+    }
+    events {
+        uuid id PK "UUIDv7, journal-writer generated"
+        uuid session_id FK
+        uuid deployment_id
+        bigint seq UK "per-session, monotonic, starts 0"
+        text type "CHECK: 14-type enum (event.schema.json)"
+        jsonb payload "validated vs event.schema.json"
+        jsonb extra "unknown envelope fields, preserved verbatim"
+        timestamptz created_at
+    }
+    leases {
+        uuid id PK
+        uuid session_id FK "UNIQUE while released_at IS NULL"
+        text runner_id
+        uuid invocation_id
+        timestamptz claimed_at
+        timestamptz heartbeat_at
+        timestamptz expires_at "idx for expiry sweep"
+        timestamptz released_at
+    }

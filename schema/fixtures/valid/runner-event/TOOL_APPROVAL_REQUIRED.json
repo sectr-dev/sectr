@@ -1,0 +1,11 @@
+{
+  "type": "TOOL_APPROVAL_REQUIRED",
+  "payload": {
+    "tool_call_id": "call_01",
+    "name": "lookup_order",
+    "arguments": {
+      "order_id": "A-1234"
+    },
+    "reason": "Order lookup requires manager approval"
+  }
+}

@@ -1,0 +1,519 @@
+{
+  "description": "Connect on a thread whose last turn finished: RUN_STARTED with the ORIGINAL run's id (ag_ui.run_id) and no input, a MESSAGES_SNAPSHOT folded through the latest INVOCATION_STARTED (earlier turns + this turn's user message), then that invocation's events replayed to RUN_FINISHED success. A history-only reconnect.",
+  "expected": [
+    {
+      "metadata": {
+        "seq": 6
+      },
+      "protocolVersion": "1.0",
+      "runId": "run-2",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478406123,
+      "type": "RUN_STARTED"
+    },
+    {
+      "messages": [
+        {
+          "content": "hello",
+          "id": "msg-user-1",
+          "role": "user"
+        },
+        {
+          "content": "Hi there!",
+          "id": "a1b2c3d4e5f60718",
+          "role": "assistant"
+        },
+        {
+          "content": "What is order A-1234?",
+          "id": "msg-user-2",
+          "role": "user"
+        }
+      ],
+      "metadata": {
+        "seq": 6
+      },
+      "timestamp": 1768478406123,
+      "type": "MESSAGES_SNAPSHOT"
+    },
+    {
+      "messageId": "b2c3d4e5f6071829",
+      "metadata": {
+        "seq": 7
+      },
+      "role": "assistant",
+      "timestamp": 1768478407123,
+      "type": "TEXT_MESSAGE_START"
+    },
+    {
+      "messageId": "b2c3d4e5f6071829:reasoning",
+      "metadata": {
+        "seq": 8
+      },
+      "timestamp": 1768478408123,
+      "type": "REASONING_START"
+    },
+    {
+      "messageId": "b2c3d4e5f6071829:reasoning",
+      "metadata": {
+        "seq": 8
+      },
+      "role": "reasoning",
+      "timestamp": 1768478408123,
+      "type": "REASONING_MESSAGE_START"
+    },
+    {
+      "delta": "Need to ",
+      "messageId": "b2c3d4e5f6071829:reasoning",
+      "metadata": {
+        "seq": 8
+      },
+      "timestamp": 1768478408123,
+      "type": "REASONING_MESSAGE_CONTENT"
+    },
+    {
+      "delta": "look it up.",
+      "messageId": "b2c3d4e5f6071829:reasoning",
+      "metadata": {
+        "seq": 9
+      },
+      "timestamp": 1768478409123,
+      "type": "REASONING_MESSAGE_CONTENT"
+    },
+    {
+      "messageId": "b2c3d4e5f6071829:reasoning",
+      "metadata": {
+        "seq": 10
+      },
+      "timestamp": 1768478410123,
+      "type": "REASONING_MESSAGE_END"
+    },
+    {
+      "messageId": "b2c3d4e5f6071829:reasoning",
+      "metadata": {
+        "seq": 10
+      },
+      "timestamp": 1768478410123,
+      "type": "REASONING_END"
+    },
+    {
+      "delta": "Let me check.",
+      "messageId": "b2c3d4e5f6071829",
+      "metadata": {
+        "seq": 10
+      },
+      "timestamp": 1768478410123,
+      "type": "TEXT_MESSAGE_CONTENT"
+    },
+    {
+      "messageId": "b2c3d4e5f6071829",
+      "metadata": {
+        "seq": 11
+      },
+      "timestamp": 1768478411123,
+      "type": "TEXT_MESSAGE_END"
+    },
+    {
+      "metadata": {
+        "seq": 12
+      },
+      "parentMessageId": "b2c3d4e5f6071829",
+      "timestamp": 1768478412123,
+      "toolCallId": "call_01",
+      "toolCallName": "lookup_order",
+      "type": "TOOL_CALL_START"
+    },
+    {
+      "delta": "{\"order_id\":\"A-1234\"}",
+      "metadata": {
+        "seq": 12
+      },
+      "timestamp": 1768478412123,
+      "toolCallId": "call_01",
+      "type": "TOOL_CALL_ARGS"
+    },
+    {
+      "metadata": {
+        "seq": 12
+      },
+      "timestamp": 1768478412123,
+      "toolCallId": "call_01",
+      "type": "TOOL_CALL_END"
+    },
+    {
+      "content": "{\"eta\":\"2026-01-20\",\"status\":\"shipped\"}",
+      "messageId": "tool-result-call_01",
+      "metadata": {
+        "seq": 13
+      },
+      "role": "tool",
+      "timestamp": 1768478413123,
+      "toolCallId": "call_01",
+      "type": "TOOL_CALL_RESULT"
+    },
+    {
+      "messageId": "c3d4e5f607182930",
+      "metadata": {
+        "seq": 14
+      },
+      "role": "assistant",
+      "timestamp": 1768478414123,
+      "type": "TEXT_MESSAGE_START"
+    },
+    {
+      "delta": "Order A-1234 ",
+      "messageId": "c3d4e5f607182930",
+      "metadata": {
+        "seq": 15
+      },
+      "timestamp": 1768478415123,
+      "type": "TEXT_MESSAGE_CONTENT"
+    },
+    {
+      "delta": "has shipped.",
+      "messageId": "c3d4e5f607182930",
+      "metadata": {
+        "seq": 16
+      },
+      "timestamp": 1768478416123,
+      "type": "TEXT_MESSAGE_CONTENT"
+    },
+    {
+      "messageId": "c3d4e5f607182930",
+      "metadata": {
+        "seq": 17
+      },
+      "timestamp": 1768478417123,
+      "type": "TEXT_MESSAGE_END"
+    },
+    {
+      "metadata": {
+        "seq": 18
+      },
+      "outcome": {
+        "type": "success"
+      },
+      "runId": "run-2",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478418123,
+      "type": "RUN_FINISHED"
+    }
+  ],
+  "final_messages": [
+    {
+      "content": "hello",
+      "id": "msg-user-1",
+      "role": "user"
+    },
+    {
+      "content": "Hi there!",
+      "id": "a1b2c3d4e5f60718",
+      "role": "assistant"
+    },
+    {
+      "content": "What is order A-1234?",
+      "id": "msg-user-2",
+      "role": "user"
+    },
+    {
+      "content": "Let me check.",
+      "id": "b2c3d4e5f6071829",
+      "role": "assistant",
+      "toolCalls": [
+        {
+          "function": {
+            "arguments": "{\"order_id\":\"A-1234\"}",
+            "name": "lookup_order"
+          },
+          "id": "call_01",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "{\"eta\":\"2026-01-20\",\"status\":\"shipped\"}",
+      "id": "tool-result-call_01",
+      "role": "tool",
+      "toolCallId": "call_01"
+    },
+    {
+      "content": "Need to look it up.",
+      "id": "b2c3d4e5f6071829:reasoning",
+      "role": "reasoning"
+    },
+    {
+      "content": "Order A-1234 has shipped.",
+      "id": "c3d4e5f607182930",
+      "role": "assistant"
+    }
+  ],
+  "journal": [
+    {
+      "created_at": "2026-01-15T12:00:00.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000000",
+      "payload": {
+        "app_id": "0192f3a0-2222-7abc-9def-0123456789ab",
+        "route": "/chat"
+      },
+      "seq": 0,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "SESSION_CREATED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:01.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000001",
+      "payload": {
+        "ag_ui": {
+          "client_message_id": "msg-user-1",
+          "run_id": "run-1"
+        },
+        "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+        "invocation_id": "0192f3a5-0102-7c0d-9e2f-000000000001",
+        "reason": {
+          "input": "hello",
+          "kind": "user_message"
+        },
+        "route": "/chat"
+      },
+      "seq": 1,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "INVOCATION_STARTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:02.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000002",
+      "payload": {
+        "message_id": "a1b2c3d4e5f60718",
+        "role": "assistant"
+      },
+      "seq": 2,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:03.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000003",
+      "payload": {
+        "delta": {
+          "text": "Hi there!",
+          "type": "text"
+        },
+        "message_id": "a1b2c3d4e5f60718"
+      },
+      "seq": 3,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:04.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000004",
+      "payload": {
+        "finish_reason": "stop",
+        "message_id": "a1b2c3d4e5f60718"
+      },
+      "seq": 4,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:05.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000005",
+      "payload": {},
+      "seq": 5,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "NO_MORE_ACTIONS"
+    },
+    {
+      "created_at": "2026-01-15T12:00:06.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000006",
+      "payload": {
+        "ag_ui": {
+          "client_message_id": "msg-user-2",
+          "run_id": "run-2"
+        },
+        "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+        "invocation_id": "0192f3a5-0102-7c0d-9e2f-000000000002",
+        "reason": {
+          "input": "What is order A-1234?",
+          "kind": "user_message"
+        },
+        "route": "/chat"
+      },
+      "seq": 6,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "INVOCATION_STARTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:07.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000007",
+      "payload": {
+        "message_id": "b2c3d4e5f6071829",
+        "role": "assistant"
+      },
+      "seq": 7,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:08.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000008",
+      "payload": {
+        "delta": {
+          "text": "Need to ",
+          "type": "reasoning"
+        },
+        "message_id": "b2c3d4e5f6071829"
+      },
+      "seq": 8,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:09.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000009",
+      "payload": {
+        "delta": {
+          "text": "look it up.",
+          "type": "reasoning"
+        },
+        "message_id": "b2c3d4e5f6071829"
+      },
+      "seq": 9,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:10.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-00000000000a",
+      "payload": {
+        "delta": {
+          "text": "Let me check.",
+          "type": "text"
+        },
+        "message_id": "b2c3d4e5f6071829"
+      },
+      "seq": 10,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:11.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-00000000000b",
+      "payload": {
+        "finish_reason": "tool_use",
+        "message_id": "b2c3d4e5f6071829"
+      },
+      "seq": 11,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:12.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-00000000000c",
+      "payload": {
+        "arguments": {
+          "order_id": "A-1234"
+        },
+        "name": "lookup_order",
+        "tool_call_id": "call_01"
+      },
+      "seq": 12,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "TOOL_CALL"
+    },
+    {
+      "created_at": "2026-01-15T12:00:13.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-00000000000d",
+      "payload": {
+        "result": {
+          "eta": "2026-01-20",
+          "status": "shipped"
+        },
+        "tool_call_id": "call_01"
+      },
+      "seq": 13,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "TOOL_RESULT"
+    },
+    {
+      "created_at": "2026-01-15T12:00:14.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-00000000000e",
+      "payload": {
+        "message_id": "c3d4e5f607182930",
+        "role": "assistant"
+      },
+      "seq": 14,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:15.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-00000000000f",
+      "payload": {
+        "delta": {
+          "text": "Order A-1234 ",
+          "type": "text"
+        },
+        "message_id": "c3d4e5f607182930"
+      },
+      "seq": 15,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:16.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000010",
+      "payload": {
+        "delta": {
+          "text": "has shipped.",
+          "type": "text"
+        },
+        "message_id": "c3d4e5f607182930"
+      },
+      "seq": 16,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:17.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000011",
+      "payload": {
+        "finish_reason": "stop",
+        "message_id": "c3d4e5f607182930"
+      },
+      "seq": 17,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:18.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0102-7000-8000-000000000012",
+      "payload": {},
+      "seq": 18,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "NO_MORE_ACTIONS"
+    }
+  ],
+  "kind": "connect",
+  "request": {
+    "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b"
+  }
+}

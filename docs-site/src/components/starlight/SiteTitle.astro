@@ -1,0 +1,46 @@
+---
+// Top-left breadcrumb: "SECTR / Docs". The wordmark links to the marketing
+// site (sectr.dev) and "Docs" to the docs root. Replaces Starlight's default
+// SiteTitle, which links the title to the docs home. The wordmark keeps the
+// `a.site-title > span` hook that custom.css styles in Varino Normal.
+const { siteTitle } = Astro.locals.starlightRoute;
+---
+
+<div class="site-breadcrumb sl-flex">
+    <a href="https://sectr.dev" class="site-title sl-flex">
+        <span translate="no">{siteTitle}</span>
+    </a>
+    <span class="site-breadcrumb-sep" aria-hidden="true">/</span>
+    <a href="https://docs.sectr.dev/" class="site-breadcrumb-docs">Docs</a>
+</div>
+
+<style>
+    @layer starlight.core {
+        .site-breadcrumb {
+            align-items: center;
+            gap: 0.6rem;
+            min-width: 0;
+            white-space: nowrap;
+        }
+        .site-title {
+            align-items: center;
+            font-size: var(--sl-text-h4);
+            font-weight: 600;
+            color: var(--sl-color-text-accent);
+            text-decoration: none;
+        }
+        .site-breadcrumb-sep {
+            color: var(--sl-color-gray-3);
+            font-size: var(--sl-text-h4);
+        }
+        .site-breadcrumb-docs {
+            font-size: var(--sl-text-h5);
+            font-weight: 500;
+            color: var(--sl-color-gray-2);
+            text-decoration: none;
+        }
+        .site-breadcrumb-docs:hover {
+            color: var(--sl-color-white);
+        }
+    }
+</style>

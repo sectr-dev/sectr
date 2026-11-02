@@ -1,0 +1,490 @@
+//! `sectr auth` — sign in once so later cloud commands
+//! (`sectr deploy`, `sectr secrets`, `sectr send --cloud`,
+//! `sectr tail --cloud`) need no flags.
+//!
+//! - `sectr auth login` — opens the dashboard in your browser, waits for
+//!   you to approve the request there, and stores the resulting platform
+//!   key (named `CLI (<hostname>)` in Settings). Works over SSH and in
+//!   containers: the browser only has to reach the dashboard.
+//!   `--no-browser` prints the link without opening it.
+//! - `sectr auth login --key skp_…` — validate and store a key you created
+//!   in Settings. `--with-key` reads one from a hidden prompt or stdin
+//!   (for scripts: `echo $KEY | sectr auth login --with-key`).
+//!   `--api` defaults to the public endpoint; pass
+//!   `--api http://localhost:8080` for a local server.
+//! - `sectr auth whoami` — the stored identity (org + server).
+//! - `sectr auth logout` — forget the key; a key obtained through the
+//!   browser login is also revoked.
+
+use std::io::{IsTerminal, Read as _, Write as _};
+use std::time::Duration;
+
+use anyhow::{Context, bail};
+use clap::{Args, Subcommand};
+use serde::Deserialize;
+
+use crate::auth::{self, Credentials};
+
+#[derive(Args, Debug)]
+pub struct AuthArgs {
+  #[command(subcommand)]
+  pub command: AuthCommand,
+  /// The server base URL. Default: the public endpoint.
+  #[arg(long, global = true)]
+  pub api: Option<String>,
+  /// Platform API key (`skp_…`). With `login`, stores that key instead of
+  /// opening the browser.
+  #[arg(long, global = true)]
+  pub key: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuthCommand {
+  /// Sign in: opens the dashboard in your browser to approve the request
+  /// (or pass --key / --with-key to store an API key instead).
+  Login {
+    /// Read the platform key from a hidden prompt or stdin instead of
+    /// using the browser.
+    #[arg(long)]
+    with_key: bool,
+    /// Print the approval link without trying to open a browser (remote
+    /// machines, coding agents).
+    #[arg(long)]
+    no_browser: bool,
+  },
+  /// Print the stored identity (org + server) after re-validating.
+  Whoami,
+  /// Forget the stored key (and revoke it, if the browser login made it).
+  Logout,
+}
+
+const DEFAULT_API: &str = "https://api.sectr.dev";
+
+pub async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
+  match args.command {
+    AuthCommand::Login {
+      with_key,
+      no_browser,
+    } => run_login(&args, with_key, no_browser).await,
+    AuthCommand::Whoami => run_whoami(&args).await,
+    AuthCommand::Logout => run_logout().await,
+  }
+}
+
+async fn run_login(args: &AuthArgs, with_key: bool, no_browser: bool) -> anyhow::Result<()> {
+  let api = args
+    .api
+    .clone()
+    .unwrap_or_else(|| DEFAULT_API.to_owned())
+    .trim_end_matches('/')
+    .to_owned();
+
+  // Manual route: --key, or --with-key (hidden prompt / stdin).
+  let key = match (&args.key, with_key) {
+    (Some(k), _) => Some(k.clone()),
+    (None, true) => Some(read_key()?),
+    (None, false) => None,
+  };
+  let Some(key) = key else {
+    let approved = device_login(&api, !no_browser).await?;
+    auth::store(&Credentials {
+      api: api.clone(),
+      platform_key: approved.key,
+      key_id: Some(approved.key_id),
+    })?;
+    eprintln!(
+      "logged in to {api} — org \"{}\" (stored in ~/.config/sectr/credentials.toml)",
+      approved.org.name
+    );
+    return Ok(());
+  };
+
+  if key.trim().is_empty() {
+    bail!("empty key");
+  }
+  let (org, _org_id) = auth::whoami(&api, key.trim())
+    .await
+    .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+  auth::store(&Credentials {
+    api: api.clone(),
+    platform_key: key.trim().to_owned(),
+    key_id: None,
+  })?;
+  eprintln!("logged in to {api} — org \"{org}\" (stored in ~/.config/sectr/credentials.toml)");
+  Ok(())
+}
+
+/// `--with-key`: a hidden prompt on a terminal, else the first line of stdin.
+fn read_key() -> anyhow::Result<String> {
+  if std::io::stdin().is_terminal() {
+    eprint!("platform key: ");
+    std::io::stderr().flush().context("prompt")?;
+    return rpassword::read_password().context("prompt");
+  }
+  let mut input = String::new();
+  std::io::stdin()
+    .read_to_string(&mut input)
+    .context("read key from stdin")?;
+  Ok(input.lines().next().unwrap_or("").to_owned())
+}
+
+// ---- browser (device) login ----------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct DeviceGrant {
+  device_code: String,
+  user_code: String,
+  verification_url_complete: String,
+  expires_in: u64,
+  interval: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApprovedOrg {
+  name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Approved {
+  key: String,
+  key_id: String,
+  org: ApprovedOrg,
+}
+
+/// This machine's name, shown on the approval page and used to name the
+/// minted key (`CLI (<hostname>)`).
+fn hostname() -> String {
+  #[cfg(unix)]
+  {
+    let mut buf = [0u8; 256];
+    // SAFETY: `buf` is a valid writable buffer of the length passed.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc == 0 {
+      let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+      let name = String::from_utf8_lossy(&buf[..end]).trim().to_owned();
+      if !name.is_empty() {
+        return name;
+      }
+    }
+  }
+  #[cfg(windows)]
+  if let Ok(name) = std::env::var("COMPUTERNAME")
+    && !name.trim().is_empty()
+  {
+    return name;
+  }
+  "unknown machine".into()
+}
+
+async fn device_login(api: &str, open: bool) -> anyhow::Result<Approved> {
+  let client = reqwest::Client::new();
+  let grant = start_device_login(&client, api, &hostname()).await?;
+
+  eprintln!("To sign in, open this page and approve the request:");
+  eprintln!("  {}", grant.verification_url_complete);
+  eprintln!("Code: {} (check that it matches the page)", grant.user_code);
+  eprintln!("Waiting for approval… (Ctrl-C to cancel)");
+  if open {
+    crate::browser::open_browser(&grant.verification_url_complete);
+  }
+
+  poll_device_login(&client, api, &grant, Duration::from_secs(1)).await
+}
+
+async fn start_device_login(
+  client: &reqwest::Client,
+  api: &str,
+  client_name: &str,
+) -> anyhow::Result<DeviceGrant> {
+  let url = format!("{api}/auth/cli");
+  let resp = client
+    .post(&url)
+    .json(&serde_json::json!({ "client_name": client_name }))
+    .send()
+    .await
+    .map_err(|e| anyhow::anyhow!("reach {url}: {e}"))?;
+  let status = resp.status();
+  if matches!(status.as_u16(), 404 | 503) {
+    bail!(
+      "this server doesn't support browser login ({status}); use `sectr auth login --key skp_…` \
+       or `--with-key` with a key from Settings → API keys"
+    );
+  }
+  if !status.is_success() {
+    bail!("the server answered {status} to the login request");
+  }
+  resp
+    .json()
+    .await
+    .context("parse the login request response")
+}
+
+/// Poll until approved, denied or expired. Transient failures (network
+/// errors, 5xx) are retried at the same interval until the request's own
+/// expiry. `min_interval` floors the server's `interval` (tests pass zero).
+async fn poll_device_login(
+  client: &reqwest::Client,
+  api: &str,
+  grant: &DeviceGrant,
+  min_interval: Duration,
+) -> anyhow::Result<Approved> {
+  let url = format!("{api}/auth/cli/poll");
+  let interval = Duration::from_secs(grant.interval).max(min_interval);
+  let deadline = tokio::time::Instant::now() + Duration::from_secs(grant.expires_in);
+  while tokio::time::Instant::now() < deadline {
+    tokio::time::sleep(interval).await;
+    let resp = client
+      .post(&url)
+      .json(&serde_json::json!({ "device_code": grant.device_code }))
+      .send()
+      .await;
+    let Ok(resp) = resp else { continue };
+    if !resp.status().is_success() {
+      continue;
+    }
+    let Ok(body) = resp.json::<serde_json::Value>().await else {
+      continue;
+    };
+    match body.get("status").and_then(|s| s.as_str()) {
+      Some("approved") => {
+        return serde_json::from_value(body).context("parse the approved login response");
+      }
+      Some("denied") => bail!("the login request was denied in the browser"),
+      Some("expired") => bail!("the login request expired; run `sectr auth login` again"),
+      _ => {}
+    }
+  }
+  bail!("the login request expired; run `sectr auth login` again")
+}
+
+// ---- logout ----------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Eq)]
+enum Revoked {
+  /// Pasted key (no `key_id`): nothing to revoke.
+  NotOurs,
+  Yes,
+  /// The server no longer knew the key (401/404): already revoked.
+  AlreadyGone,
+  /// Best effort failed; the key may still be live.
+  Failed,
+}
+
+async fn revoke_login_key(creds: &Credentials) -> Revoked {
+  let Some(key_id) = &creds.key_id else {
+    return Revoked::NotOurs;
+  };
+  let url = format!("{}/api-keys/{key_id}", creds.api.trim_end_matches('/'));
+  let client = match reqwest::Client::builder()
+    .timeout(Duration::from_secs(5))
+    .build()
+  {
+    Ok(c) => c,
+    Err(_) => return Revoked::Failed,
+  };
+  match client
+    .delete(&url)
+    .bearer_auth(&creds.platform_key)
+    .send()
+    .await
+  {
+    Ok(r) if r.status().is_success() => Revoked::Yes,
+    Ok(r) if matches!(r.status().as_u16(), 401 | 404) => Revoked::AlreadyGone,
+    _ => Revoked::Failed,
+  }
+}
+
+async fn run_logout() -> anyhow::Result<()> {
+  let revoked = match auth::load() {
+    Ok(Some(creds)) => revoke_login_key(&creds).await,
+    _ => Revoked::NotOurs,
+  };
+  let removed = auth::clear()?;
+  if !removed {
+    eprintln!("no stored credentials");
+    return Ok(());
+  }
+  match revoked {
+    Revoked::Yes | Revoked::AlreadyGone => eprintln!("logged out; the CLI key was revoked"),
+    Revoked::Failed => eprintln!(
+      "credentials forgotten, but the CLI key could not be revoked — remove it in Settings → API keys"
+    ),
+    Revoked::NotOurs => eprintln!("credentials forgotten (the key itself was not revoked)"),
+  }
+  Ok(())
+}
+
+async fn run_whoami(args: &AuthArgs) -> anyhow::Result<()> {
+  let stored = auth::load()?.context("no stored credentials — run `sectr auth login`")?;
+  // The explicit --api/--key flags override the stored identity (so
+  // `sectr auth whoami --key skp_new` previews a different identity).
+  let api = args.api.clone().unwrap_or(stored.api);
+  let key = args.key.clone().unwrap_or(stored.platform_key);
+  let (org, org_id) = auth::whoami(&api, &key).await?;
+  println!("server: {api}");
+  println!("org:    {org} ({org_id})");
+  Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use axum::Router;
+  use axum::extract::State;
+  use axum::http::StatusCode;
+  use axum::routing::{delete, post};
+  use serde_json::{Value, json};
+  use std::sync::{Arc, Mutex};
+
+  /// A stub server whose poll endpoint replays `script` (last entry repeats).
+  async fn stub(script: Vec<(u16, Value)>) -> (String, Arc<Mutex<usize>>) {
+    #[derive(Clone)]
+    struct S(Arc<Vec<(u16, Value)>>, Arc<Mutex<usize>>);
+    async fn poll(State(s): State<S>) -> (StatusCode, axum::Json<Value>) {
+      let mut n = s.1.lock().unwrap();
+      let (code, body) = s.0[(*n).min(s.0.len() - 1)].clone();
+      *n += 1;
+      (StatusCode::from_u16(code).unwrap(), axum::Json(body))
+    }
+    let calls = Arc::new(Mutex::new(0));
+    let app = Router::new()
+      .route("/auth/cli/poll", post(poll))
+      .with_state(S(Arc::new(script), calls.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), calls)
+  }
+
+  fn grant(expires_in: u64) -> DeviceGrant {
+    DeviceGrant {
+      device_code: "dev".into(),
+      user_code: "BBBB-CCCC".into(),
+      verification_url_complete: "https://app.sectr.dev/cli/BBBB-CCCC".into(),
+      expires_in,
+      interval: 0,
+    }
+  }
+
+  fn approved_body() -> Value {
+    json!({"status": "approved", "key": "skp_x", "key_id": "kid-1",
+           "org": {"id": "o", "name": "acme"}})
+  }
+
+  async fn poll(api: &str, expires_in: u64) -> anyhow::Result<Approved> {
+    poll_device_login(
+      &reqwest::Client::new(),
+      api,
+      &grant(expires_in),
+      Duration::ZERO,
+    )
+    .await
+  }
+
+  #[tokio::test]
+  async fn poll_waits_through_pending_then_returns_the_key() {
+    let (api, calls) = stub(vec![
+      (200, json!({"status": "pending"})),
+      (200, json!({"status": "pending"})),
+      (200, approved_body()),
+    ])
+    .await;
+    let approved = poll(&api, 30).await.unwrap();
+    assert_eq!(
+      (
+        approved.key.as_str(),
+        approved.key_id.as_str(),
+        approved.org.name.as_str()
+      ),
+      ("skp_x", "kid-1", "acme")
+    );
+    assert_eq!(*calls.lock().unwrap(), 3);
+  }
+
+  #[tokio::test]
+  async fn poll_survives_a_transient_502() {
+    let (api, _) = stub(vec![(502, json!({})), (200, approved_body())]).await;
+    assert_eq!(poll(&api, 30).await.unwrap().key, "skp_x");
+  }
+
+  #[tokio::test]
+  async fn poll_reports_denied_and_expired() {
+    let (api, _) = stub(vec![(200, json!({"status": "denied"}))]).await;
+    let err = poll(&api, 30).await.unwrap_err().to_string();
+    assert!(err.contains("denied"), "{err}");
+    let (api, _) = stub(vec![(200, json!({"status": "expired"}))]).await;
+    let err = poll(&api, 30).await.unwrap_err().to_string();
+    assert!(err.contains("expired"), "{err}");
+  }
+
+  #[tokio::test]
+  async fn poll_gives_up_at_the_requests_own_expiry() {
+    let (api, _) = stub(vec![(200, json!({"status": "pending"}))]).await;
+    let err = poll(&api, 0).await.unwrap_err().to_string();
+    assert!(err.contains("expired"), "{err}");
+  }
+
+  #[test]
+  fn old_credentials_without_key_id_parse_and_round_trip() {
+    let old: Credentials =
+      toml::from_str("api = \"https://api.sectr.dev\"\nplatform_key = \"skp_a\"\n").unwrap();
+    assert_eq!(old.key_id, None);
+    assert!(!toml::to_string_pretty(&old).unwrap().contains("key_id"));
+    let new = Credentials {
+      key_id: Some("k".into()),
+      ..old
+    };
+    assert!(
+      toml::to_string_pretty(&new)
+        .unwrap()
+        .contains("key_id = \"k\"")
+    );
+  }
+
+  #[tokio::test]
+  async fn logout_revokes_only_keys_the_browser_login_made() {
+    let hits = Arc::new(Mutex::new(Vec::<String>::new()));
+    let h = hits.clone();
+    let app = Router::new().route(
+      "/api-keys/{id}",
+      delete(
+        move |axum::extract::Path(id): axum::extract::Path<String>| {
+          let h = h.clone();
+          async move {
+            h.lock().unwrap().push(id.clone());
+            if id == "gone" {
+              StatusCode::NOT_FOUND
+            } else {
+              StatusCode::NO_CONTENT
+            }
+          }
+        },
+      ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let api = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let creds = |key_id: Option<&str>| Credentials {
+      api: api.clone(),
+      platform_key: "skp_x".into(),
+      key_id: key_id.map(str::to_owned),
+    };
+    assert_eq!(revoke_login_key(&creds(None)).await, Revoked::NotOurs);
+    assert!(
+      hits.lock().unwrap().is_empty(),
+      "pasted keys send no DELETE"
+    );
+    assert_eq!(revoke_login_key(&creds(Some("k1"))).await, Revoked::Yes);
+    assert_eq!(*hits.lock().unwrap(), vec!["k1".to_owned()]);
+    assert_eq!(
+      revoke_login_key(&creds(Some("gone"))).await,
+      Revoked::AlreadyGone
+    );
+    let dead = Credentials {
+      api: "http://127.0.0.1:1".into(),
+      ..creds(Some("k"))
+    };
+    assert_eq!(revoke_login_key(&dead).await, Revoked::Failed);
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "kind": "event",
+  "batch_id": "0192f3a4-b700-7000-8000-0000000000aa",
+  "events": [
+    {
+      "id": "d94e8f2e-4c1a-4b2f-9e3d-7a8b9c0d1e2f",
+      "type": "MESSAGE_DELTA",
+      "payload": { "message_id": "msg_01", "delta": { "typed": "text", "text": "hi" } }
+    }
+  ]
+}

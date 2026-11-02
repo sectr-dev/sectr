@@ -1,0 +1,7 @@
+{
+  "type": "MESSAGE_END",
+  "payload": {
+    "message_id": "msg_01",
+    "finish_reason": "tool_use"
+  }
+}

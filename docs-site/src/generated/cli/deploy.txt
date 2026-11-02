@@ -1,0 +1,11 @@
+Ship the project to a server: package → upload → the server builds and activates. See `deploy --help`
+
+Usage: sectr deploy [OPTIONS]
+
+Options:
+      --path <PATH>                  Project directory (must contain sectr.toml) [default: .]
+      --config <CONFIG>              sectr.toml location relative to the project [default: sectr.toml]
+      --api <API>                    The server base URL (`http(s)://host[:port]`). Defaults through `sectr auth login` (or SECTR_API_URL)
+      --key <KEY>                    Platform API key (`skp_…`). Defaults through `sectr auth login` (or SECTR_PLATFORM_KEY)
+      --timeout-secs <TIMEOUT_SECS>  How long to wait for the server-side build to resolve, in seconds [default: 600]
+  -h, --help                         Print help

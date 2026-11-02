@@ -1,0 +1,280 @@
+# This was last checked for drift at commit 185df8e09c033928fa23fb53105ea8e3d99d3f36.
+#
+# Sectr Sessions API — the auth-agnostic session-interaction core.
+#
+# THE single client-facing contract for live agent interaction, composed
+# (by external $ref) into BOTH `public-api.yaml` (prod: + control plane,
+# auth layered on) and `dev-api.yaml` (local `sectr dev` gateway: + /dev
+# extras, no auth). See schema/README.md "API contract layering". Drift
+# discipline: a change to a shared shape edits THIS
+# file first; both composed docs follow.
+#
+# Deliberately auth-AGNOSTIC: paths carry no operation-level `security`
+# and there are no securitySchemes here — the composing documents layer
+# auth (prod: platform key, per-app invocation key or user token; dev:
+# none). The journal is the source of truth: client "live" views are SSE
+# tails of the journal, never proxies of a running runner.
+openapi: 3.1.0
+info:
+  title: Sectr Sessions API (core)
+  version: 0.1.0-draft
+  description: >-
+    Session create, user input, approval decisions, session reads, and the
+    journal-tail SSE stream. Composed into the public API and the dev
+    gateway; this document alone is a library, not a deployable API.
+
+security:
+  # Auth-agnostic: NO security requirements of its own. Composing docs
+  # layer auth on top (their root/operation security applies to these
+  # operations once $ref'd in).
+  - []
+
+paths:
+  /sessions:
+    get:
+      operationId: listSessions
+      summary: List sessions (sessions tables, approvals inbox source)
+      parameters:
+        - { name: app_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/SessionStatus" } }
+        - { name: external_user_id, in: query, description: "owner filter (backend/platform callers only; rejected for browser tokens, which are always scoped to their own user)", schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: created_before, in: query, description: RFC 3339; keyset pagination, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Session" }
+    post:
+      operationId: createSession
+      summary: Create a session and start its first turn
+      description: >-
+        Starts the turn immediately with `input` as a user_message reason.
+        The creating principal (prod: invocation key, user token or platform
+        key; dev: none) determines the server-derived `Session.origin`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewSessionRequest" }
+      responses:
+        "201":
+          description: created; turn started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionCreated" }
+        "400": { $ref: "#/components/responses/InvalidInput" }
+        "404": { description: "unknown app, no active deployment, or a route the deployment doesn't serve" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /sessions/{sessionId}:
+    get:
+      operationId: getSession
+      summary: Session metadata (inspector meta bar, tables)
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "404": { description: unknown session }
+  /sessions/{sessionId}/events:
+    get:
+      operationId: streamSessionEvents
+      summary: Journal tail (SSE) — the ONLY live view; never proxied from a runner
+      description: >-
+        `text/event-stream`. Each frame's `data:` is one event envelope
+        (event.schema.json); the SSE `id:` is the event's UUIDv7 `id`.
+        Replays the full journal from seq 0, then holds the tail open.
+        Resumption: standard `Last-Event-ID` header (or `last_event_id`
+        query param for first-connect) → replay `WHERE seq > $1`.
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: last_event_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { $ref: "./event.schema.json" }
+  /sessions/{sessionId}/input:
+    post:
+      operationId: sendSessionInput
+      summary: Send a user message (follow-up turn)
+      description: >-
+        Journaled as an INVOCATION_STARTED with reason user_message. 202
+        means the turn is SCHEDULED — turns run asynchronously; follow the
+        SSE journal tail for the output. An input after an ERRORED turn is
+        accepted (a fresh turn is the recovery path).
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SessionInput" }
+      responses:
+        "202": { description: turn scheduled }
+        "400": { $ref: "#/components/responses/InvalidInput" }
+        "404": { description: unknown session }
+        "409":
+          description: >-
+            session not accepting input — mid-turn (a live lease holds the
+            session), awaiting an approval decision (decide it first: a new
+            message would strand the unanswered tool call in the
+            conversation), or ended. NOT a 409 after an errored turn.
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /sessions/{sessionId}/approval:
+    post:
+      operationId: decideApproval
+      summary: Decide a pending approval (banner, approvals inbox)
+      description: >-
+        Journaled as TOOL_APPROVAL_GRANTED/DENIED, then the platform resumes
+        the turn with an approval_decision invocation.
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApprovalDecision" }
+      responses:
+        "202": { description: decision journaled; resume scheduled }
+        "404": { description: unknown session }
+        "409": { description: no pending approval on this session }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /approvals:
+    get:
+      operationId: listPendingApprovals
+      summary: Pending approvals across all apps (admin approvals inbox)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PendingApproval" }
+
+components:
+  responses:
+    TooManyRequests:
+      description: >-
+        concurrency, capacity or rate limit (server policy — the dev
+        gateway never returns it). Retry the same request after the
+        `Retry-After` delay. On `/input` and `/approval` nothing was
+        journaled. On `POST /sessions` normally nothing was either, but if
+        a concurrent request took the last slot between admission and the
+        first turn's claim, an idle session (only `SESSION_CREATED`) may be
+        left behind; it is listed by `GET /sessions` and accepts `/input`
+        later. `code` says which limit tripped (see the body schema).
+      headers:
+        Retry-After:
+          description: seconds to wait before retrying
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorWithCode" }
+    InvalidInput:
+      description: >-
+        `input` isn't a string, or is only whitespace. Nothing is journaled.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorWithCode" }
+  schemas:
+    ErrorWithCode:
+      type: object
+      required: [error]
+      description: >-
+        The standard `{error}` body, plus an optional machine-readable `code`
+        on errors that have one (additive: existing errors carry no code).
+      properties:
+        error: { type: string, description: human-readable message }
+        code:
+          type: string
+          description: >-
+            `concurrency_limit` (the app's concurrent-turn cap),
+            `platform_capacity` (the platform-wide cap), `rate_limited`
+            (session-creation rate limit), `beta_full` (signup cap; 403 on
+            POST /alpha/provision).
+    SessionStatus:
+      type: string
+      enum: [active, awaiting_approval, ended, error]
+    Session:
+      type: object
+      required: [id, app_id, route, origin, deployment_id, status, created_at, last_event_at, event_count]
+      properties:
+        id: { type: string, format: uuid }
+        app_id: { type: string, description: dashboard joins app_name client-side }
+        route: { type: string, description: the agent this session talked to }
+        origin:
+          type: string
+          enum: [api, playground]
+          description: server-derived from the creating principal
+        deployment_id: { type: string }
+        status: { $ref: "#/components/schemas/SessionStatus" }
+        created_at: { type: string, format: date-time }
+        last_event_at: { type: string, format: date-time }
+        event_count: { type: integer }
+        title:
+          type: string
+          description: >-
+            Display label, server-computed: today the first user message's
+            text, truncated. Display it, don't parse it: the derivation may
+            change. Absent when there's no text to show (no user message
+            yet, or one without text).
+        external_user_id:
+          type: string
+          description: owner — the end user whose browser token created the session; absent for backend/platform-created sessions
+    NewSessionRequest:
+      type: object
+      required: [app, route, input]
+      properties:
+        app: { type: string, description: app id or name }
+        route: { type: string, description: "agent route, e.g. /customer-support" }
+        input:
+          type: string
+          pattern: "\\S"
+          description: >-
+            The user's message text, journaled verbatim as
+            INVOCATION_STARTED.reason.input. A non-string, or a string of only
+            whitespace, is a 400.
+    SessionCreated:
+      type: object
+      required: [session_id]
+      properties:
+        session_id: { type: string, format: uuid }
+    SessionInput:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: string
+          pattern: "\\S"
+          description: >-
+            The user's message text, journaled verbatim as
+            INVOCATION_STARTED.reason.input. A non-string, or a string of only
+            whitespace, is a 400.
+    ApprovalDecision:
+      type: object
+      required: [approved]
+      properties:
+        approved: { type: boolean }
+        approver:
+          type: string
+          description: >-
+            attribution for the decision. Omitted, a user token's decision is
+            attributed to its end user (`external_user_id`); other callers
+            record none.
+    PendingApproval:
+      type: object
+      required: [session, event]
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        event:
+          $ref: "./event.schema.json"
+          description: the TOOL_APPROVAL_REQUIRED event envelope

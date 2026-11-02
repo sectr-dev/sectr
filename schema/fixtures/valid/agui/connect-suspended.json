@@ -1,0 +1,202 @@
+{
+  "description": "Connect on a thread awaiting an approval decision: the latest run is replayed and ends in the SAME interrupt (id = the TOOL_APPROVAL_REQUIRED row id, as in approval-suspend), so a reloaded client restores its Approve/Deny UI and answers with a normal resume run.",
+  "expected": [
+    {
+      "metadata": {
+        "seq": 1
+      },
+      "protocolVersion": "1.0",
+      "runId": "run-1",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478401123,
+      "type": "RUN_STARTED"
+    },
+    {
+      "messages": [
+        {
+          "content": "Refund order A-1234",
+          "id": "msg-user-1",
+          "role": "user"
+        }
+      ],
+      "metadata": {
+        "seq": 1
+      },
+      "timestamp": 1768478401123,
+      "type": "MESSAGES_SNAPSHOT"
+    },
+    {
+      "messageId": "d4e5f60718293041",
+      "metadata": {
+        "seq": 2
+      },
+      "role": "assistant",
+      "timestamp": 1768478402123,
+      "type": "TEXT_MESSAGE_START"
+    },
+    {
+      "delta": "I'll issue the refund.",
+      "messageId": "d4e5f60718293041",
+      "metadata": {
+        "seq": 3
+      },
+      "timestamp": 1768478403123,
+      "type": "TEXT_MESSAGE_CONTENT"
+    },
+    {
+      "messageId": "d4e5f60718293041",
+      "metadata": {
+        "seq": 4
+      },
+      "timestamp": 1768478404123,
+      "type": "TEXT_MESSAGE_END"
+    },
+    {
+      "metadata": {
+        "seq": 5
+      },
+      "outcome": {
+        "interrupts": [
+          {
+            "id": "0192f3a4-0103-7000-8000-000000000005",
+            "message": "Refunds over $25 need approval",
+            "metadata": {
+              "arguments": {
+                "amount": 42,
+                "order_id": "A-1234"
+              },
+              "toolName": "issue_refund"
+            },
+            "reason": "tool_approval",
+            "responseSchema": {
+              "type": "boolean"
+            },
+            "toolCallId": "call_refund"
+          }
+        ],
+        "type": "interrupt"
+      },
+      "runId": "run-1",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478405123,
+      "type": "RUN_FINISHED"
+    }
+  ],
+  "final_messages": [
+    {
+      "content": "Refund order A-1234",
+      "id": "msg-user-1",
+      "role": "user"
+    },
+    {
+      "content": "I'll issue the refund.",
+      "id": "d4e5f60718293041",
+      "role": "assistant",
+      "toolCalls": [
+        {
+          "function": {
+            "arguments": "{\"amount\":42,\"order_id\":\"A-1234\"}",
+            "name": "issue_refund"
+          },
+          "id": "call_refund",
+          "type": "function"
+        }
+      ]
+    }
+  ],
+  "journal": [
+    {
+      "created_at": "2026-01-15T12:00:00.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0103-7000-8000-000000000000",
+      "payload": {
+        "app_id": "0192f3a0-2222-7abc-9def-0123456789ab",
+        "route": "/chat"
+      },
+      "seq": 0,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "SESSION_CREATED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:01.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0103-7000-8000-000000000001",
+      "payload": {
+        "ag_ui": {
+          "client_message_id": "msg-user-1",
+          "run_id": "run-1"
+        },
+        "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+        "invocation_id": "0192f3a5-0103-7c0d-9e2f-000000000001",
+        "reason": {
+          "input": "Refund order A-1234",
+          "kind": "user_message"
+        },
+        "route": "/chat"
+      },
+      "seq": 1,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "INVOCATION_STARTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:02.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0103-7000-8000-000000000002",
+      "payload": {
+        "message_id": "d4e5f60718293041",
+        "role": "assistant"
+      },
+      "seq": 2,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:03.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0103-7000-8000-000000000003",
+      "payload": {
+        "delta": {
+          "text": "I'll issue the refund.",
+          "type": "text"
+        },
+        "message_id": "d4e5f60718293041"
+      },
+      "seq": 3,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:04.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0103-7000-8000-000000000004",
+      "payload": {
+        "finish_reason": "tool_use",
+        "message_id": "d4e5f60718293041"
+      },
+      "seq": 4,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:05.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0103-7000-8000-000000000005",
+      "payload": {
+        "arguments": {
+          "amount": 42,
+          "order_id": "A-1234"
+        },
+        "name": "issue_refund",
+        "reason": "Refunds over $25 need approval",
+        "tool_call_id": "call_refund"
+      },
+      "seq": 5,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "TOOL_APPROVAL_REQUIRED"
+    }
+  ],
+  "kind": "connect",
+  "request": {
+    "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "ERROR",
+  "payload": {
+    "message": "LLM provider returned 503",
+    "code": "upstream_unavailable",
+    "transient": true
+  }
+}

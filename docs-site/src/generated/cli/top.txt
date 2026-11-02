@@ -1,0 +1,17 @@
+Host AI agents — starting locally
+
+Usage: sectr <COMMAND>
+
+Commands:
+  auth     Store the platform key for cloud commands (login/whoami/logout)
+  init     Scaffold a new agent project: framework and frontend pickers (or --template / --frontend), file emission, `uv sync`, and a smoke inspect. See `init --help`
+  dev      Run the app locally end-to-end: SQLite journal, subprocess runner, gateway for clients. See `dev --help`
+  send     Send a message / decide an approval through the running `sectr dev` gateway (a thin client — it never starts the engine)
+  tail     Follow a session's journal (never stops until ctrl-c)
+  deploy   Ship the project to a server: package → upload → the server builds and activates. See `deploy --help`
+  secrets  Manage the app's server-side secrets (write-only: set/list/rm)
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

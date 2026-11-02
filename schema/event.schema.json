@@ -1,0 +1,696 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sectr.dev/schemas/event.schema.json",
+  "title": "Sectr journal event envelope",
+  "description": "Canonical event model for Sectr. Every journal row and every client SSE frame is one envelope. The envelope ties a closed `type` enum to a per-type payload schema via the `typedEvent` oneOf.\n\nForward compatibility: `additionalProperties` is deliberately NOT false anywhere in this schema \u2014 payload/envelope objects may carry unknown fields, and readers must preserve them, so events written by newer writers remain valid for older readers.\n\n`seq` is a per-session monotonic integer assigned by the journal writer (the server's ingest path), gap-free within a turn, starting at 0. It is never supplied by user code. `id` is a UUIDv7 (time-ordered) minted by the platform's event producer (the engine \u2014 never user code) and deduped by the journal writer, enabling exactly-once reconnect replay; the SSE frame's `id:` field carries it, enabling `Last-Event-ID` resumption.\n\nRunner-emitted event types may only appear on the SSE response stream of the invoke contract (see `invocation.schema.json` $defs/runnerEvent); platform-emitted types are written by the server/sidecar only.\n\nTurn semantics: a turn starts with a user_message invocation and ends when NO_MORE_ACTIONS is journaled within it (also synthesized by the sidecar after SESSION_ERROR). An approval pause SUSPENDS the turn \u2014 TOOL_APPROVAL_REQUIRED is then the last runner event, and no NO_MORE_ACTIONS is emitted until the decision's resume invocation completes.",
+  "type": "object",
+  "required": [
+    "id",
+    "session_id",
+    "deployment_id",
+    "seq",
+    "type",
+    "payload",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "#/$defs/uuidv7"
+    },
+    "session_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "deployment_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "type": {
+      "$ref": "#/$defs/eventType"
+    },
+    "payload": true,
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/typedEvent"
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Canonical lowercase UUID (any version)."
+    },
+    "uuidv7": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Lowercase UUIDv7 \u2014 version nibble 7, RFC 9562 variant."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp, always UTC (Z)."
+    },
+    "eventType": {
+      "enum": [
+        "MESSAGE_START",
+        "MESSAGE_DELTA",
+        "MESSAGE_END",
+        "TOOL_CALL",
+        "TOOL_APPROVAL_REQUIRED",
+        "ERROR",
+        "NO_MORE_ACTIONS",
+        "SESSION_CREATED",
+        "INVOCATION_STARTED",
+        "TOOL_RESULT",
+        "TOOL_APPROVAL_GRANTED",
+        "TOOL_APPROVAL_DENIED",
+        "SESSION_ERROR",
+        "TRANSCRIPT_COMPACTED"
+      ]
+    },
+    "runnerEventType": {
+      "enum": [
+        "MESSAGE_START",
+        "MESSAGE_DELTA",
+        "MESSAGE_END",
+        "TOOL_CALL",
+        "TOOL_RESULT",
+        "TOOL_APPROVAL_REQUIRED",
+        "ERROR",
+        "NO_MORE_ACTIONS",
+        "TRANSCRIPT_COMPACTED"
+      ],
+      "description": "The subset of event types a runner (user process) may emit over the invoke response stream. Everything else is platform-emitted. The turn ends when NO_MORE_ACTIONS is emitted; an approval pause (TOOL_APPROVAL_REQUIRED last) does NOT end the turn. TRANSCRIPT_COMPACTED is emitted by the SDK/adapter when the agent framework compacts context."
+    },
+    "typedEvent": {
+      "description": "Discriminated union: each branch pins `type` to a const and binds the payload to that type's schema.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "MESSAGE_START"
+            },
+            "payload": {
+              "$ref": "#/$defs/MESSAGE_START"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "MESSAGE_DELTA"
+            },
+            "payload": {
+              "$ref": "#/$defs/MESSAGE_DELTA"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "MESSAGE_END"
+            },
+            "payload": {
+              "$ref": "#/$defs/MESSAGE_END"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "TOOL_CALL"
+            },
+            "payload": {
+              "$ref": "#/$defs/TOOL_CALL"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "TOOL_APPROVAL_REQUIRED"
+            },
+            "payload": {
+              "$ref": "#/$defs/TOOL_APPROVAL_REQUIRED"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "ERROR"
+            },
+            "payload": {
+              "$ref": "#/$defs/ERROR"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "NO_MORE_ACTIONS"
+            },
+            "payload": {
+              "$ref": "#/$defs/NO_MORE_ACTIONS"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "SESSION_CREATED"
+            },
+            "payload": {
+              "$ref": "#/$defs/SESSION_CREATED"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "INVOCATION_STARTED"
+            },
+            "payload": {
+              "$ref": "#/$defs/INVOCATION_STARTED"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "TOOL_RESULT"
+            },
+            "payload": {
+              "$ref": "#/$defs/TOOL_RESULT"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "TOOL_APPROVAL_GRANTED"
+            },
+            "payload": {
+              "$ref": "#/$defs/TOOL_APPROVAL_GRANTED"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "TOOL_APPROVAL_DENIED"
+            },
+            "payload": {
+              "$ref": "#/$defs/TOOL_APPROVAL_DENIED"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "SESSION_ERROR"
+            },
+            "payload": {
+              "$ref": "#/$defs/SESSION_ERROR"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "TRANSCRIPT_COMPACTED"
+            },
+            "payload": {
+              "$ref": "#/$defs/TRANSCRIPT_COMPACTED"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ]
+        }
+      ]
+    },
+    "MESSAGE_START": {
+      "type": "object",
+      "description": "Runner-emitted. Start of an assistant message.",
+      "required": [
+        "role",
+        "message_id"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "e.g. \"assistant\"; opaque to the platform."
+        },
+        "message_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Runner-scoped message identifier; correlates START/DELTA/END."
+        }
+      }
+    },
+    "MESSAGE_DELTA": {
+      "type": "object",
+      "description": "Runner-emitted. Content delta for a message. Deltas are INTERPRETABLE, not opaque: the platform (e.g. a future AG-UI-compatible endpoint) must be able to reconstruct both the exact transcript and its streaming semantics from the journal alone. Tool-argument streaming is deliberately NOT a delta kind \u2014 TOOL_CALL journals complete arguments, which a resumed runner executes from journal data alone.",
+      "required": [
+        "message_id",
+        "delta"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delta": {
+          "description": "Interpretable content delta: {type, text} with a CLOSED kind vocabulary \u2014 `text` (maps to AG-UI TEXT_MESSAGE_CONTENT) and `reasoning` (maps to THINKING_CONTENT). One wire shape only; unknown kinds are invalid: framework chunk types outside the vocabulary must be normalized by the SDK adapter before journaling (e.g. Anthropic input_json_delta accumulates into TOOL_CALL.arguments).",
+          "type": "object",
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "text",
+                "reasoning"
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "MESSAGE_END": {
+      "type": "object",
+      "description": "Runner-emitted. End of an assistant message.",
+      "required": [
+        "message_id"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finish_reason": {
+          "type": "string",
+          "description": "Opaque to the platform, e.g. \"stop\", \"length\", \"tool_use\"."
+        },
+        "framework_state": {
+          "type": "object",
+          "description": "What the adapter that wrote it needs to rehydrate and replay THIS model response as its agent framework stored it, beyond the message's text and tool calls (e.g. signed reasoning); never state of other responses or of the run as a whole. Its `data` is opaque to the platform, which stores and serves it but never interprets it; only the adapter named by `adapter` reads it back. At most 256 KiB serialized: the platform drops a larger one.",
+          "required": [
+            "adapter",
+            "v",
+            "data"
+          ],
+          "properties": {
+            "adapter": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The adapter that wrote it, e.g. \"langgraph\"."
+            },
+            "v": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The adapter's format version for `data`."
+            },
+            "data": {
+              "type": "object",
+              "description": "The adapter's own data, in its format `v`. Opaque to the platform. The journal keeps a string value exactly, byte for byte, but an object or a number only by value: an object's keys may come back in another order, and a number in another notation. So a value the adapter needs back exactly (e.g. text a provider gets verbatim) is stored as a string; structure it only reads may be stored as JSON."
+            }
+          }
+        }
+      }
+    },
+    "TOOL_CALL": {
+      "type": "object",
+      "description": "Runner-emitted. Journal record of a tool call initiated inside the runner \u2014 the platform NEVER executes tools. Arguments are opaque JSON (conventionally an object) journaled verbatim; name + arguments must be sufficient for a resumed runner to execute an approved call from journal data alone.",
+      "required": [
+        "tool_call_id",
+        "name",
+        "arguments"
+      ],
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": true
+      }
+    },
+    "TOOL_APPROVAL_REQUIRED": {
+      "type": "object",
+      "description": "Runner-emitted. Requests human approval for a tool call. MUST be the final runner event of a turn; the turn ends with TURN_END{stop_reason: \"awaiting_approval\"}.",
+      "required": [
+        "tool_call_id",
+        "name",
+        "arguments"
+      ],
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": true,
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation shown in the approval inbox."
+        }
+      }
+    },
+    "ERROR": {
+      "type": "object",
+      "description": "Runner-emitted. Runner-level error; ends the turn (followed by TURN_END{stop_reason: \"error\"}).",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code": {
+          "type": "string"
+        },
+        "transient": {
+          "type": "boolean",
+          "description": "True if a retry of the same invocation may succeed."
+        }
+      }
+    },
+    "SESSION_CREATED": {
+      "type": "object",
+      "description": "Platform-emitted (seq 0 of a session). Optional `external_user_id`: the session's owner when created via a user-scope browser token \u2014 the app-defined end-user identity; absent for backend/platform-created sessions.",
+      "required": [
+        "app_id",
+        "route"
+      ],
+      "properties": {
+        "app_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "external_user_id": {
+          "type": "string",
+          "description": "owner identity: the (app-scoped) end-user the session belongs to; absent when backend/platform-created"
+        }
+      }
+    },
+    "INVOCATION_STARTED": {
+      "type": "object",
+      "description": "Platform-emitted. One per invocation, appended BEFORE the sidecar fetches the transcript \u2014 so the runner's transcript already includes its own INVOCATION_STARTED, and the canonical messages view already contains the current user message. `reason` says why this invocation exists.",
+      "required": [
+        "invocation_id",
+        "route",
+        "deployment_id",
+        "reason"
+      ],
+      "properties": {
+        "invocation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "deployment_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "reason": {
+          "$ref": "#/$defs/invocationReason"
+        }
+      }
+    },
+    "TOOL_RESULT": {
+      "type": "object",
+      "description": "Runner-emitted. Journaled after every SUCCESSFUL tool execution \u2014 normal mid-turn calls and post-approval executions alike \u2014 and for a denied approval (the rejection text). A model conversation needs an output for every function_call, but the journal does not guarantee one: every prefix of a valid journal is itself valid (a crash can cut it anywhere, including between TOOL_CALL and TOOL_RESULT), and a tool that fails journals no TOOL_RESULT. The canonical fold supplies the missing output: a TOOL_CALL with no TOOL_RESULT that is followed by more conversation gets a synthesized, never-persisted tool output; a trailing one is a suspended approval. The approval decision itself is journaled by the platform as TOOL_APPROVAL_GRANTED/DENIED.",
+      "required": [
+        "tool_call_id",
+        "result"
+      ],
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "result": true
+      }
+    },
+    "TOOL_APPROVAL_GRANTED": {
+      "type": "object",
+      "description": "Platform-emitted. The approval decision itself, journaled.",
+      "required": [
+        "tool_call_id"
+      ],
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approver": {
+          "type": "string"
+        }
+      }
+    },
+    "TOOL_APPROVAL_DENIED": {
+      "type": "object",
+      "description": "Platform-emitted. The approval decision itself, journaled.",
+      "required": [
+        "tool_call_id"
+      ],
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approver": {
+          "type": "string"
+        }
+      }
+    },
+    "SESSION_ERROR": {
+      "type": "object",
+      "description": "Platform-emitted. Platform-level failure (runner crash, timeout, lease expiry).",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "envelope": {
+      "description": "Alias reference to this schema's root envelope, for cross-file $refs (e.g. invocation.schema.json transcripts).",
+      "$ref": "https://sectr.dev/schemas/event.schema.json"
+    },
+    "runnerEvent": {
+      "description": "One frame of the runner's SSE response stream in the invoke contract: `{type, payload}` only \u2014 `id`, `seq`, `session_id`, `deployment_id` and `created_at` are assigned by the journal writer (the server's ingest path) when the event is journaled. Restricted to runner-emitted types.",
+      "type": "object",
+      "required": [
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/runnerEventType"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/typedEvent"
+        }
+      ]
+    },
+    "transcript": {
+      "description": "Full session history as journal envelopes, rehydrated by the platform and passed to the runner in the invoke request.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/envelope"
+      }
+    },
+    "NO_MORE_ACTIONS": {
+      "type": "object",
+      "description": "Runner-emitted (synthesized by the SDK driver on generator exhaustion or after an unhandled error's ERROR event; synthesized by the sidecar after SESSION_ERROR on a runner crash). THE turn-ending sentinel: 'the agent has no pending actions \u2014 the ball is in the user's court.' Deliberately NOT emitted on an approval pause: a gated tool is a pending action, so the turn is suspended, not over. Raw (no-SDK) runners MUST end their stream with this event when the turn is complete.",
+      "required": [],
+      "properties": {}
+    },
+    "invocationReason": {
+      "description": "Why an invocation exists. `tool_result` kind is specified for post-MVP externally-executed tools (the platform never executes tools in MVP).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "input"
+          ],
+          "properties": {
+            "kind": {
+              "const": "user_message"
+            },
+            "input": {
+              "type": "string",
+              "pattern": "\\S",
+              "description": "The user's message text. Starts a turn (first or follow-up)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "decision"
+          ],
+          "properties": {
+            "kind": {
+              "const": "approval_decision"
+            },
+            "decision": {
+              "type": "object",
+              "required": [
+                "approved"
+              ],
+              "properties": {
+                "approved": {
+                  "type": "boolean"
+                },
+                "approver": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "tool_call_id",
+            "result"
+          ],
+          "properties": {
+            "kind": {
+              "const": "tool_result"
+            },
+            "tool_call_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "result": {
+              "description": "Output of an externally-executed tool (post-MVP)."
+            }
+          }
+        }
+      ]
+    },
+    "TRANSCRIPT_COMPACTED": {
+      "type": "object",
+      "description": "Runner-emitted when the agent framework compacts context (framework's algorithm, framework's model access \u2014 the SDK/adapter captures the result and journals it mid-stream). Payload is the FULL post-compaction context in canonical message form: context assembly = these messages + the canonical view of everything journaled after this event (positional fold; `replaces_up_to_seq` is metadata \u2014 the journal head at compaction time). Constraint: the snapshot must not drop an unanswered tool call (an open function_call without its output is an invalid context on replay).",
+      "required": [
+        "replaces_up_to_seq",
+        "messages"
+      ],
+      "properties": {
+        "replaces_up_to_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "OpenAI-style message dicts (the canonical view) \u2014 the entire new context, framework compaction output normalized."
+        }
+      }
+    }
+  }
+}

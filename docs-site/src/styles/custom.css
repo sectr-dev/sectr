@@ -1,0 +1,285 @@
+/* docs.sectr.dev theme — brand tokens lifted from the marketing site
+   (which mirrors the dashboard). Dark-first: the dashboard's DARK palette is
+   the brand default; one orange voice (#f5a866) on near-black (#0c0c0e).
+   Inter for text, Geist Mono for code — same faces as sectr.dev.
+
+   Layer notes: Tailwind is imported FIRST so Starlight's cascade layers
+   (starlight.* — declared by Starlight's Page.astro) come after Tailwind's
+   layers, and Starlight's own reset/utilities win conflicts. Brand overrides
+   below are plain declarations (unlayered), so they beat both.
+
+   Preflight is deliberately NOT imported: its global reset kills list
+   bullets (`ul, ol { list-style: none }`) — Starlight ships no list-style
+   rules of its own and relies on browser defaults — and nothing on the
+   site uses Tailwind utilities anyway. Tailwind stays as the shared
+   toolchain (theme tokens + future utilities); Starlight's own reset
+   handles base normalization, as stock Starlight does. */
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Reserve the scrollbar gutter while the mobile menu's scroll lock is active.
+   WebKit includes the classic scrollbar in its media-query viewport width, so
+   toggling the body scrollbar can move the effective viewport across the 50rem
+   breakpoint and flip the entire layout — observed near 800px as the hamburger
+   button shifting ~15px, a stuck empty scrollbar, and the first click on the
+   hamburger not opening the menu (Safari only; Chrome/Firefox exclude the
+   scrollbar from MQ width). The toggle happens exactly when the menu opens
+   (`body:has(#starlight__sidebar:popover-open) { overflow: hidden }` swaps the
+   scrollbar for nothing) and when it closes, so reserving the gutter for that
+   window makes the layout width constant across the open/close dance: the
+   scrollbar is swapped for an equal-width gutter, never for raw width.
+   Scoped to the open state (rather than `html { scrollbar-gutter: stable }`
+   forever) so pages don't carry a permanent empty gutter; the rule can only
+   ever SHRINK the layout width when it appears, so it cannot push the viewport
+   up across the breakpoint. While the menu is open the pane covers the
+   viewport, so the gutter appearing is never visible; on close, the pane and
+   the gutter go in the same style recalc. No effect with overlay scrollbars
+   (macOS default, iOS), and no effect on iOS < 17 where `:popover-open`
+   inside `:has()` makes the selector invalid — the polyfill class variant is
+   unnecessary there because iOS only has overlay scrollbars. */
+html:has(#starlight__sidebar:popover-open) {
+    scrollbar-gutter: stable;
+}
+
+:root {
+    /* sectr brand voice (marketing palette) */
+    --brand: #f5a866;
+    --brand-foreground: #3a2008;
+    --success: #3fc39c;
+    --warning: #e0a04a;
+    --danger: #e0677f;
+    --info: #5b8def;
+
+    /* Starlight accent family rides the brand hue (sectr orange ≈ hsl(29…)). */
+    --sl-hue-orange: 29;
+
+    --sl-font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --sl-font-mono: "Geist Mono", ui-monospace, monospace;
+}
+
+/* Dark theme = the brand default (Starlight `defaultAppearance: "dark"`). */
+[data-theme="dark"] {
+    --sl-color-bg: #0c0c0e;
+    --sl-color-black: #0c0c0e;
+    --sl-color-bg-nav: #0c0c0e;
+    --sl-color-bg-sidebar: #0c0c0e;
+    --sl-color-white: #f4f4f5;
+    --sl-color-text: #f4f4f5;
+
+    /* Gray scale from the marketing dark palette, mapped onto Starlight's
+       dark-mode ordering: gray-1 is the LIGHTEST (text) and the scale
+       descends to gray-6 as the darkest surface — the inverse of the
+       marketing/dashboard numbering. Text tones: foreground, muted- and
+       faint-foreground; surfaces/borders: border-strong down to #1d1d21.
+       gray-7 is deliberately NOT defined: Starlight leaves it undefined in
+       dark mode (LinkCard relies on that via its gray-6 fallback). */
+    --sl-color-gray-1: #f4f4f5;
+    --sl-color-gray-2: #a2a2ab;
+    --sl-color-gray-3: #7a7a82;
+    --sl-color-gray-4: #35353b;
+    --sl-color-gray-5: #26262b;
+    --sl-color-gray-6: #1d1d21;
+
+    --sl-color-accent: #f5a866;
+    --sl-color-accent-high: #f4c396;
+    --sl-color-accent-low: #3a2008;
+    --sl-color-text-accent: #f5a866;
+    --sl-color-text-invert: #3a2008;
+    --sl-color-bg-accent: #f5a866;
+
+    --sl-color-hairline: #26262b;
+    --sl-color-hairline-shade: #1d1d21;
+    --sl-color-backdrop-overlay: rgb(0 0 0 / 60%);
+
+    --sl-color-bg-inline-code: #1a1a1e;
+}
+
+/* ── Sidebar pane hardening (WebKit breakpoints + popover polyfill) ────
+   Two WebKit-only failures around Starlight 0.42's popover-based mobile
+   sidebar, both site-side mitigated:
+
+   1. Breakpoint split: Starlight's CSS reveals the fixed pane at
+      `min-width: 50rem` (800px) while the JS that strips the `popover`
+      attribute and the `--sl-content-inline-start` content indent use
+      `50em`. Chrome resolves em == rem == the 16px initial font-size in
+      media queries, so the thresholds coincide; WebKit evaluates them
+      differently (bugs.webkit.org #156687 — em/rem divergence under page
+      zoom; plus the custom-property invalidation bug suspected in
+      withastro/starlight#3424). In the sliver just below 800px, Safari's
+      JS matched while the 50rem CSS had not: pane unhidden, hamburger
+      dead. Fixed at the source by our PageFrame override (the JS now
+      matches the CSS at 50rem); the `--sl-content-inline-start` rules
+      below remain as defense in depth.
+
+   2. iOS < 17 has no Popover API (an iPhone 8+ cannot update past iOS
+      16), and Starlight 0.42's mobile sidebar is a `[popover]` element:
+      without support the UA never applies display:none, so the pane
+      permanently covers the page. Mitigated by the vendored
+      oddbird/popover-polyfill (public/popover-polyfill.min.js, loaded
+      synchronously in head via astro.config.mjs). BUT the polyfill
+      emulates the UA popover stylesheet as UNLAYERED author CSS —
+      `:where([popover])` with position: fixed; inset: 0; width/height:
+      fit-content; margin: auto; border: solid; background: canvas — and
+      unlayered declarations beat Starlight's LAYERED .sidebar-pane rules
+      regardless of specificity. Opened, the menu rendered as a small
+      centered white-bordered dialog floating mid-page instead of the
+      full-screen pane. The :is() rule below re-asserts Starlight's pane
+      styles with enough cascade weight (unlayered, class specificity) to
+      beat the polyfill's emulation.
+
+   `:is()` is load-bearing twice over: it is forgiving, so the rule stays
+   valid on engines without :popover-open (where the whole non-forgiving
+   selector list would be dropped), and it lets one rule cover BOTH the
+   native open state and the polyfill's `\:popover-open` class signal.
+   At >= 50rem none of this applies; the desktop layout is untouched. */
+@media not all and (min-width: 50rem) {
+    .sidebar-pane {
+        display: none;
+    }
+
+    .sidebar-pane:is(:popover-open, .\:popover-open) {
+        display: block;
+        position: fixed;
+        inset-block: var(--sl-nav-height) 0;
+        inset-inline: 0;
+        margin: 0;
+        width: 100%;
+        height: auto;
+        border: 0;
+        padding: 0;
+        background-color: var(--sl-color-black);
+        color: inherit;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+    }
+
+    /* Starlight's hamburger button swaps between the bars/close icons via
+       `:has(~ :popover-open)` — an invalid selector on iOS < 17, where the
+       polyfill signals the open state with a `\:popover-open` CLASS instead,
+       so Starlight's rules drop entirely and BOTH icons render at once.
+       Mirror the toggle against both signals via :has(~ :is(...)): :is() is
+       forgiving, so the rule survives iOS 16 (:popover-open arg dropped), and
+       on Popover-API browsers it exactly replicates Starlight's own rules —
+       which matters for the close icon: an earlier version of this mirror
+       keyed only on the polyfill class, so on desktop browsers with the menu
+       OPEN natively the `:not(:has(...))` close-icon rule still matched and
+       hid the × (blank button, observed 2026-09-24). */
+    .sl-menu-button:has(~ .sidebar-pane:is(:popover-open, .\:popover-open)) {
+        background-color: var(--sl-color-gray-2);
+        box-shadow: none;
+    }
+    .sl-menu-button:has(~ .sidebar-pane:is(:popover-open, .\:popover-open)) .open-menu {
+        display: none;
+    }
+    .sl-menu-button:not(:has(~ .sidebar-pane:is(:popover-open, .\:popover-open))) .close-menu {
+        display: none;
+    }
+    [data-theme="light"] .sl-menu-button:has(~ .sidebar-pane:is(:popover-open, .\:popover-open)) {
+        background-color: var(--sl-color-gray-5);
+    }
+}
+
+/* The pane's `popover` attribute is now permanent (see the PageFrame override:
+   mutating it across the breakpoint silently breaks popover activation on
+   Safari). On iOS < 17 the polyfill's unlayered `:where([popover]:not(.\:
+   popover-open)) { display: none }` would therefore also hide the pane at
+   desktop widths, outranking Starlight's layered desktop rule. Re-assert the
+   desktop display unlayered so it wins at any popover-support level; the rest
+   of the desktop pane styling (width, border, background) stays in
+   Starlight's layered rules. */
+@media (min-width: 50rem) {
+    .sidebar-pane {
+        display: block;
+    }
+}
+
+/* Same em/rem split on the content indent: in the complementary gap just
+   above 800px the sidebar is revealed (50rem) but Safari has not applied
+   Page.astro's 50em custom-property rule, so the main column sits at x=0
+   under the sidebar (starlight#3424's screenshot). Re-declare the indent
+   at 50rem so it applies at exactly the width the sidebar appears. And
+   below the desktop breakpoint, force it back to 0 with !important —
+   Page.astro's unlayered 50em rule renders later in the document than
+   this stylesheet and would otherwise leave the mobile content indented
+   by the sidebar width whenever its 50em query outpaces the 50rem CSS. */
+@media (min-width: 50rem) {
+    [data-has-sidebar] {
+        --sl-content-inline-start: var(--sl-sidebar-width);
+    }
+}
+@media not all and (min-width: 50rem) {
+    [data-has-sidebar] {
+        --sl-content-inline-start: 0rem !important;
+    }
+}
+
+/* ── Sidebar version footer ────────────────────────────────────
+   Rendered by the Sidebar override (src/components/starlight/Sidebar.astro)
+   as the last child of Starlight's .sidebar-content flex column; auto
+   margin pins it to the bottom on desktop and the mobile popover.
+   Plain text: it is a lockstep sanity check (is the live docs build the
+   latest release?), NOT API versioning — deliberately says nothing. */
+.sidebar-content > .sidebar-version-footer {
+    margin-top: auto;
+    padding-block: 1rem 1.25rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3); /* faint-foreground under the dark scale */
+}
+
+/* ── SECTR wordmark ──────────────────────────────────────────────────
+   The top-left site title renders the Varino Normal wordmark, matching
+   marketing's Logo component: single weight (Varino has one — no fake
+   bold), all caps, tracking-tight, and the same 0.1em translate-y that
+   compensates for Varino's glyph metrics (visual center sits ~10% of the
+   em above the line-box midpoint). Font served from public/fonts/. */
+@font-face {
+    font-family: "Varino Normal";
+    src: url("/fonts/VarinoNormal.otf") format("opentype");
+    font-display: swap;
+}
+
+a.site-title > span {
+    font-family: "Varino Normal", ui-monospace, monospace;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: -0.025em;
+    transform: translateY(0.1em);
+    /* Neutral wordmark color (marketing's Logo inherits the foreground);
+       --sl-color-white is the correct polarity in both themes. */
+    color: var(--sl-color-white);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────
+   Starlight's link buttons (hero actions, [!button] asides) ship without
+   a font weight; 600 matches the heading weight and reads as the brand's
+   button voice. */
+.sl-link-button {
+    font-weight: 700;
+}
+
+/* ── Code in headings ────────────────────────────────────────────────
+   Starlight sizes heading code at the heading's own size (inherit), and
+   Geist Mono runs wider than Inter, so an all-code h2 like
+   `AgentApp(*, name, env)` dwarfs the page. Scale it down. */
+.sl-markdown-content :is(h2, h3, h4) code {
+    font-size: 0.8em;
+}
+
+/* ── Light theme branding ────────────────────────────────────────────
+   Light mode keeps Starlight's stock neutral palette (it reads well) but
+   swaps the stock blue accent for the sectr orange voice. The --sl-color-
+   orange* family already follows --sl-hue-orange: 29 from :root in both
+   themes (asides etc.); only the hardcoded blue accent family needs a
+   light override. Values sit on the brand hue, darkened for contrast on
+   white: text-accent doubles as the primary-button background under
+   Starlight's white --sl-color-black, so it needs 4.5:1 against white. */
+:root[data-theme="light"] {
+    --sl-color-accent-low: #fbeadb;
+    --sl-color-accent: #b45f0f;
+    --sl-color-accent-high: #8a4510;
+    --sl-color-text-accent: #b45f0f;
+    --sl-color-bg-accent: #b45f0f;
+}

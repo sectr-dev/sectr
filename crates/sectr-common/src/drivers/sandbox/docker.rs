@@ -1,0 +1,578 @@
+//! `DockerSandboxDriver` — the production [`SandboxDriver`] surface:
+//! per-session runner containers on the same host as the server (bollard;
+//! the server holds the Docker socket).
+//!
+//! This is a **container-specific** surface ([`ContainerRun`] →
+//! [`RunnerHandle`]), not the generic [`SandboxDriver::spawn`]-a-`RunnerSpec`
+//! shape: a container needs an image, a deterministic name (idempotent
+//! re-spawn), labels (bookkeeping/cleanup), and env — none of which fit the
+//! subprocess-oriented `RunnerSpec` (command/workdir/env) without polluting
+//! the dev path. The trait boundary that matters for swapping sandbox
+//! technologies is the server's `SessionSpawner` (spawn per session) +
+//! Contract 4's dial-out design, both already driver-agnostic.
+//!
+//! Lifecycle: `spawn_container` starts the container detached and returns
+//! immediately (readiness is NOT the driver's job — the module doc of
+//! `mod.rs`; in prod the sidecar's `ready` frame is the signal). Handles
+//! wait/kill via the Docker API. Containers are created with
+//! `AutoRemove`, so an exited container leaves nothing behind.
+//!
+//! The sidecar binary is expected to be the container's entrypoint (baked
+//! into the runner base image — the build path); `cmd` overrides the
+//! image CMD only.
+
+// Bollard 0.19 deprecates the hand-written container types in favor of the
+// OpenAPI-generated builders/stubs; the deprecated surface still works and
+// is what the 0.19 docs' examples use for these calls. Revisit on the next
+// bollard major.
+#![allow(deprecated)]
+
+use std::collections::HashMap;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bollard::Docker;
+use bollard::container::{
+  Config, CreateContainerOptions, KillContainerOptions, LogOutput, RemoveContainerOptions,
+  WaitContainerOptions,
+};
+use bollard::secret::HostConfig;
+use futures::StreamExt;
+
+use super::RunnerHandle;
+use crate::drivers::{DriverError, Result, RunnerExit};
+
+/// How long Docker API calls may take (connect + per-call).
+const API_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Everything needed to materialize one runner container.
+#[derive(Debug, Clone, Default)]
+pub struct ContainerRun {
+  /// Image reference (registry path + tag). Must exist locally or on the
+  /// configured registry — pulling is NOT automatic here (the build
+  /// path produces and pins the image; the spawner resolves it).
+  pub image: String,
+  /// Deterministic container name. Given a name, spawn is idempotent:
+  /// a leftover container with the same name is removed first.
+  pub name: Option<String>,
+  /// Labels (bookkeeping: org/app/session tagging for cleanup tooling).
+  pub labels: HashMap<String, String>,
+  /// Environment (`KEY` → `VALUE`), rendered as `KEY=VALUE`.
+  pub env: Vec<(String, String)>,
+  /// Override the image CMD (the ENTRYPOINT stays — the runner base
+  /// image's entrypoint is the sidecar binary).
+  pub cmd: Vec<String>,
+  /// Daemon-side auto-remove on exit. RUNNER containers set this TRUE
+  /// (the sidecar exits itself at the turn boundary, and
+  /// nothing on the prod path waits for its exit code, so the exited
+  /// husk must not linger). Driver tests that assert exit codes via
+  /// `wait()` set it FALSE (AutoRemove races the wait: the container is
+  /// gone before the code can be read).
+  pub auto_remove: bool,
+}
+
+impl ContainerRun {
+  /// Env rendered for the Docker API (`KEY=VALUE` pairs).
+  fn env_kv(&self) -> Vec<String> {
+    self.env.iter().map(|(k, v)| format!("{k}={v}")).collect()
+  }
+}
+
+/// Bollard-backed container driver. Cheap to clone (the `Docker` client is
+/// an `Arc` internally); one per server process.
+#[derive(Clone)]
+pub struct DockerSandboxDriver {
+  docker: Docker,
+}
+
+impl DockerSandboxDriver {
+  /// Connect over the given Unix socket (e.g. `/var/run/docker.sock`).
+  pub fn connect_with_socket(socket_path: &str) -> Result<Self> {
+    let docker = Docker::connect_with_socket(
+      socket_path,
+      API_TIMEOUT.as_secs(),
+      bollard::API_DEFAULT_VERSION,
+    )
+    .map_err(|e| DriverError::Other(format!("docker connect ({socket_path}): {e}")))?;
+    Ok(DockerSandboxDriver { docker })
+  }
+
+  /// Connect via the environment (`DOCKER_HOST` et al.) — used by tests
+  /// and Compose-style deployments.
+  pub fn connect_env() -> Result<Self> {
+    let docker = Docker::connect_with_local_defaults()
+      .map_err(|e| DriverError::Other(format!("docker connect (env): {e}")))?;
+    Ok(DockerSandboxDriver { docker })
+  }
+
+  /// Liveness/self-check for tests and `/healthz` enrichment.
+  pub async fn ping(&self) -> Result<()> {
+    self
+      .docker
+      .ping()
+      .await
+      .map(|_| ())
+      .map_err(|e| DriverError::Other(format!("docker ping: {e}")))
+  }
+
+  /// Remove a leftover container with the given name, if any (spawn is
+  /// idempotent thanks to this pre-step; 404 = nothing to do).
+  pub async fn remove_if_exists(&self, name: &str) -> Result<()> {
+    match self
+      .docker
+      .remove_container(name, Some(RemoveContainerOptions::default()))
+      .await
+    {
+      Ok(()) => Ok(()),
+      Err(bollard::errors::Error::DockerResponseServerError {
+        status_code: 404, ..
+      }) => Ok(()),
+      Err(e) => Err(DriverError::Other(format!("remove {name}: {e}"))),
+    }
+  }
+
+  /// Spawn a container detached. Returns as soon as the container exists
+  /// and is started — NOT when the runner is ready to serve (see module
+  /// doc). With `run.name` set, any leftover same-name container is
+  /// removed first (idempotent re-spawn).
+  pub async fn spawn_container(&self, run: ContainerRun) -> Result<Box<dyn RunnerHandle>> {
+    if let Some(name) = &run.name {
+      self.remove_if_exists(name).await?;
+    }
+    let options = CreateContainerOptions {
+      name: run.name.clone().unwrap_or_default(),
+      platform: None,
+    };
+    let config = Config {
+      image: Some(run.image.clone()),
+      cmd: (!run.cmd.is_empty()).then(|| run.cmd.clone()),
+      env: Some(run.env_kv()),
+      labels: (!run.labels.is_empty()).then(|| run.labels.clone()),
+      host_config: Some(HostConfig {
+        // See ContainerRun::auto_remove: TRUE for runner
+        // containers (self-exiting; nothing waits for the exit
+        // code on the prod path), FALSE for tests that assert
+        // exit codes via `wait()` (the daemon's removal races the
+        // wait and loses the code). Exited containers WITHOUT
+        // auto-remove are cleaned by teardown (force-remove) or
+        // the next same-name spawn.
+        auto_remove: Some(run.auto_remove),
+        ..Default::default()
+      }),
+      // No entrypoint override: the runner base image's ENTRYPOINT
+      // is the sidecar (baked at build).
+      ..Default::default()
+    };
+    let id = self
+      .docker
+      .create_container(Some(options), config)
+      .await
+      .map_err(|e| DriverError::Spawn(format!("create container: {e}")))?
+      .id;
+    self
+      .docker
+      .start_container(
+        &id,
+        None::<bollard::query_parameters::StartContainerOptions>,
+      )
+      .await
+      .map_err(|e| DriverError::Spawn(format!("start container {id}: {e}")))?;
+    Ok(Box::new(DockerRunnerHandle {
+      docker: self.docker.clone(),
+      id,
+    }))
+  }
+
+  /// Build an image from a tarred build context (the
+  /// caller tars `Dockerfile` + app dir). Returns the build log tail on
+  /// failure — the deploy surfaces it to the CLI.
+  pub async fn build_image(
+    &self,
+    tag: &str,
+    dockerfile: &str,
+    context_tar: Vec<u8>,
+  ) -> std::result::Result<(), String> {
+    use bollard::image::BuildImageOptions;
+    let options = BuildImageOptions {
+      t: tag.to_owned(),
+      dockerfile: dockerfile.to_owned(),
+      rm: true,
+      ..Default::default()
+    };
+    let mut stream =
+      self
+        .docker
+        .build_image(options, None, Some(bollard::body_full(context_tar.into())));
+    let mut log_tail = String::new();
+    while let Some(item) = stream.next().await {
+      match item {
+        Ok(info) => {
+          if let Some(line) = info.stream {
+            // Keep only the tail — build logs are long.
+            log_tail.push_str(&line);
+            let len = log_tail.len();
+            if len > 4000 {
+              log_tail = log_tail[len - 4000..].to_owned();
+            }
+          }
+          if let Some(err) = info.error {
+            return Err(format!(
+              "image build failed: {err}\n--- build log tail ---\n{log_tail}"
+            ));
+          }
+          if let Some(detail) = info.error_detail
+            && detail.message.is_some()
+          {
+            return Err(format!(
+              "image build failed: {}\n--- build log tail ---\n{log_tail}",
+              detail.message.unwrap_or_default()
+            ));
+          }
+        }
+        Err(e) => {
+          // The daemon's final stream error (e.g. "The command
+          // '/bin/sh -c …' returned a non-zero code: 2") says
+          // WHAT failed but not WHY — the failing RUN's own
+          // output is in the log tail.
+          return Err(format!(
+            "image build stream: {e}\n--- build log tail ---\n{log_tail}"
+          ));
+        }
+      }
+    }
+    Ok(())
+  }
+
+  /// Run a one-shot container from `image` (deploy flow: the
+  /// authoritative-manifest import), wait for exit, return
+  /// `(exit_code, combined logs)`. The container is always removed.
+  pub async fn run_once(
+    &self,
+    image: &str,
+    env: &[String],
+    cmd: &[String],
+    binds: &[String],
+    working_dir: Option<String>,
+  ) -> std::result::Result<(i32, String), String> {
+    use bollard::container::{Config, LogsOptions};
+    let name = format!("sectr-run-{}", uuid::Uuid::now_v7().simple());
+    let options = bollard::container::CreateContainerOptions {
+      name: name.clone(),
+      platform: None,
+    };
+    let config = Config {
+      image: Some(image.to_owned()),
+      cmd: (!cmd.is_empty()).then(|| cmd.to_vec()),
+      env: (!env.is_empty()).then(|| env.to_vec()),
+      host_config: Some(HostConfig {
+        binds: (!binds.is_empty()).then(|| binds.to_vec()),
+        ..Default::default()
+      }),
+      working_dir,
+      ..Default::default()
+    };
+    let id = self
+      .docker
+      .create_container(Some(options), config)
+      .await
+      .map_err(|e| format!("create run-once container: {e}"))?
+      .id;
+    let result = async {
+      self
+        .docker
+        .start_container(
+          &id,
+          None::<bollard::query_parameters::StartContainerOptions>,
+        )
+        .await
+        .map_err(|e| format!("start run-once container: {e}"))?;
+      // Bollard delivers a NON-ZERO exit as an Err item on the wait
+      // stream (DockerContainerWaitError { code, error }) whose Display
+      // is just the (usually empty) inner message — the exit code lives
+      // only in the variant. Treat it as data: the exit code is what
+      // run_once returns, and the logs below are how the caller sees
+      // WHY the process failed. A bare stream error (transport) stays
+      // an error.
+      let exit = match self
+        .docker
+        .wait_container(
+          &id,
+          Some(WaitContainerOptions {
+            condition: "not-running",
+          }),
+        )
+        .next()
+        .await
+        .ok_or("wait stream ended")?
+      {
+        Ok(wait) => wait.status_code,
+        Err(bollard::errors::Error::DockerContainerWaitError { code, .. }) => code,
+        Err(e) => return Err(format!("wait: {e}")),
+      };
+      let logs_options = LogsOptions::<String> {
+        stdout: true,
+        stderr: true,
+        follow: false,
+        timestamps: false,
+        tail: "100".into(),
+        ..Default::default()
+      };
+      let mut logs = String::new();
+      let mut log_stream = self.docker.logs(&id, Some(logs_options));
+      while let Some(item) = log_stream.next().await {
+        if let Ok(
+          output
+          @ (LogOutput::StdOut { .. } | LogOutput::StdErr { .. } | LogOutput::Console { .. }),
+        ) = item
+        {
+          logs.push_str(&String::from_utf8_lossy(&output.into_bytes()));
+        }
+      }
+      Ok((i32::try_from(exit).unwrap_or(-1), logs))
+    }
+    .await;
+    // Always remove (force: it may still be running if something failed).
+    let _ = self
+      .docker
+      .remove_container(
+        &id,
+        Some(RemoveContainerOptions {
+          force: true,
+          ..Default::default()
+        }),
+      )
+      .await;
+    result
+  }
+
+  /// Whether a container with this name/id currently exists (any state).
+  pub async fn exists(&self, name: &str) -> Result<bool> {
+    match self
+      .docker
+      .inspect_container(
+        name,
+        None::<bollard::query_parameters::InspectContainerOptions>,
+      )
+      .await
+    {
+      Ok(_) => Ok(true),
+      Err(bollard::errors::Error::DockerResponseServerError {
+        status_code: 404, ..
+      }) => Ok(false),
+      Err(e) => Err(DriverError::Other(format!("inspect {name}: {e}"))),
+    }
+  }
+
+  /// Kill (SIGKILL) a container by name/id, then force-remove the husk.
+  /// Missing container = success — kill must be idempotent for the
+  /// teardown paths.
+  pub async fn kill(&self, id: &str) -> Result<()> {
+    match self
+      .docker
+      .kill_container(
+        id,
+        Some(KillContainerOptions::<String> {
+          signal: "SIGKILL".into(),
+        }),
+      )
+      .await
+    {
+      Ok(()) => {}
+      Err(bollard::errors::Error::DockerResponseServerError {
+        status_code: 404 | 409,
+        ..
+      }) => {}
+      Err(e) => return Err(DriverError::Other(format!("kill {id}: {e}"))),
+    }
+    self
+      .docker
+      .remove_container(
+        id,
+        Some(RemoveContainerOptions {
+          force: true,
+          ..Default::default()
+        }),
+      )
+      .await
+      .map(|_| ())
+      .or_else(|e| match e {
+        bollard::errors::Error::DockerResponseServerError {
+          status_code: 404, ..
+        } => Ok(()),
+        e => Err(DriverError::Other(format!("remove {id}: {e}"))),
+      })
+  }
+}
+
+/// `RunnerHandle` over a live container. `wait` resolves with the exit
+/// code; a killed container resolves promptly.
+#[async_trait]
+impl RunnerHandle for DockerRunnerHandle {
+  fn id(&self) -> String {
+    self.id.clone()
+  }
+
+  async fn wait(&mut self) -> Result<RunnerExit> {
+    let mut stream = self.docker.wait_container(
+      &self.id,
+      Some(WaitContainerOptions {
+        condition: "not-running",
+      }),
+    );
+    match stream.next().await {
+      Some(Ok(response)) => Ok(RunnerExit {
+        code: Some(i32::try_from(response.status_code).unwrap_or(-1)),
+        signal: None,
+      }),
+      // The container was removed before the wait could observe the
+      // exit (kill's force-remove): the runner was terminated by us
+      // (SIGKILL) — signal it accordingly instead of erroring.
+      Some(Err(bollard::errors::Error::DockerResponseServerError {
+        status_code: 404, ..
+      })) => Ok(RunnerExit {
+        code: None,
+        signal: Some(9),
+      }),
+      Some(Err(e)) => Err(DriverError::Other(format!("wait {}: {e}", self.id))),
+      None => Err(DriverError::Other(format!(
+        "wait {}: stream ended",
+        self.id
+      ))),
+    }
+  }
+
+  async fn kill(&mut self) -> Result<()> {
+    self.kill_impl().await
+  }
+}
+
+struct DockerRunnerHandle {
+  docker: Docker,
+  id: String,
+}
+
+impl DockerRunnerHandle {
+  async fn kill_impl(&self) -> Result<()> {
+    match self
+      .docker
+      .kill_container(
+        &self.id,
+        Some(KillContainerOptions::<String> {
+          signal: "SIGKILL".into(),
+        }),
+      )
+      .await
+    {
+      Ok(()) => {}
+      // 404 = already gone; 409 = already exiting (restarting).
+      Err(bollard::errors::Error::DockerResponseServerError {
+        status_code: 404 | 409,
+        ..
+      }) => {}
+      Err(e) => return Err(DriverError::Other(format!("kill {}: {e}", self.id))),
+    }
+    // Kill alone leaves an `Exited` husk; force-remove cleans up (the
+    // daemon kills it first if it is somehow still running).
+    self
+      .docker
+      .remove_container(
+        &self.id,
+        Some(RemoveContainerOptions {
+          force: true,
+          ..Default::default()
+        }),
+      )
+      .await
+      .map(|_| ())
+      .or_else(|e| match e {
+        bollard::errors::Error::DockerResponseServerError {
+          status_code: 404, ..
+        } => Ok(()),
+        e => Err(DriverError::Other(format!("remove {}: {e}", self.id))),
+      })
+  }
+}
+
+/// Docker-sandbox driver tests. These spawn a REAL container as their
+/// subject — `postgres:16` (arbitrary but pinned; matches the runner base
+/// image family). The image must exist locally: `docker pull postgres:16`
+/// (CI pulls it explicitly). No docker daemon → tests skip.
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  async fn driver() -> Option<DockerSandboxDriver> {
+    let d = DockerSandboxDriver::connect_env().ok()?;
+    d.ping().await.ok()?;
+    Some(d)
+  }
+
+  /// Skipped unless a Docker daemon is reachable (sandbox + CI-less dev:
+  /// `docker compose -f docker-compose.test.yml up -d` implies it).
+  #[tokio::test]
+  async fn spawn_wait_kill_roundtrip() {
+    let Some(d) = driver().await else {
+      eprintln!("skipping: no docker daemon");
+      return;
+    };
+    let mut handle = d
+      .spawn_container(ContainerRun {
+        image: "postgres:16".into(),
+        cmd: vec!["sleep".into(), "30".into()],
+        auto_remove: false, // assert exit codes via wait()
+        ..Default::default()
+      })
+      .await
+      .expect("spawn");
+    let id = handle.id();
+
+    // Wait resolves at exit; kill (SIGKILL) terminates the sleep
+    // promptly with a non-zero status (128 + signal).
+    handle.kill().await.expect("kill");
+    let exit = tokio::time::timeout(Duration::from_secs(15), handle.wait())
+      .await
+      .expect("wait resolves after kill (15s)")
+      .expect("wait ok");
+    assert_ne!(exit.code, Some(0), "killed container exits non-zero");
+    let _ = id;
+  }
+
+  #[tokio::test]
+  async fn spawn_removes_leftover_same_name_container() {
+    let Some(d) = driver().await else {
+      eprintln!("skipping: no docker daemon");
+      return;
+    };
+    let name = format!("sectr-test-{}", uuid::Uuid::now_v7().simple());
+    let mut first = d
+      .spawn_container(ContainerRun {
+        image: "postgres:16".into(),
+        name: Some(name.clone()),
+        cmd: vec!["sleep".into(), "60".into()],
+        auto_remove: false, // assert exit codes via wait()
+        ..Default::default()
+      })
+      .await
+      .expect("first spawn");
+    first.kill().await.expect("kill");
+    let _ = tokio::time::timeout(Duration::from_secs(10), first.wait()).await;
+    // (the exited husk is force-removed by kill; give the daemon a beat)
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Same name spawns cleanly over the leftover (removed pre-create).
+    let mut second = d
+      .spawn_container(ContainerRun {
+        image: "postgres:16".into(),
+        name: Some(name.clone()),
+        cmd: vec!["sleep".into(), "60".into()],
+        auto_remove: false, // assert exit codes via wait()
+        ..Default::default()
+      })
+      .await
+      .expect("re-spawn over leftover name");
+    second.kill().await.expect("kill");
+
+    // kill-by-driver for an already-gone container is a no-op.
+    d.kill(&name).await.expect("idempotent driver kill");
+  }
+}

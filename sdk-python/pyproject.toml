@@ -1,0 +1,75 @@
+[project]
+name = "sectr"
+version = "0.1.0"
+description = "Python SDK for Sectr, which stores, streams and resumes AI agent conversations."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Donald Pinckney", email = "donald.pinckney@sectr.dev" }
+]
+requires-python = ">=3.12"
+keywords = ["ai", "agents", "langgraph", "openai-agents", "pydantic-ai", "ag-ui"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    # The FastAPI runner-contract adapter (sectr.server) — base dep (decided
+    # 2026-09-10): every HOSTED variant needs it, so it belongs to the SDK's
+    # core; the extras exist only for framework imports the core doesn't
+    # require.
+    "fastapi",
+    "uvicorn",
+]
+
+[project.urls]
+Homepage = "https://sectr.dev"
+Documentation = "https://docs.sectr.dev/reference/sdk/"
+Changelog = "https://sectr.dev/changelog/"
+Discord = "https://sectr.dev/discord"
+
+[project.optional-dependencies]
+# Framework adapters (each extra mirrors an examples/ variant).
+# Floor = the locked version the adapter is tested against: an approval
+# resume writes the SDK's RunState snapshot (schema 1.16, first read by it).
+# Cap = the newest release tested (the conformance projects' lock): the
+# adapter relies on SDK internals (the RunState format, as_tool()'s and
+# handoff()'s agent references), so a release is allowed only once tested.
+openai-agents = ["openai-agents>=0.22,<=0.23.1"]
+# Floor = the locked versions the adapter is tested against (ToolNode,
+# stream_mode messages+updates, ToolRuntime, InjectedToolCallId,
+# AIMessageChunk.chunk_position). langchain-core is imported directly, so it
+# is pinned here rather than inherited. Raise floors only with a re-lock.
+langgraph = [
+    "langgraph>=1.2.11,<2",
+    "langgraph-prebuilt>=1.1.0,<2",
+    "langchain-core>=1.6.6,<2",
+]
+# Floor = the tested version (capabilities + `before_tool_execute` deferral
+# are recent). `-slim` keeps provider SDKs out: users add
+# `pydantic-ai-slim[openai]` etc. Raise floors only with a re-lock.
+pydantic-ai = ["pydantic-ai-slim>=2.54,<3"]
+claude-code = ["claude-code-sdk", "fastmcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "pytest-asyncio>=0.24",
+    "jsonschema>=4.23",
+    "rfc3339-validator>=0.1.4",
+    "mypy>=2.3.1",
+    # W2b: langchain.agents.create_agent (the non-deprecated prebuilt agent).
+    "langchain>=1.4.3,<2",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"

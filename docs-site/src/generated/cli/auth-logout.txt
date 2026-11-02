@@ -1,0 +1,8 @@
+Forget the stored key (and revoke it, if the browser login made it)
+
+Usage: sectr auth logout [OPTIONS]
+
+Options:
+      --api <API>  The server base URL. Default: the public endpoint
+      --key <KEY>  Platform API key (`skp_…`). With `login`, stores that key instead of opening the browser
+  -h, --help       Print help

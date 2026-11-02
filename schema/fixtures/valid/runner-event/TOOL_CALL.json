@@ -1,0 +1,10 @@
+{
+  "type": "TOOL_CALL",
+  "payload": {
+    "tool_call_id": "call_01",
+    "name": "lookup_order",
+    "arguments": {
+      "order_id": "A-1234"
+    }
+  }
+}

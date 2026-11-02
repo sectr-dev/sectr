@@ -1,0 +1,21 @@
+[project]
+name = "sectr-example-langgraph"
+version = "0.1.0"
+description = "Sectr example: support agent on langgraph"
+requires-python = ">=3.12"
+dependencies = [
+    "sectr[langgraph]",
+    # real-model runs (OpenRouter via init_chat_model); SECTR_FAKE=1 needs neither
+    "langchain>=1.0",
+    "langchain-openai",
+]
+
+[tool.uv.sources]
+sectr = { path = "../../sdk-python", editable = true }
+
+[dependency-groups]
+dev = ["mypy>=1"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true

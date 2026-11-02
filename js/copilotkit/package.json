@@ -1,0 +1,53 @@
+{
+  "name": "@sectr/copilotkit",
+  "version": "0.1.0",
+  "description": "Run CopilotKit on Sectr: an AG-UI agent that reconnects reloaded pages, and a stateless Copilot Runtime runner, both backed by your Sectr agent.",
+  "keywords": [
+    "copilotkit",
+    "ag-ui",
+    "sectr",
+    "ai",
+    "agents"
+  ],
+  "homepage": "https://docs.sectr.dev/getting-started/connecting-frontend/",
+  "license": "MIT",
+  "author": {
+    "name": "Donald Pinckney",
+    "email": "donald.pinckney@sectr.dev"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@ag-ui/client": "^1.0.1",
+    "@copilotkit/runtime": ">=1.77.0 <2",
+    "rxjs": "^7.8.0"
+  },
+  "devDependencies": {
+    "@ag-ui/client": "1.0.1",
+    "@copilotkit/runtime": "1.77.0",
+    "@types/node": "^20.19.0",
+    "rxjs": "7.8.1",
+    "typescript": "5.9.3"
+  }
+}

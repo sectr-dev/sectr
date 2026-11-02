@@ -1,0 +1,147 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sectr-common",
+    "crates/sectr-server",
+    "crates/sectr-worker",
+    "crates/sectr-cli",
+    "crates/sectr-conformance",
+]
+
+[workspace.package]
+# THE version of Sectr — single source of truth, bumped in tandem for
+# sectr-cli, sectr-server, sectr-worker, sdk-python, and dashboard. Rust crates inherit it via
+# `version.workspace = true`; scripts/set-version.sh propagates it to
+# sdk-python/pyproject.toml and dashboard/package.json and --check guards
+# drift in CI. Release = `scripts/set-version.sh <ver>`, commit, tag `v<ver>`
+# (the tag drives the cargo-dist CLI release).
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/sectr-dev/sectr"
+
+# cargo-dist (`dist`) release config. Releases are built LOCALLY by
+# `just build` / `just release` (RELEASING.md): `dist build` makes per-target
+# tarballs + sha256 + the shell installer; the Linux targets are cross-built
+# from the Mac via cargo-zigbuild (dist drives it). There is no release
+# workflow in .github/ — `ci = "github"` below stays only because dist
+# insists on GitHub hosting being declared when `ci` is unset, and
+# `allow-dirty = ["ci"]` keeps it quiet about the missing generated file.
+# ONLY sectr-cli is distributed; server/worker are internal components. dist
+# is pinned to the version below (the `release` doctor tier checks it).
+[workspace.metadata.dist]
+# Whether to consider the binaries in a package for distribution (defaults true)
+dist = false
+# release.yml no longer exists (releases are local); keep dist from
+# complaining about the generated CI file being absent/out of date.
+allow-dirty = ["ci"]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.33.0"
+# CI backends to support
+ci = "github"
+# Hosting: R2 (public, fronted by dl.sectr.dev) is the download
+# source — the repo is PRIVATE, so GitHub Releases URLs 404 for anonymous
+# curl. `just publish-r2` uploads the release assets to the bucket.
+hosting = "simple"
+# {tag} = the git tag (v0.0.1). Bucket layout: <tag>/<release asset names>,
+# plus a latest/ prefix kept current by the sync workflow.
+simple-download-url = "https://dl.sectr.dev/{tag}"
+# No PowerShell installer: we don't ship Windows builds (revisit post-alpha).
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Install to ~/.local/bin rather than CARGO_HOME — most agent devs don't
+# have rustup, so ~/.cargo/bin wouldn't exist; ~/.local/bin is the common
+# spot (uv et al). The installer still prints PATH guidance if it's missing.
+install-path = "~/.local/bin"
+# No auto-updater for alpha (`sectr upgrade` later; re-run the installer).
+install-updater = false
+
+[workspace.dependencies]
+axum = "0.8"
+rmcp = { version = "3.5", default-features = false, features = ["server", "transport-streamable-http-server"] }
+rustls = "0.23"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "sqlite", "uuid", "chrono", "json"] }
+uuid = { version = "1.26", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+console = "0.16"
+indicatif = "0.18"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "multipart"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# OTel pipeline: `tracing-opentelemetry` 0.33 pairs with the
+# opentelemetry 0.32 line. The OTLP exporter rides the BLOCKING reqwest
+# client (`reqwest-blocking-client`): the SDK's BatchSpanProcessor exports
+# via `futures_executor::block_on` on its own background thread, where an
+# async reqwest client would panic with no tokio reactor. `reqwest-rustls`
+# turns on TLS (reqwest 0.13's `default-tls` IS rustls) for HTTPS providers
+# like Grafana Cloud.
+opentelemetry = { version = "0.32", default-features = false, features = ["trace", "logs"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "logs"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+    "http-proto",
+    "trace",
+    "logs",
+    "reqwest-blocking-client",
+    "reqwest-rustls",
+    "internal-logs",
+] }
+opentelemetry-appender-tracing = { version = "0.32", default-features = false }
+tracing-opentelemetry = { version = "0.33", default-features = false }
+thiserror = "2"
+anyhow = "1"
+tar = "0.4"
+toml = "0.8"
+flate2 = "1"
+sha2 = "0.10"
+base64 = "0.22"
+# Clerk session-JWT verification. Same 11.x already in the lock
+# via google-cloud-auth; `aws_lc_rs` keeps it on that crypto stack.
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+crypto_box = { version = "0.9", features = ["seal"] }
+getrandom = "0.2"
+async-trait = "0.1"
+tokio-stream = "0.1"
+futures = "0.3"
+bytes = "1"
+# Internal workspace crates: path-only, no version pins — versions would
+# drift on every bump. These crates are never published to crates.io.
+sectr-common = { path = "crates/sectr-common" }
+sectr-server = { path = "crates/sectr-server" }
+sectr-worker = { path = "crates/sectr-worker" }
+# GCS ArtifactStore — only compiled when the
+# `gcs` feature is enabled somewhere in the graph.
+google-cloud-storage = { version = "1.18", default-features = false }
+google-cloud-auth = "1.16"
+# GcpPlatform — Cloud Build + Cloud Run Jobs clients,
+# only compiled when the `gcp` feature is enabled on sectr-server.
+# NOTE: the builds API lives in the v1 crate — google-cloud-build-v2 1.13
+# only generates the RepositoryManager (dev-connect) surface and has no
+# Build model / create_build at all.
+google-cloud-build-v1 = "1.13"
+google-cloud-run-v2 = "1.14"
+google-cloud-wkt = "1.7"
+# Error-status inspection (NotFound on ensure-job) for the run/build clients.
+google-cloud-gax = "1.14"
+# The LRO `Poller` trait (until_done) — re-exported types used by the
+# build/run clients.
+google-cloud-lro = "1.10"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# Dev-build tuning: line tables are enough for backtraces; dropping debuginfo
+# for dependencies cuts compile + link time and target/ size. (Rust >= 1.90
+# already links x86_64 Linux with rust-lld by default — no .cargo/config.)
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

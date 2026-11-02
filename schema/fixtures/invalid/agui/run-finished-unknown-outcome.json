@@ -1,0 +1,13 @@
+{
+  "validate": "event",
+  "reason": "RUN_FINISHED.outcome is a closed union (success | interrupt | cancelled)",
+  "expect_error_contains": "outcome",
+  "document": {
+    "type": "RUN_FINISHED",
+    "threadId": "t",
+    "runId": "r",
+    "outcome": {
+      "type": "paused"
+    }
+  }
+}

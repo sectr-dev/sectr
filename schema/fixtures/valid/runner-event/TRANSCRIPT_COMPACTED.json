@@ -1,0 +1,12 @@
+{
+  "type": "TRANSCRIPT_COMPACTED",
+  "payload": {
+    "replaces_up_to_seq": 19,
+    "messages": [
+      {
+        "role": "user",
+        "content": "summary"
+      }
+    ]
+  }
+}

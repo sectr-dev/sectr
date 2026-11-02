@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Pre-commit hook — fast, local, deterministic gates only. CI (ci.yml) owns
+# the slow ones (clippy, tests, dashboard build, ...). Bypass with
+# `git commit --no-verify` for documented exceptions only.
+#
+# Checks:
+#   1. rustfmt --check on staged .rs files (edition 2024)
+#   2. GitHub Actions workflow YAML parses (staged)
+#   3. secret scan on staged content (platform keys, DB URLs, private
+#      keys, cloud tokens) — placeholder/fixture-shaped values allowed
+#   4. staged blobs > 5 MB rejected (the target-linux incident)
+#   5. no tracker ids or tracker links in staged content (this repo is public)
+#
+# Activate after cloning:  git config core.hooksPath .githooks
+set -u
+cd "$(git rev-parse --show-toplevel)"
+fail() { echo "pre-commit: $*" >&2; exit 1; }
+
+staged() { git diff --cached --name-only --diff-filter=ACM; }
+
+# --- 1. rustfmt on staged rust files -------------------------------------
+rust_files=$(staged | grep '\.rs$' || true)
+if [ -n "$rust_files" ]; then
+    if command -v rustfmt >/dev/null 2>&1; then
+        # Checks the working-tree copy of staged files; if the working tree
+        # has newer unformatted WIP beyond what is staged, stash or format.
+        for f in $rust_files; do
+            rustfmt --edition 2024 --check "$f" >/dev/null 2>&1 \
+                || fail "rustfmt --check failed on $f — run: cargo fmt"
+        done
+    else
+        echo "pre-commit: rustfmt not on PATH — skipping fmt check (CI will gate it)" >&2
+    fi
+fi
+
+# --- 2. workflow YAML parses ---------------------------------------------
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+    for f in $(staged | grep '^\.github/workflows/.*\.yml$' || true); do
+        python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$f" \
+            || fail "invalid YAML in $f"
+    done
+fi
+
+# --- 3 + 4. secret scan + size guard (staged content) ---------------------
+# The python block exits nonzero on any violation — its status IS the gate.
+python3 - <<'PYEOF'
+import re
+import subprocess
+import sys
+
+MB = 1024 * 1024
+MAX_BLOB = 5 * MB
+
+# name -> regex. Only matched against ADDED lines in the staged diff.
+# Keep these high-precision: a hook that cries wolf gets bypassed.
+PATTERNS = [
+    ("sectr platform key (skp_…)",
+     r"skp_[A-Za-z0-9_-]{40,}"),
+    ("private key block",
+     r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    ("credentialed database URL (non-local)",
+     r"postgres(?:ql)?://[^/\s:'\"]+:[^@\s'\"<>$]+@(?!(?:localhost|127\.0\.0\.1|\[::1\]))"),
+    ("GitHub token (ghp_/github_pat_)",
+     r"ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{22,}"),
+    ("AWS access key id",
+     r"AKIA[0-9A-Z]{16}"),
+    ("Slack token",
+     r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+    ("static cloud secret assignment",
+     r"(?i)(?:aws_secret_access_key|api_key|password)\s*[:=]\s*['\"]?[A-Za-z0-9/+=]{32,}['\"]?"),
+]
+
+# Substring allowlist (case-insensitive) on the matched candidate —
+# placeholder/fixture-shaped values are fine in the repo.
+PLACEHOLDERS = [
+    "example", "placeholder", "dummy", "fake", "sample", "changeme",
+    "your-", "your_", "xxx", "garbage", "todo", "fixme", "redacted", "pass", "key_0000000000000000000000000"
+]
+
+diff = subprocess.run(
+    ["git", "diff", "--cached", "--unified=0", "--diff-filter=ACM"],
+    capture_output=True, text=True,
+).stdout
+
+violations = []
+big_blobs = []
+tracker_refs = []
+# Written so that this file doesn't match its own patterns.
+TRACKER = re.compile(r"\bSEC-\d+\b|linear\.app")
+
+current_file = None
+for line in diff.splitlines():
+    if line.startswith("+++ b/"):
+        current_file = line[6:]
+        continue
+    if not line.startswith("+") or line.startswith("+++"):
+        continue
+    added = line[1:]
+    if current_file:
+        m = TRACKER.search(added)
+        if m:
+            tracker_refs.append(f"{current_file}: {m.group(0)}")
+        for name, pat in PATTERNS:
+            for m in re.finditer(pat, added):
+                candidate = m.group(0)
+                if any(p in candidate.lower() for p in PLACEHOLDERS):
+                    continue
+                # skp_ all-same-character runs are fixtures (test_…0000…)
+                suffix = candidate[4:] if candidate.startswith("skp_") else candidate
+                if suffix and len(set(suffix)) <= 2:
+                    continue
+                violations.append(
+                    f"{current_file}: possible {name}: {candidate[:16]}…"
+                )
+
+# staged blob size guard (added OR modified — a huge rewrite is equally bad)
+files = subprocess.run(
+    ["git", "diff", "--cached", "--name-only", "--diff-filter=AM"],
+    capture_output=True, text=True,
+).stdout.split()
+for f in files:
+    size = subprocess.run(
+        ["git", "cat-file", "-s", f":{f}"], capture_output=True, text=True
+    )
+    if size.returncode == 0 and int(size.stdout.strip()) > MAX_BLOB:
+        big_blobs.append(f"{f}: {int(size.stdout) / MB:.1f} MB")
+
+if violations:
+    print("pre-commit: possible secrets in staged changes:", file=sys.stderr)
+    for v in violations:
+        print(f"  {v}", file=sys.stderr)
+    print("If any of these is a real credential: DO NOT commit — rotate it.",
+          file=sys.stderr)
+    sys.exit(1)
+
+if tracker_refs:
+    print("pre-commit: tracker references in staged changes:", file=sys.stderr)
+    for r in tracker_refs:
+        print(f"  {r}", file=sys.stderr)
+    print("This repo is public: explain the reason in plain language instead.",
+          file=sys.stderr)
+    sys.exit(1)
+
+if big_blobs:
+    print("pre-commit: staged blobs exceed 5 MB (target-linux incident):", file=sys.stderr)
+    for b in big_blobs:
+        print(f"  {b}", file=sys.stderr)
+    print("Build artifacts do not belong in git. If a large file is truly",
+          "needed, commit with --no-verify and say why in the message.",
+          file=sys.stderr)
+    sys.exit(1)
+PYEOF

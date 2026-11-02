@@ -1,0 +1,78 @@
+---
+title: CLI reference
+description: Every sectr command, generated from the built binary.
+---
+
+import { Code } from "astro-expressive-code/components";
+import top from "../../../generated/cli/top.txt?raw";
+import auth from "../../../generated/cli/auth.txt?raw";
+import authLogin from "../../../generated/cli/auth-login.txt?raw";
+import authWhoami from "../../../generated/cli/auth-whoami.txt?raw";
+import authLogout from "../../../generated/cli/auth-logout.txt?raw";
+import init from "../../../generated/cli/init.txt?raw";
+import dev from "../../../generated/cli/dev.txt?raw";
+import send from "../../../generated/cli/send.txt?raw";
+import tail from "../../../generated/cli/tail.txt?raw";
+import deploy from "../../../generated/cli/deploy.txt?raw";
+import secrets from "../../../generated/cli/secrets.txt?raw";
+import secretsSet from "../../../generated/cli/secrets-set.txt?raw";
+import secretsList from "../../../generated/cli/secrets-list.txt?raw";
+import secretsRm from "../../../generated/cli/secrets-rm.txt?raw";
+
+Below is the full CLI command reference. For the
+workflows behind the commands, get setup with
+[install](/getting-started/install/), and the understand [the Sectr dev loop](/getting-started/first-agent/).
+
+## Authenticating the CLI
+
+### `sectr auth login`
+
+<Code code={authLogin} lang="text" />
+
+### `sectr auth whoami`
+
+<Code code={authWhoami} lang="text" />
+
+### `sectr auth logout`
+
+<Code code={authLogout} lang="text" />
+
+## Project Setup
+
+### `sectr init`
+
+<Code code={init} lang="text" />
+
+## Local Dev Server
+
+### `sectr dev`
+
+<Code code={dev} lang="text" />
+
+### `sectr send`
+
+<Code code={send} lang="text" />
+
+### `sectr tail`
+
+<Code code={tail} lang="text" />
+
+## Sectr Cloud Secrets Management
+
+### `sectr secrets set`
+
+<Code code={secretsSet} lang="text" />
+
+### `sectr secrets list`
+
+<Code code={secretsList} lang="text" />
+
+### `sectr secrets rm`
+
+<Code code={secretsRm} lang="text" />
+
+## Deploy to Sectr Cloud
+
+### `sectr deploy`
+
+<Code code={deploy} lang="text" />

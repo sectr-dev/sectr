@@ -1,0 +1,97 @@
+# Sectr Dev API — the gateway served by `sectr dev` (localhost, no auth).
+#
+# Composed (see schema/README.md "API contract layering"): the
+# session-interaction paths come from `sessions-api.yaml`
+# by external $ref, VERBATIM — the dev gateway CONFORMS to the same
+# contract as the prod public API, so the dashboard has one data layer in
+# both modes ("the UI can't tell dev from prod except by base URL").
+# Dev-only extras live under the marked `/dev` namespace and are NOT part
+# of the public contract.
+#
+# Auth: NONE — this is a single-user, per-project local gateway bound to
+# localhost; the composing core's root `security: []` applies. Do not
+# expose beyond localhost.
+openapi: 3.1.0
+info:
+  title: Sectr Dev API
+  version: 0.1.0-draft
+  description: >-
+    `sectr dev`'s gateway: the embedded engine + local journal behind the
+    session-interaction contract, plus a few dev conveniences under `/dev`.
+    The port defaults to 8420 (this project's last port when it has one;
+    pin it with `sectr dev --port` or `[dev] port` in `sectr.toml`); the
+    running gateway's base URL is `gateway_url` in `.agent/dev.json`.
+
+servers:
+  - url: http://127.0.0.1:8420
+    description: default port; see `sectr dev --port`
+
+security: []
+
+paths:
+  # ------------------------------------------------- sessions (from core)
+  /sessions:
+    $ref: "sessions-api.yaml#/paths/~1sessions"
+  /sessions/{sessionId}:
+    $ref: "sessions-api.yaml#/paths/~1sessions~1{sessionId}"
+  /sessions/{sessionId}/events:
+    $ref: "sessions-api.yaml#/paths/~1sessions~1{sessionId}~1events"
+  /sessions/{sessionId}/input:
+    $ref: "sessions-api.yaml#/paths/~1sessions~1{sessionId}~1input"
+  /sessions/{sessionId}/approval:
+    $ref: "sessions-api.yaml#/paths/~1sessions~1{sessionId}~1approval"
+  /approvals:
+    $ref: "sessions-api.yaml#/paths/~1approvals"
+
+  # ------------------------------------------------------ dev-only extras
+  /dev/status:
+    get:
+      summary: Gateway/engine info (client handshake + dashboards)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DevStatus" }
+  /dev/reset:
+    post:
+      summary: Wipe all local dev state (sessions, events, leases)
+      description: >-
+        Deletes the project's `.agent/dev.db` contents in place (bootstrap
+        ids in `dev.json` survive; deployments are kept). For demos and
+        iteration — never exists in the public contract.
+      responses:
+        "204": { description: state wiped; gateway still serving }
+
+components:
+  schemas:
+    DevStatus:
+      type: object
+      required: [project, app, app_id, gateway_port, routes]
+      description: >-
+        Identity of the running dev deployment — only what clients consume
+        (badge, app synthesis, session creation). Internal bookkeeping
+        (deployment version, entry) stays in .agent/dev.json.
+      properties:
+        project: { type: string, description: project dir basename }
+        app: { type: string, description: app name from the manifest }
+        app_id:
+          type: string
+          description: >-
+            the registry id sessions are stamped with — clients join
+            session rows to the app by THIS, not by name
+        gateway_port: { type: integer }
+        framework:
+          type: string
+          description: >-
+            framework adapter reported by the SDK inspector (the handler's
+            `sectr_framework` marker, e.g. openai-agents); absent when the
+            handler carries no marker
+        routes:
+          type: array
+          items: { type: string }
+          minItems: 1
+          description: >-
+            routable paths from the manifest — clients need one to create a
+            session (`POST /sessions` requires app + route), so the status
+            carries them rather than forcing clients to re-inspect the app.

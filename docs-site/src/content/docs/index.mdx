@@ -1,0 +1,34 @@
+---
+title: Documentation
+description: Docs for the Sectr CLI, Python SDK, and public API. Sectr stores, streams and resumes AI agent conversations.
+template: doc
+tableOfContents: false
+hero:
+    title: Sectr
+    tagline: The missing database and coordinator between an AI agent's frontend and its compute. Keep your framework, build locally, and deploy with one command.
+    actions:
+        - text: Install CLI
+          link: /getting-started/install/
+        - text: Deploy your first agent
+          link: /getting-started/first-agent/
+---
+
+import CopyCommand from "../../components/CopyCommand.astro";
+
+{/* skill: skip file — the docs landing page: a hero and links to the other pages */}
+
+Sectr makes deploying and managing AI agents in production a breeze. You develop your agent with your agent framework of choice, debug locally with `sectr dev`, and ship a cloud deployed agent with `sectr deploy`. A hosted session API, scaling compute up/down, scaling to zero for paused sessions, human in the loop tool approvals, and SSE streaming are all managed for you.
+
+Don't waste time on glue code - focus on the AI part of your agent, not the distributed systems. Ship faster with Sectr.
+
+:::tip[Tip]
+<CopyCommand label="Using a coding agent? Give it the Sectr skill:" command="npx skills add sectr-dev/skills" />
+:::
+
+:::caution[Early Beta]
+Sectr is in early beta: these docs _will change_ as Sectr evolves. At this time, Sectr is not intended to handle production traffic. If you would like to try Sectr, sign up free at [app.sectr.dev](https://app.sectr.dev).
+:::
+
+## Getting help
+
+Ask questions in `#help` on the [Sectr Discord](https://sectr.dev/discord). For account or security matters, email [contact@sectr.dev](mailto:contact@sectr.dev).

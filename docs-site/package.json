@@ -1,0 +1,45 @@
+{
+    "name": "docs-site",
+    "type": "module",
+    "version": "0.1.0",
+  "license": "Apache-2.0",
+    "engines": {
+        "node": ">=22.12.0"
+    },
+    "scripts": {
+        "dev": "astro dev",
+        "build": "astro build",
+        "preview": "npm run build && astro preview",
+        "astro": "astro",
+        "gen:cli": "node scripts/gen-cli-help.mjs",
+        "check:cli": "npm run gen:cli && git diff --exit-code -- src/generated/cli",
+        "gen:spec": "node scripts/gen-spec.mjs",
+        "check:spec": "npm run gen:spec && git diff --exit-code -- public/spec",
+        "gen:skill": "node scripts/gen-skill.mjs --out dist-skill/sectr",
+        "check:skill": "node scripts/gen-skill.mjs --check",
+        "gen": "npm run gen:cli && npm run gen:spec && npm run gen:skill",
+        "check": "npm run check:cli && npm run check:spec && npm run check:skill"
+    },
+    "dependencies": {
+        "@astrojs/starlight": "^0.42.3",
+        "@scalar/astro": "^0.4.21",
+        "astro": "^7.2.10",
+        "sharp": "^0.34.5"
+    },
+    "devDependencies": {
+        "@tailwindcss/vite": "^4.3.3",
+        "js-yaml": "^4.3.0",
+        "remark-directive": "^4.0.0",
+        "remark-gfm": "^4.0.1",
+        "remark-mdx": "^3.1.1",
+        "remark-parse": "^11.0.0",
+        "remark-stringify": "^11.0.0",
+        "tailwindcss": "^4.3.3",
+        "unified": "^11.0.5",
+        "wrangler": "^4.136.3"
+    },
+    "allowScripts": {
+        "esbuild": true,
+        "sharp": true
+    }
+}

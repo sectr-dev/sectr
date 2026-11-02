@@ -1,0 +1,171 @@
+---
+// OVERRIDE of Starlight's PageFrame (dist/components/PageFrame.astro, 0.42.3).
+//
+// The ONLY functional change vs upstream: the custom element NO LONGER mutates
+// the sidebar pane's `popover` attribute. Upstream strips it on desktop
+// viewports via matchMedia and re-adds it below the breakpoint; here the pane
+// keeps `popover` permanently, because:
+//
+// 1. The attribute never needs to be absent. At desktop widths the pane is
+//    displayed via author CSS (`display: block` beats the UA's closed-popover
+//    `display: none` — this is exactly how the pane renders with JS disabled),
+//    and below the breakpoint the pane is hidden by author CSS (custom.css
+//    hardening) plus the popover polyfill on iOS < 17.
+// 2. Mutating it is what breaks WebKit. After crossing the breakpoint (pane
+//    attribute removed, then re-added), popovertarget activation and even an
+//    imperative showPopover() silently fail on Safari 26 — no show, no
+//    exception — while a pane whose attribute was never touched works at
+//    every width. WebKit has a history of popover-internal-state bugs when
+//    the popover attribute changes dynamically (e.g. bugs.webkit.org 254268,
+//    308293), so we sidestep the mutation entirely.
+// 3. It removes the last em/rem divergence too: upstream's stripping decision
+//    used matchMedia('(min-width: 50em)') against CSS at 50rem
+//    (withastro/starlight#3424); with no stripping there is no JS threshold
+//    left to disagree with the CSS.
+//
+// What remains is the focus trap while the mobile menu is open (upstream keeps
+// that as well). If a later Starlight release stops mutating the popover
+// attribute upstream, delete this override.
+//
+// See also src/styles/custom.css (sidebar pane hardening) and the popover
+// polyfill loaded in astro.config.mjs.
+import MobileMenuToggle from 'virtual:starlight/components/MobileMenuToggle';
+
+const { hasSidebar } = Astro.locals.starlightRoute;
+---
+
+<div class="page sl-flex">
+	<header class="header"><slot name="header" /></header>
+	{
+		hasSidebar && (
+			<nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}>
+				<MobileMenuToggle />
+				<script>
+					// The mobile menu uses the popover API to open and close without JavaScript. We enhance this
+					// behaviour with focus trapping while the menu is open.
+					//
+					// CHANGED vs upstream: the desktopMediaQuery / resetPopoverAttribute logic that
+					// stripped the `popover` attribute on desktop viewports is GONE. Mutating the
+					// attribute across the breakpoint silently breaks popover activation on Safari
+					// (see the file header); the CSS keeps the pane correct in both states without it.
+					class StarlightSidebarPane extends HTMLElement {
+						constructor() {
+							super();
+
+							// Update the menu state when the sidebar popover is toggled.
+							this.addEventListener('toggle', ({ newState }) => this.trapFocus(newState === 'open'));
+
+							// Close the menu if the viewport grows past the mobile breakpoint, so
+							// the focus trap can't stay stuck on the desktop layout. Upstream did
+							// this as a side effect of stripping the popover attribute (which we
+							// no longer do — see the file header); hiding the open popover is a
+							// normal operation and doesn't touch the attribute. hidePopover()
+							// throws if the pane is already closed — swallow that; on iOS < 17
+							// matches(':popover-open') would also throw, so don't pre-check.
+							const desktop = matchMedia('(min-width: 50rem)');
+							desktop.addEventListener('change', ({ matches }) => {
+								if (!matches) return;
+								try {
+									this.hidePopover();
+								} catch {
+									/* already closed */
+								}
+							});
+						}
+						/** Trap keyboard focus inside the header and menu when the menu is expanded. */
+						trapFocus(shouldTrap: boolean) {
+							document.querySelectorAll<HTMLElement>('.main-frame, .sl-skip-link').forEach((el) => {
+								el.toggleAttribute('inert', shouldTrap);
+							});
+						}
+					}
+					customElements.define('sl-sidebar-pane', StarlightSidebarPane);
+				</script>
+				<sl-sidebar-pane popover="" id="starlight__sidebar" class="sidebar-pane">
+					<div class="sidebar-content sl-flex">
+						<slot name="sidebar" />
+					</div>
+				</sl-sidebar-pane>
+			</nav>
+		)
+	}
+	<div class="main-frame"><slot /></div>
+</div>
+
+<style>
+	@layer starlight.core {
+		.page {
+			flex-direction: column;
+			min-height: 100vh;
+		}
+
+		.header {
+			z-index: var(--sl-z-index-navbar);
+			position: fixed;
+			inset-inline-start: 0;
+			inset-block-start: 0;
+			width: 100%;
+			height: var(--sl-nav-height);
+			border-bottom: 1px solid var(--sl-color-hairline-shade);
+			padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+			padding-inline-end: var(--sl-nav-pad-x);
+			background-color: var(--sl-color-bg-nav);
+		}
+
+		:global([data-has-sidebar]) .header {
+			padding-inline-end: calc(
+				var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size)
+			);
+		}
+
+		.sidebar-pane {
+			/* By default, user agents apply some opinionated styles to popovers, which we don't want. */
+			border: unset;
+			padding: unset;
+			height: unset;
+			color: unset;
+
+			position: fixed;
+			z-index: var(--sl-z-index-menu);
+			inset-block: var(--sl-nav-height) 0;
+			inset-inline-start: 0;
+			width: 100%;
+			background-color: var(--sl-color-black);
+			overflow-y: auto;
+			scrollbar-gutter: stable;
+		}
+
+		.sidebar-content {
+			height: 100%;
+			min-height: max-content;
+			padding: 1rem var(--sl-sidebar-pad-x) 0;
+			flex-direction: column;
+			gap: 1rem;
+		}
+
+		@media (min-width: 50rem) {
+			.sidebar-content::after {
+				content: '';
+				padding-bottom: 1px;
+			}
+		}
+
+		.main-frame {
+			padding-top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height));
+			padding-inline-start: var(--sl-content-inline-start);
+		}
+
+		@media (min-width: 50rem) {
+			:global([data-has-sidebar]) .header {
+				padding-inline-end: var(--sl-nav-pad-x);
+			}
+			.sidebar-pane {
+				/* Make the sidebar visible on larger screens instead of deferring to popover state. */
+				display: block;
+				width: var(--sl-sidebar-width);
+				background-color: var(--sl-color-bg-sidebar);
+				border-inline-end: 1px solid var(--sl-color-hairline-shade);
+			}
+		}
+	}
+</style>

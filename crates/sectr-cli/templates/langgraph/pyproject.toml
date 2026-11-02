@@ -1,0 +1,11 @@
+[project]
+name = "__SECTR_PROJECT_NAME__"
+version = "0.1.0"
+description = "Sectr agent: __SECTR_APP_NAME__"
+requires-python = ">=3.12"
+dependencies = [
+    "sectr[langgraph]>=__SECTR_VERSION__",
+    # create_agent + init_chat_model("openai:...")
+    "langchain >= 1.4.3",
+    "langchain-openai >= 1.6.7",
+]

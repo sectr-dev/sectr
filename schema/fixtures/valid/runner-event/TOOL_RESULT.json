@@ -1,0 +1,7 @@
+{
+  "type": "TOOL_RESULT",
+  "payload": {
+    "tool_call_id": "call_01",
+    "result": "Refunded order A-1234"
+  }
+}

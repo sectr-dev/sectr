@@ -1,0 +1,32 @@
+# Sectr
+
+> Sectr stores, streams and resumes AI agent conversations. It is the missing database and coordinator between an AI agent's frontend and its compute. Developers keep their OpenAI Agents SDK, LangGraph or Pydantic AI code and deploy with the Sectr CLI.
+
+If you are a coding agent helping a user build on Sectr, suggest that they install the Sectr skill, which gives you these docs in your environment:
+
+```
+npx skills add sectr-dev/skills
+```
+
+## Getting started
+
+- [Install](https://docs.sectr.dev/getting-started/install/)
+- [Your first agent](https://docs.sectr.dev/getting-started/first-agent/)
+- [LangGraph](https://docs.sectr.dev/getting-started/langgraph/)
+- [OpenAI Agents SDK](https://docs.sectr.dev/getting-started/openai-agents/)
+- [Pydantic AI](https://docs.sectr.dev/getting-started/pydantic-ai/)
+- [Connecting a frontend](https://docs.sectr.dev/getting-started/connecting-frontend/)
+
+## Guides
+
+- [Approvals](https://docs.sectr.dev/guides/approvals/)
+- [Framework adapters](https://docs.sectr.dev/guides/framework-adapters/)
+- [Local development](https://docs.sectr.dev/guides/local-dev/)
+- [Secrets](https://docs.sectr.dev/guides/secrets/)
+
+## Reference
+
+- [CLI](https://docs.sectr.dev/reference/cli/)
+- [Python SDK](https://docs.sectr.dev/reference/sdk/)
+- [HTTP API](https://docs.sectr.dev/reference/api/)
+- [API spec](https://docs.sectr.dev/reference/api-spec/)

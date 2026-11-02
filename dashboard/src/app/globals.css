@@ -1,0 +1,278 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+  sectr design tokens — light: neutral with one orange voice; dark:
+  the same restraint in near-black, orange still the only voice.
+
+  Whites/very light grays (light) or near-blacks (dark, Cloudflare-
+  dashboard restraint); orange is the SINGLE accent — highlight and
+  interactible color, from primary buttons to the sidebar's lit slit.
+  Status colors keep their standard hues at text-capable depth (pastel
+  tints come from alpha variants).
+*/
+
+:root {
+  --radius: 0.375rem;
+
+  /* Page + surfaces — white content canvas (reading contrast is king:
+     session/journal text renders straight on it); gray lives in the
+     sidebar chrome and muted fills */
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+
+  /* Primary action = pastel orange, dark ink (the pastel way — white on
+     orange fails contrast) */
+  --primary: #f6a266;
+  --primary-foreground: #59300f;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #171717;
+
+  --muted: #f4f4f5;
+  --muted-foreground: #6e6e76;
+  --accent: #f4f4f5;
+  --accent-foreground: #171717;
+  --destructive: #d5484f;
+  --border: #e4e4e7;
+  --input: #dcdcdf;
+  --ring: rgb(240 154 82 / 45%);
+
+  /* sectr orange — the highlight/highlight-glow voice */
+  --brand: #f09a52;
+  --brand-foreground: #5c3310;
+
+  /* Semantic status colors (text-capable depth; pastel tints come from
+     alpha variants) */
+  --success: #2e8f5e;
+  --warning: #b97424;
+  --danger: #d5484f;
+  --info: #5b8def;
+
+  /* Extra surfaces (previously referenced but never defined — Tailwind
+     silently dropped the utilities; now real) */
+  --surface: #f9f9fa;
+  --surface-raised: #ffffff;
+  --border-strong: #d4d4d8;
+  --faint-foreground: #9a9aa1;
+
+  --sidebar: #f6f6f7;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #f09a52;
+  --sidebar-primary-foreground: #59300f;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #1f1f23;
+  --sidebar-border: #e8e8ea;
+  --sidebar-ring: rgb(240 154 82 / 45%);
+
+  /* Effect literals, tokenized so the dark variant can re-tune them
+     (glow strength etc.) without touching components. */
+  --glow-amber: rgb(240 154 82 / 45%);
+  --glow-amber-strong: rgb(240 154 82 / 60%);
+  --shadow-card: rgb(0 0 0 / 8%);
+  --selection: rgb(240 154 82 / 25%);
+  --scrollbar-thumb: rgb(23 23 23 / 15%);
+  --scrollbar-thumb-hover: rgb(23 23 23 / 25%);
+  --grid-line: rgb(23 23 23 / 4%);
+  --dusk-gradient: radial-gradient(120% 90% at 85% 110%, rgb(240 154 82 / 30%) 0%, transparent 55%),
+    radial-gradient(110% 80% at 15% 115%, rgb(240 154 82 / 18%) 0%, transparent 50%),
+    linear-gradient(to top, #f9ddc4 0%, #f2f1f4 55%, #f6f6f7 100%);
+}
+
+/*
+  DARK VARIANT — neutral, mirroring the light theme's restraint:
+  near-blacks and dark grays, orange as the single accent voice (it
+  glows stronger at night), status colors lifted for dark bg.
+*/
+.dark {
+  color-scheme: dark;
+
+  --background: #0c0c0e;
+  --foreground: #f4f4f5;
+  --card: #1a1a1e;
+  --card-foreground: #f4f4f5;
+  --popover: #1c1c21;
+  --popover-foreground: #f4f4f5;
+
+  --primary: #f5a866;
+  --primary-foreground: #3a2008;
+  --secondary: #1d1d21;
+  --secondary-foreground: #f4f4f5;
+
+  --muted: #1b1b1f;
+  --muted-foreground: #a2a2ab;
+  --accent: #1e1e23;
+  --accent-foreground: #f4f4f5;
+  --destructive: #e0677f;
+  --border: #26262b;
+  --input: #313137;
+  --ring: rgb(245 168 102 / 50%);
+
+  /* amber: brighter + more saturated — it must read as emitting light */
+  --brand: #f5a866;
+  --brand-foreground: #3a2008;
+
+  --success: #3fc39c;
+  --warning: #e0a04a;
+  --danger: #e0677f;
+  --info: #5b8def;
+
+  --surface: #17171a;
+  --surface-raised: #202025;
+  --border-strong: #35353b;
+  --faint-foreground: #7a7a82;
+
+  /* sidebar: a shade darker than the page */
+  --sidebar: #08080a;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #f5a866;
+  --sidebar-primary-foreground: #3a2008;
+  --sidebar-accent: #1e1e23;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: #26262b;
+  --sidebar-ring: rgb(245 168 102 / 50%);
+
+  /* night effects: the glow carries further in the dark */
+  --glow-amber: rgb(245 168 102 / 55%);
+  --glow-amber-strong: rgb(245 168 102 / 75%);
+  --shadow-card: rgb(0 0 0 / 40%);
+  --selection: rgb(245 168 102 / 30%);
+  --scrollbar-thumb: rgb(228 225 246 / 15%);
+  --scrollbar-thumb-hover: rgb(228 225 246 / 25%);
+  --grid-line: rgb(228 225 246 / 4%);
+  --dusk-gradient: radial-gradient(120% 90% at 85% 110%, rgb(245 168 102 / 30%) 0%, transparent 55%),
+    radial-gradient(110% 80% at 15% 115%, rgb(245 168 102 / 20%) 0%, transparent 50%),
+    linear-gradient(to top, #1c1c20 0%, #121214 55%, #0c0c0e 100%);
+}
+
+@theme inline {
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-geist-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-faint-foreground: var(--faint-foreground);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    color-scheme: light;
+  }
+  body {
+    @apply bg-background text-foreground;
+    /* Inter reads thin at 400 on dense dashboards — medium base */
+    font-weight: 500;
+  }
+  ::selection {
+    background: var(--selection);
+  }
+}
+
+/* Scrollbars — thin, unobtrusive */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Subtle grid backdrop for empty/login states */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* The brand dusk — an orange horizon glow rising from the bottom of the
+   page (peach on light, ember on near-black, like the marketing site's
+   hero). For the moments the console meets a human (login, empty states).
+   The per-theme gradients live in --dusk-gradient. */
+.bg-dusk {
+  background: var(--dusk-gradient);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes event-enter {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-event-enter {
+  animation: event-enter 0.28s ease-out;
+}
+
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.animate-caret-blink {
+  animation: caret-blink 1s step-end infinite;
+}

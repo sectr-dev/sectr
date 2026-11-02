@@ -1,0 +1,7 @@
+{
+  "type": "MESSAGE_START",
+  "payload": {
+    "role": "assistant",
+    "message_id": "msg_01"
+  }
+}

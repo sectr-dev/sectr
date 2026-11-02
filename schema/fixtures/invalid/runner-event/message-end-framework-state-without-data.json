@@ -1,0 +1,11 @@
+{
+  "type": "MESSAGE_END",
+  "payload": {
+    "message_id": "msg_01",
+    "framework_state": {
+      "adapter": "langgraph",
+      "v": 1,
+      "name": "support"
+    }
+  }
+}

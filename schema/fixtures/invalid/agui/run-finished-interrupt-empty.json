@@ -1,0 +1,14 @@
+{
+  "validate": "event",
+  "reason": "an interrupt outcome with nothing to answer is invalid (minItems 1)",
+  "expect_error_contains": "[] should be non-empty",
+  "document": {
+    "type": "RUN_FINISHED",
+    "threadId": "t",
+    "runId": "r",
+    "outcome": {
+      "type": "interrupt",
+      "interrupts": []
+    }
+  }
+}

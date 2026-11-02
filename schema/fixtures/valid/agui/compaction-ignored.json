@@ -1,0 +1,318 @@
+{
+  "created": false,
+  "description": "A thread with a TRANSCRIPT_COMPACTED event: compaction is LLM-context management (the journal is never rewritten), so the snapshot still shows the user the FULL original conversation, and the event itself is not surfaced.",
+  "expected": [
+    {
+      "input": {
+        "context": [],
+        "messages": [
+          {
+            "content": "old question",
+            "id": "msg-user-1",
+            "role": "user"
+          },
+          {
+            "content": "old answer",
+            "id": "1829304152637485",
+            "role": "assistant"
+          },
+          {
+            "content": "new question",
+            "id": "msg-user-2",
+            "role": "user"
+          }
+        ],
+        "protocolVersion": "1.0",
+        "runId": "run-2",
+        "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+        "tools": []
+      },
+      "metadata": {
+        "seq": 7
+      },
+      "protocolVersion": "1.0",
+      "runId": "run-2",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478407123,
+      "type": "RUN_STARTED"
+    },
+    {
+      "messages": [
+        {
+          "content": "old question",
+          "id": "msg-user-1",
+          "role": "user"
+        },
+        {
+          "content": "old answer",
+          "id": "1829304152637485",
+          "role": "assistant"
+        },
+        {
+          "content": "new question",
+          "id": "msg-user-2",
+          "role": "user"
+        }
+      ],
+      "metadata": {
+        "seq": 7
+      },
+      "timestamp": 1768478407123,
+      "type": "MESSAGES_SNAPSHOT"
+    },
+    {
+      "messageId": "2930415263748596",
+      "metadata": {
+        "seq": 8
+      },
+      "role": "assistant",
+      "timestamp": 1768478408123,
+      "type": "TEXT_MESSAGE_START"
+    },
+    {
+      "delta": "new answer",
+      "messageId": "2930415263748596",
+      "metadata": {
+        "seq": 9
+      },
+      "timestamp": 1768478409123,
+      "type": "TEXT_MESSAGE_CONTENT"
+    },
+    {
+      "messageId": "2930415263748596",
+      "metadata": {
+        "seq": 10
+      },
+      "timestamp": 1768478410123,
+      "type": "TEXT_MESSAGE_END"
+    },
+    {
+      "metadata": {
+        "seq": 11
+      },
+      "outcome": {
+        "type": "success"
+      },
+      "runId": "run-2",
+      "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "timestamp": 1768478411123,
+      "type": "RUN_FINISHED"
+    }
+  ],
+  "final_messages": [
+    {
+      "content": "old question",
+      "id": "msg-user-1",
+      "role": "user"
+    },
+    {
+      "content": "old answer",
+      "id": "1829304152637485",
+      "role": "assistant"
+    },
+    {
+      "content": "new question",
+      "id": "msg-user-2",
+      "role": "user"
+    },
+    {
+      "content": "new answer",
+      "id": "2930415263748596",
+      "role": "assistant"
+    }
+  ],
+  "invocation_id": "0192f3a5-0108-7c0d-9e2f-000000000002",
+  "journal": [
+    {
+      "created_at": "2026-01-15T12:00:00.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000000",
+      "payload": {
+        "app_id": "0192f3a0-2222-7abc-9def-0123456789ab",
+        "route": "/chat"
+      },
+      "seq": 0,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "SESSION_CREATED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:01.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000001",
+      "payload": {
+        "ag_ui": {
+          "client_message_id": "msg-user-1",
+          "run_id": "run-1"
+        },
+        "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+        "invocation_id": "0192f3a5-0108-7c0d-9e2f-000000000001",
+        "reason": {
+          "input": "old question",
+          "kind": "user_message"
+        },
+        "route": "/chat"
+      },
+      "seq": 1,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "INVOCATION_STARTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:02.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000002",
+      "payload": {
+        "message_id": "1829304152637485",
+        "role": "assistant"
+      },
+      "seq": 2,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:03.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000003",
+      "payload": {
+        "delta": {
+          "text": "old answer",
+          "type": "text"
+        },
+        "message_id": "1829304152637485"
+      },
+      "seq": 3,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:04.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000004",
+      "payload": {
+        "finish_reason": "stop",
+        "message_id": "1829304152637485"
+      },
+      "seq": 4,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:05.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000005",
+      "payload": {},
+      "seq": 5,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "NO_MORE_ACTIONS"
+    },
+    {
+      "created_at": "2026-01-15T12:00:06.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000006",
+      "payload": {
+        "messages": [
+          {
+            "content": "Summary: the user asked an old question.",
+            "role": "system"
+          }
+        ],
+        "replaces_up_to_seq": 5
+      },
+      "seq": 6,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "TRANSCRIPT_COMPACTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:07.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000007",
+      "payload": {
+        "ag_ui": {
+          "client_message_id": "msg-user-2",
+          "run_id": "run-2"
+        },
+        "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+        "invocation_id": "0192f3a5-0108-7c0d-9e2f-000000000002",
+        "reason": {
+          "input": "new question",
+          "kind": "user_message"
+        },
+        "route": "/chat"
+      },
+      "seq": 7,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "INVOCATION_STARTED"
+    },
+    {
+      "created_at": "2026-01-15T12:00:08.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000008",
+      "payload": {
+        "message_id": "2930415263748596",
+        "role": "assistant"
+      },
+      "seq": 8,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_START"
+    },
+    {
+      "created_at": "2026-01-15T12:00:09.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-000000000009",
+      "payload": {
+        "delta": {
+          "text": "new answer",
+          "type": "text"
+        },
+        "message_id": "2930415263748596"
+      },
+      "seq": 9,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_DELTA"
+    },
+    {
+      "created_at": "2026-01-15T12:00:10.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-00000000000a",
+      "payload": {
+        "finish_reason": "stop",
+        "message_id": "2930415263748596"
+      },
+      "seq": 10,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "MESSAGE_END"
+    },
+    {
+      "created_at": "2026-01-15T12:00:11.123456Z",
+      "deployment_id": "0192f3a0-1111-7abc-9def-0123456789ab",
+      "id": "0192f3a4-0108-7000-8000-00000000000b",
+      "payload": {},
+      "seq": 11,
+      "session_id": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+      "type": "NO_MORE_ACTIONS"
+    }
+  ],
+  "request": {
+    "context": [],
+    "messages": [
+      {
+        "content": "old question",
+        "id": "msg-user-1",
+        "role": "user"
+      },
+      {
+        "content": "old answer",
+        "id": "1829304152637485",
+        "role": "assistant"
+      },
+      {
+        "content": "new question",
+        "id": "msg-user-2",
+        "role": "user"
+      }
+    ],
+    "protocolVersion": "1.0",
+    "runId": "run-2",
+    "threadId": "0192f3a4-b5c6-7e2f-8a9b-1c2d3e4f5a6b",
+    "tools": []
+  }
+}

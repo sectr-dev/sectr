@@ -1,0 +1,45 @@
+# Rust
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.agent/
+
+# Node
+node_modules/
+.next/
+
+# Local dev state
+.env
+.dev-stack/
+data/
+*.db
+
+# sandbox/agent artifacts
+session.jsonl
+pi/
+.agents/skills/
+PR_TRIAGE.md
+
+# macOS
+.DS_Store
+.neon
+.env.local
+
+# Cross-compile targets, per-triple (control-plane deploys build in CI
+# for aarch64; the old e2-micro runbook used target-linux/)
+target-*/
+
+# Local release state (verification markers, logs)
+.release/
+
+# Local buildx layer cache (just build)
+.cache/
+
+# Private local agent setup (the ops repo holds the shared versions)
+.claude/
+.mcp.json
+CLAUDE.local.md
