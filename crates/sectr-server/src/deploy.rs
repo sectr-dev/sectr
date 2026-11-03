@@ -852,6 +852,8 @@ mod tests {
       // None → the background build fails at the first step (no base
       // image) without needing the tarball unpacked or docker reached.
       runner_base_image: None,
+      runner_network: None,
+      runner_resources: Default::default(),
       build_dir: "/tmp/sectr-build".into(),
       dashboard_url: "https://app.sectr.test".into(),
     }

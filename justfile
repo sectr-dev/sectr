@@ -181,6 +181,9 @@ check-rust-full:
     just services-up
     trap 'just services-down' EXIT
     docker pull postgres:16 >/dev/null
+    # The daemon-gated tests find a non-default socket (Docker Desktop's)
+    # only through DOCKER_HOST, and otherwise skip without saying so.
+    export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{"{{"}}.Endpoints.docker.Host{{"}}"}}')}"
     cargo fmt --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo test --workspace --all-features

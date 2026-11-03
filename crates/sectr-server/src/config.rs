@@ -75,12 +75,21 @@ pub struct ServerConfig {
   /// The runner BASE image deploys build on (`SECTR_RUNNER_BASE_IMAGE`):
   /// python + uv + the sectr SDK + the sidecar binary — see
   /// `docker/runner-base.Dockerfile`. Required for `POST /deployments`.
+  /// On the docker platform it defaults to the published image of this
+  /// server's own version, so the sidecar and the server can't drift.
   pub runner_base_image: Option<String>,
 
-  /// Build workspace root (`SECTR_BUILD_DIR`): tarball unpack + manifest
-  /// extraction bind-mount source. MUST be shared with the docker daemon
-  /// when the server runs containerized (compose: one host volume mounted
-  /// into the server container; the daemon sees the host path).
+  /// Docker network runner containers join (`SECTR_RUNNER_NETWORK`). Unset
+  /// = the daemon's default bridge.
+  pub runner_network: Option<String>,
+
+  /// CPU, memory and lifetime limits for each runner. See
+  /// [`RunnerResources`] for the env keys.
+  pub runner_resources: RunnerResources,
+
+  /// Build workspace root (`SECTR_BUILD_DIR`), where an uploaded tarball is
+  /// unpacked before it's sent to the daemon. Only the server reads it, so
+  /// it needn't be visible to the daemon.
   pub build_dir: String,
 
   /// Dashboard origin (`SECTR_DASHBOARD_URL`, default `https://app.sectr.dev`,
@@ -205,6 +214,98 @@ pub struct ServerConfig {
   /// limits, the signup cap and the orphan-runner reaper mode. See
   /// [`LimitsConfig`] for the env keys.
   pub limits: LimitsConfig,
+}
+
+/// The image repository the docker platform's default base image comes from.
+const PUBLISHED_RUNNER_BASE_IMAGE: &str = "ghcr.io/sectr-dev/sectr-runner-base";
+
+/// Resolve the runner base image. Only the docker platform has a default:
+/// the gcp and e2b builders need the image in their own registry
+/// (`check_gcp_config`).
+fn resolve_runner_base_image(platform: PlatformKind, configured: Option<String>) -> Option<String> {
+  let configured = configured.filter(|image| !image.trim().is_empty());
+  match platform {
+    PlatformKind::Docker => Some(configured.unwrap_or_else(|| {
+      format!(
+        "{PUBLISHED_RUNNER_BASE_IMAGE}:v{}",
+        env!("CARGO_PKG_VERSION")
+      )
+    })),
+    PlatformKind::Gcp | PlatformKind::E2b => configured,
+  }
+}
+
+/// The limits on each runner container. E2B's defaults, so a turn gets the
+/// same room self-hosted as it does hosted.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RunnerResources {
+  /// `SECTR_RUNNER_CPU_COUNT`, default 1. May be fractional.
+  pub cpu_count: f64,
+  /// `SECTR_RUNNER_MEMORY_MB`, default 1024.
+  pub memory_mb: i64,
+  /// `SECTR_RUNNER_TIMEOUT_SECS`, default 3600. The runaway-turn safety net:
+  /// at expiry the runner stops, and the reconciler ends the turn when its
+  /// lease expires.
+  pub timeout_secs: u64,
+}
+
+impl Default for RunnerResources {
+  fn default() -> Self {
+    RunnerResources {
+      cpu_count: 1.0,
+      memory_mb: 1024,
+      timeout_secs: 3600,
+    }
+  }
+}
+
+impl RunnerResources {
+  /// A value that's set but invalid is a startup error: silently running
+  /// with the default would hide a typo in a safety limit. Takes the raw
+  /// values (not the environment) so it is unit-testable.
+  fn from_vars(
+    cpu_count: Option<&str>,
+    memory_mb: Option<&str>,
+    timeout_secs: Option<&str>,
+  ) -> anyhow::Result<Self> {
+    let set = |v: Option<&'_ str>| -> Option<String> {
+      v.map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+    };
+    let defaults = RunnerResources::default();
+    let cpu_count = match set(cpu_count) {
+      Some(v) => v
+        .parse::<f64>()
+        .ok()
+        .filter(|cpus| cpus.is_finite() && *cpus >= 0.01)
+        .ok_or_else(|| anyhow::anyhow!("SECTR_RUNNER_CPU_COUNT={v:?} must be at least 0.01"))?,
+      None => defaults.cpu_count,
+    };
+    let memory_mb = match set(memory_mb) {
+      Some(v) => v
+        .parse::<i64>()
+        .ok()
+        .filter(|mb| (128..=i64::MAX / (1024 * 1024)).contains(mb))
+        .ok_or_else(|| anyhow::anyhow!("SECTR_RUNNER_MEMORY_MB={v:?} must be at least 128"))?,
+      None => defaults.memory_mb,
+    };
+    let timeout_secs = match set(timeout_secs) {
+      Some(v) => v
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| *secs > 0)
+        .ok_or_else(|| {
+          anyhow::anyhow!("SECTR_RUNNER_TIMEOUT_SECS={v:?} must be a positive integer")
+        })?,
+      None => defaults.timeout_secs,
+    };
+    Ok(RunnerResources {
+      cpu_count,
+      memory_mb,
+      timeout_secs,
+    })
+  }
 }
 
 /// Default lifetime of the dashboard-session key `POST /auth/clerk` mints.
@@ -369,6 +470,7 @@ impl ServerConfig {
       .map_err(|_| anyhow::anyhow!("SECTR_PG_URL is required (Neon DIRECT/unpooled url)"))?;
     let bind_addr = std::env::var("SECTR_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let bind_addr: SocketAddr = bind_addr.parse()?;
+    let platform = PlatformKind::from_env()?;
     let config = ServerConfig {
       pg_url,
       bind_addr,
@@ -397,7 +499,19 @@ impl ServerConfig {
         .map(str::to_owned)
         .collect(),
       runner_image: std::env::var("SECTR_RUNNER_IMAGE").ok(),
-      runner_base_image: std::env::var("SECTR_RUNNER_BASE_IMAGE").ok(),
+      runner_base_image: resolve_runner_base_image(
+        platform,
+        std::env::var("SECTR_RUNNER_BASE_IMAGE").ok(),
+      ),
+      runner_network: std::env::var("SECTR_RUNNER_NETWORK")
+        .ok()
+        .map(|n| n.trim().to_owned())
+        .filter(|n| !n.is_empty()),
+      runner_resources: RunnerResources::from_vars(
+        std::env::var("SECTR_RUNNER_CPU_COUNT").ok().as_deref(),
+        std::env::var("SECTR_RUNNER_MEMORY_MB").ok().as_deref(),
+        std::env::var("SECTR_RUNNER_TIMEOUT_SECS").ok().as_deref(),
+      )?,
       build_dir: std::env::var("SECTR_BUILD_DIR").unwrap_or_else(|_| "/tmp/sectr-build".into()),
       dashboard_url: std::env::var("SECTR_DASHBOARD_URL")
         .ok()
@@ -435,7 +549,7 @@ impl ServerConfig {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3600),
       e2b_puller_sa_json: std::env::var("SECTR_E2B_PULLER_SA_JSON").ok(),
-      platform: PlatformKind::from_env()?,
+      platform,
       posthog_key: std::env::var("SECTR_POSTHOG_KEY")
         .ok()
         .filter(|k| !k.trim().is_empty()),
@@ -479,6 +593,11 @@ impl ServerConfig {
       config.gcp_runner_sa_email.as_deref(),
       config.runner_base_image.as_deref(),
     )?;
+    if config.platform == PlatformKind::Docker {
+      // A runner URL with no host would otherwise surface only at the first
+      // turn, as a spawn failure.
+      crate::platform::server_host_of(&config.runner_server_url)?;
+    }
     check_e2b_config(
       config.platform,
       config.e2b_api_key.as_deref(),
@@ -923,6 +1042,64 @@ mod tests {
     assert!(e.to_string().contains("SECTR_PLATFORM=e2b"), "{e}");
     if cfg!(feature = "gcs") {
       check_artifact_backend(PlatformKind::E2b, ArtifactBackend::Gcs, Some("b")).unwrap();
+    }
+  }
+
+  #[test]
+  fn the_default_base_image_follows_the_version_and_only_applies_to_docker() {
+    let published = format!(
+      "ghcr.io/sectr-dev/sectr-runner-base:v{}",
+      env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(
+      resolve_runner_base_image(PlatformKind::Docker, None),
+      Some(published.clone())
+    );
+    assert_eq!(
+      resolve_runner_base_image(PlatformKind::Docker, Some(" ".into())),
+      Some(published),
+      "an empty value from a compose file counts as unset"
+    );
+    assert_eq!(
+      resolve_runner_base_image(PlatformKind::Docker, Some("mine:1".into())),
+      Some("mine:1".into())
+    );
+    for platform in [PlatformKind::Gcp, PlatformKind::E2b] {
+      assert_eq!(resolve_runner_base_image(platform, None), None);
+      assert_eq!(
+        resolve_runner_base_image(platform, Some("mine:1".into())),
+        Some("mine:1".into())
+      );
+    }
+  }
+
+  #[test]
+  fn runner_resources_default_to_e2bs_values() {
+    let defaults = RunnerResources::from_vars(None, Some(""), Some(" ")).unwrap();
+    assert_eq!(defaults, RunnerResources::default());
+    assert_eq!(defaults.cpu_count, 1.0);
+    assert_eq!(defaults.memory_mb, 1024);
+    assert_eq!(defaults.timeout_secs, 3600);
+  }
+
+  #[test]
+  fn runner_resources_accept_valid_values_and_refuse_typos() {
+    let set = RunnerResources::from_vars(Some("0.5"), Some("2048"), Some("60")).unwrap();
+    assert_eq!(set.cpu_count, 0.5);
+    assert_eq!(set.memory_mb, 2048);
+    assert_eq!(set.timeout_secs, 60);
+
+    for (cpus, memory, timeout, named) in [
+      (Some("zero"), None, None, "SECTR_RUNNER_CPU_COUNT"),
+      (Some("0"), None, None, "SECTR_RUNNER_CPU_COUNT"),
+      (Some("inf"), None, None, "SECTR_RUNNER_CPU_COUNT"),
+      (None, Some("1g"), None, "SECTR_RUNNER_MEMORY_MB"),
+      (None, Some("64"), None, "SECTR_RUNNER_MEMORY_MB"),
+      (None, None, Some("0"), "SECTR_RUNNER_TIMEOUT_SECS"),
+      (None, None, Some("1h"), "SECTR_RUNNER_TIMEOUT_SECS"),
+    ] {
+      let e = RunnerResources::from_vars(cpus, memory, timeout).unwrap_err();
+      assert!(e.to_string().contains(named), "{e}");
     }
   }
 

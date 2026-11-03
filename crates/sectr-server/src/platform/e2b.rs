@@ -63,7 +63,9 @@ use uuid::Uuid;
 use crate::config::ServerConfig;
 use crate::dispatch::DispatchError;
 use crate::platform::gcp_build::{GcpPlatform, TEMPLATE_NAME_PREFIX};
-use crate::platform::{BuildError, BuildOutput, BuildRequest, RunnerInfo, RunnerPlatform};
+use crate::platform::{
+  BuildError, BuildOutput, BuildRequest, RunnerInfo, RunnerPlatform, server_host_of,
+};
 
 /// envd's in-sandbox listen port (default per E2B's API reference — the
 /// `E2b-Sandbox-Port` header routes through the shared sandbox host).
@@ -117,20 +119,6 @@ fn sandbox_metadata(
     ("sectr.invocation".to_owned(), invocation_id.to_string()),
     (METADATA_SERVER.to_owned(), server_host.to_owned()),
   ])
-}
-
-/// The host a runner-server URL points at (`ws://ingest.sectr.dev/ingest`
-/// → `ingest.sectr.dev`) — the value of the `sectr.server` metadata key.
-fn server_host_of(runner_server_url: &str) -> anyhow::Result<String> {
-  reqwest::Url::parse(runner_server_url)
-    .ok()
-    .and_then(|u| u.host_str().map(str::to_owned))
-    .ok_or_else(|| {
-      anyhow::anyhow!(
-        "SECTR_RUNNER_SERVER_URL {runner_server_url:?} has no host (the E2B backend tags \
-         sandboxes with it so the orphan reaper only touches its own)"
-      )
-    })
 }
 
 /// The `metadata` query value for `GET /v2/sandboxes`: E2B parses it as an
@@ -1305,19 +1293,6 @@ mod tests {
     assert_eq!(md["sectr.invocation"], invocation.to_string());
     assert_eq!(md["sectr.server"], "ingest.sectr.dev");
     assert_eq!(md.len(), 4);
-  }
-
-  #[test]
-  fn server_host_is_the_runner_url_host() {
-    assert_eq!(
-      server_host_of("wss://ingest.sectr.dev/ingest").unwrap(),
-      "ingest.sectr.dev"
-    );
-    assert_eq!(
-      server_host_of("ws://172.17.0.1:8080/ingest").unwrap(),
-      "172.17.0.1"
-    );
-    assert!(server_host_of("not a url").is_err());
   }
 
   #[test]

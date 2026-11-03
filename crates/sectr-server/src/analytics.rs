@@ -261,6 +261,8 @@ mod tests {
       runner_sidecar_cmd: vec!["true".into()],
       runner_image: None,
       runner_base_image: None,
+      runner_network: None,
+      runner_resources: Default::default(),
       build_dir: "/tmp".into(),
       dashboard_url: "https://app.sectr.test".into(),
       tail_pool_max: 2,

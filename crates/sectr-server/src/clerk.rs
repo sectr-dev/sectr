@@ -554,6 +554,8 @@ mod tests {
       runner_sidecar_cmd: vec!["/usr/local/bin/sectr-worker".into()],
       runner_image: None,
       runner_base_image: None,
+      runner_network: None,
+      runner_resources: Default::default(),
       build_dir: "/tmp/sectr-build".into(),
       dashboard_url: "https://app.sectr.test".into(),
     }
