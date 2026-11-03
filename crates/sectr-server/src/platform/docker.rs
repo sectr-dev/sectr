@@ -444,7 +444,7 @@ impl RunnerPlatform for DockerPlatform {
       .spawn_container(run)
       .await
       .map_err(|e| DispatchError::Spawn(e.to_string()))?;
-    tracing::info!(session = %session, container = ?name, "runner container spawned");
+    tracing::info!(session = %session, container = name.as_deref().unwrap_or_default(), "runner container spawned");
     Ok(name)
   }
 
