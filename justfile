@@ -67,6 +67,10 @@ release *args:
 release-resume *args:
     scripts/release.sh resume {{args}}
 
+# The self-hosted stack end to end: compose, a deployed app, approval, secrets, runner isolation, external Postgres. Needs Docker.
+selfhost-smoke:
+    scripts/selfhost-smoke.sh
+
 # Back out a release before its tag is pushed (deletes the release branch and local tag).
 release-abort version="":
     scripts/release.sh abort {{version}}
@@ -220,7 +224,7 @@ check-docs:
 # gate's marker) — but only for a clean tree, since the marker vouches for
 # exactly the committed SHA.
 [private]
-ci-full: check-version check-rust-full check-python check-examples conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts
+ci-full: check-version check-rust-full check-python check-examples conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts selfhost-smoke
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "${E2E_STAGING:-}" = 1 ]; then just e2e-staging; fi

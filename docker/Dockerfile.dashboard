@@ -1,0 +1,39 @@
+# The self-hosted dashboard image: Next's own server.
+#
+#   docker build -f docker/Dockerfile.dashboard -t sectr-dashboard:latest .
+#
+# Settings are fixed here so one image fits every install:
+#   - No Clerk or PostHog keys, so the dashboard uses a pasted platform key and
+#     sends nothing anywhere. These are set empty on purpose: an empty value
+#     also beats any stray .env file.
+#   - The /api rewrite is baked at build time, to the compose service name.
+#
+# Runtime needs SECTR_PUBLIC_API_URL: the server's URL as browsers reach it,
+# served to them by /runtime-config.js.
+# syntax=docker/dockerfile:1
+FROM node:22-slim AS build
+WORKDIR /app
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY dashboard/ ./
+ENV NEXT_OUTPUT=standalone \
+    NEXT_PUBLIC_SECTR_API=/api \
+    SECTR_SERVER_URL=http://sectr-server:8080 \
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY= \
+    NEXT_PUBLIC_POSTHOG_KEY= \
+    NEXT_PUBLIC_SECTR_SERVER_URL= \
+    NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:22-slim
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    NEXT_TELEMETRY_DISABLED=1
+WORKDIR /app
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+USER node
+EXPOSE 3000
+CMD ["node", "server.js"]
