@@ -10,6 +10,7 @@
         "start": "next start",
         "lint": "eslint",
         "typecheck": "next typegen && tsc --noEmit",
+        "test": "node --experimental-strip-types --test 'tests/*.test.mts'",
         "preview": "opennextjs-cloudflare build && opennextjs-cloudflare dev",
         "build:worker": "NEXT_PUBLIC_SECTR_API=/api NEXT_PUBLIC_SECTR_SERVER_URL=https://api.sectr.dev NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_Y2xlcmsuc2VjdHIuZGV2JA SECTR_SERVER_URL=https://api.sectr.dev opennextjs-cloudflare build",
         "cf-typegen": "wrangler types",

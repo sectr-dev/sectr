@@ -37,6 +37,7 @@ import * as api from "@/lib/api";
 import { refreshApps } from "@/lib/hooks";
 import type { App } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { cliLoginCommand } from "@/lib/runtime-config";
 
 /**
  * The empty org's overview: a welcome, not an empty grid. A new user has
@@ -222,7 +223,7 @@ function ConnectCli() {
         <div className="w-fit max-w-full space-y-3">
             <div className="space-y-1.5">
                 <CommandBlock
-                    command="sectr auth login"
+                    command={cliLoginCommand()}
                     className="[&_code]:text-[13px]"
                 />
                 <p className="text-sm text-muted-foreground">
@@ -258,7 +259,7 @@ function ConnectCli() {
                     </div>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm text-muted-foreground">
                         Then run
-                        <InlineCommand command="sectr auth login --with-key" />
+                        <InlineCommand command={cliLoginCommand("--with-key")} />
                         and paste the key when prompted.
                     </div>
                 </div>

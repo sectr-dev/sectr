@@ -71,5 +71,6 @@ export async function reexchangeFromClerk(): Promise<boolean> {
 // The transports' 401 → refresh-once hook (transport/
 // auth-refresh.ts). Registered at module load — this module is imported by
 // the AuthGate, so it is in place before any console request. Mock and
-// dev-gateway modes have no keys to refresh.
-if (api.PROD_MODE) api.setSessionRefresher(reexchangeFromClerk);
+// dev-gateway modes have no keys to refresh, and without Clerk a dead key is
+// simply a sign-out.
+if (api.CLERK_ENABLED) api.setSessionRefresher(reexchangeFromClerk);

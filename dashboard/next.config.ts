@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // Build-time version inlining: package.json carries the lockstep product
 // version. Inlined as
@@ -12,6 +13,15 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 const nextConfig: NextConfig = {
+  // The self-hosted image runs Next's own server. The hosted build goes
+  // through OpenNext and must not set this.
+  ...(process.env.NEXT_OUTPUT === "standalone"
+    ? {
+        output: "standalone" as const,
+        outputFileTracingRoot: fileURLToPath(new URL(".", import.meta.url)),
+      }
+    : {}),
+
   env: {
     NEXT_PUBLIC_SECTR_VERSION: pkg.version,
   },
