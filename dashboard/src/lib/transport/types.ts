@@ -95,6 +95,8 @@ export interface SessionsApi {
  */
 export interface Me {
   org: { id: string; name: string };
+  /** The server's dashboard origin. The dev gateway and mock don't set it. */
+  dashboard_url?: string;
 }
 
 /**
