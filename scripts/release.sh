@@ -54,11 +54,13 @@ stage_cut() {
   # `--locked`, so a stale one fails verify.
   (cd sdk-python && uv lock -q)
   (cd sdk-python/tests/conformance/gen && uv lock -q)
+  # The examples' locks pin the SDK too (`just check-examples`).
+  for lock in examples/*/uv.lock; do (cd "$(dirname "$lock")" && uv lock -q); done
   # ALL manifests set-version.sh rewrites, lockfiles too: a missing file
   # is silent (--check passes on the working tree) and only the commit is
   # incomplete (v0.0.5 bug). Plus the uv.lock files (refreshed above).
   git add Cargo.toml Cargo.lock sdk-python/pyproject.toml sdk-python/uv.lock \
-    sdk-python/tests/conformance/gen/uv.lock \
+    sdk-python/tests/conformance/gen/uv.lock examples/*/uv.lock \
     dashboard/package.json dashboard/package-lock.json \
     docs-site/package.json docs-site/package-lock.json \
     js/copilotkit/package.json js/copilotkit/package-lock.json

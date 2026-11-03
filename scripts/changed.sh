@@ -3,14 +3,14 @@
 #
 # Usage: scripts/changed.sh [base-ref]   (default: origin/main)
 #
-# Areas: rust python schema dashboard docs js conformance. Compares the merge base with
+# Areas: rust python schema dashboard docs js conformance examples. Compares the merge base with
 # HEAD plus uncommitted changes. If the base can't be resolved (shallow
 # clone, no remote), prints ALL areas — fail open, never skip checks by
 # accident. SECTR_CHANGED=all|none|"rust docs" overrides (testing/forcing).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ALL="rust python schema dashboard docs js conformance"
+ALL="rust python schema dashboard docs js conformance examples"
 if [[ -n "${SECTR_CHANGED:-}" ]]; then
   case "$SECTR_CHANGED" in
     all) tr ' ' '\n' <<<"$ALL" ;;
@@ -41,4 +41,6 @@ has '^(js/|schema/fixtures/valid/agui/)' && echo js
 # The conformance generator, its generated projects, and the SDK's
 # dependencies (the generated projects' lock resolves them).
 has '^(crates/sectr-conformance/|sdk-python/tests/conformance/|sdk-python/pyproject\.toml$)' && echo conformance
+# The examples, and the SDK's dependencies (their locks resolve them).
+has '^(examples/|sdk-python/pyproject\.toml$)' && echo examples
 exit 0

@@ -102,6 +102,7 @@ check-fast:
     if has dashboard; then just check-dashboard-fast; fi
     if has js; then just check-js-fast; fi
     if has conformance; then just check-conformance-fast; fi
+    if has examples; then just check-examples; fi
     if has docs; then just check-docs-fast; fi
     # The other docs drift checks need a built sectr binary: release-only (see `verify docs`).
 
@@ -142,6 +143,12 @@ check-python-fast:
 check-conformance-fast:
     cargo run -q -p sectr-conformance -- gen --check
     cd sdk-python/tests/conformance/gen && uv lock --check
+
+# Each example's lock matches its project and the SDK. A stale lock deploys and
+# then crashes at runner start, because the image installs from the lock.
+[private]
+check-examples:
+    for d in examples/*/; do if [ -f "$d/uv.lock" ]; then (cd "$d" && uv lock --check); fi; done
 
 [private]
 check-dashboard-fast:
@@ -210,7 +217,7 @@ check-docs:
 # gate's marker) — but only for a clean tree, since the marker vouches for
 # exactly the committed SHA.
 [private]
-ci-full: check-version check-rust-full check-python conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts
+ci-full: check-version check-rust-full check-python check-examples conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "${E2E_STAGING:-}" = 1 ]; then just e2e-staging; fi
