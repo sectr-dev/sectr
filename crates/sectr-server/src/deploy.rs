@@ -7,9 +7,9 @@
 //!    version = max+1, tarball → artifact store, deployment row in
 //!    `building`, provisional `build_ref` (the docker tag the build will
 //!    produce) → answer **202 immediately** with the row in `building`.
-//! 2. The build runs in a background tokio task (builds never ride the request
-//! — Cloudflare's ~100s proxy
-//!    limit and build-time growth are both off the table); the CLI polls
+//! 2. The build runs in a background tokio task (builds never ride the
+//!    request — Cloudflare's ~100s proxy limit and build-time growth are both
+//!    off the table); the CLI polls
 //!    `GET /apps/{id}/deployments` (endpoint already exists):
 //!    - unpack the tarball into the build dir,
 //!    - `docker build`: `FROM $SECTR_RUNNER_BASE_IMAGE` + `COPY app /app`
