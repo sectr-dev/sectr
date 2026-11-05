@@ -2,11 +2,12 @@ import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import { Inter, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
+import Script from "next/script";
 import { ClerkBridge } from "@/components/clerk-bridge";
 import { GatewayInit } from "@/components/gateway-init";
 import { PostHogProvider } from "@/components/posthog-provider";
 import { Toaster } from "@/components/ui/sonner";
-import { PROD_MODE } from "@/lib/api";
+import { CLERK_ENABLED } from "@/lib/api";
 import "./globals.css";
 
 const inter = Inter({
@@ -61,14 +62,18 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
+        {/* Sets window.__SECTR_CONFIG__, which lib/api.ts reads when it loads,
+            so it has to run before the app does. */}
+        <Script src="/runtime-config.js" strategy="beforeInteractive" />
       </head>
       <body className="min-h-full flex flex-col">
         {/* Clerk sign-in, CLIENT-only — a non-`dynamic` provider
             never reads the request, so no clerkMiddleware / server auth()
             (the console renders control-plane data client-side only).
             Prod server only (build:worker requires the publishable key);
-            off in mock/dev-gateway modes. */}
-        {PROD_MODE ? (
+            off in mock/dev-gateway modes, and on a self-hosted install, whose
+            build has no key. */}
+        {CLERK_ENABLED ? (
           <ClerkProvider>
             <ClerkBridge />
             {app}

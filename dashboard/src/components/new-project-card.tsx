@@ -651,7 +651,7 @@ function DeployBody({ initialFramework }: { initialFramework?: FrameworkId }) {
         {
             title: "Deploy",
             command: "sectr deploy",
-            note: "Builds in the cloud and creates the project. It shows up here once it's live.",
+            note: "Builds it and creates the project. It shows up here once it's live.",
         },
     ];
 

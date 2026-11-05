@@ -13,6 +13,7 @@ import { useSessionList } from "@/lib/hooks";
 import type { App, Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { deploymentVersionLabel } from "@/lib/view";
+import { publicServerUrl } from "@/lib/runtime-config";
 
 type Filter = "all" | "live" | "awaiting_approval" | "ended" | "error";
 
@@ -140,7 +141,7 @@ export function AppSessionsView({ app }: { app: App }) {
 function EmptySessions({ app }: { app: App }) {
   const route = app.routes[0]?.path ?? "/chat";
   const curl =
-    `curl -X POST https://api.sectr.dev/sessions ` +
+    `curl -X POST ${publicServerUrl()}/sessions ` +
     `-H "Authorization: Bearer $SECTR_INVOCATION_KEY" ` +
     `-H "Content-Type: application/json" ` +
     `-d '{"app": "${app.slug}", "route": "${route}", "input": "hi"}'`;
