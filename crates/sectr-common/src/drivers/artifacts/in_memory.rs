@@ -41,6 +41,14 @@ impl ArtifactStore for InMemoryArtifactStore {
       .cloned()
       .ok_or_else(|| DriverError::NotFound(uri.to_string()))
   }
+
+  async fn get_at_most(&self, uri: &str, max_bytes: usize) -> Result<Vec<u8>> {
+    let bytes = self.get(uri).await?;
+    if bytes.len() > max_bytes {
+      return Err(super::too_large(uri, max_bytes));
+    }
+    Ok(bytes)
+  }
 }
 
 #[cfg(test)]

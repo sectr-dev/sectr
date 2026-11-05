@@ -26,6 +26,11 @@
 //!    `/workspace`) and records `uses_uv` (the same pyproject.toml guard
 //!    `DockerPlatform` applies to pick `uv run --no-sync` — a remote builder
 //!    must REPORT it, the server never sees the unpacked tree).
+//! 5. **check** — in the docker builder image, not the app's: both results
+//!    must be plain files within their size limits. The app's code wrote
+//!    them, so a symlink there could make the upload read some other file.
+//!    The server applies the same limits when it reads them back, which
+//!    doesn't depend on this step.
 //!
 //! The `Build.images` field performs the automatic Artifact Registry push of
 //! `sectr-app-<deployment-id>:v<version>` ,
@@ -196,6 +201,32 @@ else
   exec python3 -m sectr.inspect
 fi";
 
+/// The most the server reads back of each build result. The app's code writes
+/// both, so neither is trusted: a manifest is a few KB, and `uses_uv` is one
+/// word.
+const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_USES_UV_BYTES: usize = 64;
+
+/// Step 5: refuse anything but plain files within the limits before the
+/// upload. Runs in the docker builder image, after the app's step has exited.
+/// `wc -c` follows a symlink, so `-L` is checked first.
+fn check_script() -> String {
+  format!(
+    "\
+for f in manifest.json uses_uv; do
+  if [ -L \"$f\" ] || [ ! -f \"$f\" ]; then
+    echo \"$f is not a plain file\" >&2; exit 1
+  fi
+done
+if [ \"$(wc -c < manifest.json)\" -gt {MAX_MANIFEST_BYTES} ]; then
+  echo \"manifest.json is larger than {MAX_MANIFEST_BYTES} bytes\" >&2; exit 1
+fi
+if [ \"$(wc -c < uses_uv)\" -gt {MAX_USES_UV_BYTES} ]; then
+  echo \"uses_uv is larger than {MAX_USES_UV_BYTES} bytes\" >&2; exit 1
+fi"
+  )
+}
+
 /// Step 2 args: write the generated Dockerfile (base64-embedded to keep the
 /// Dockerfile content out of shell-quoting reach).
 fn dockerfile_write_args(dockerfile: &str) -> Vec<String> {
@@ -266,7 +297,7 @@ fn build_config(
     .set_timeout(wkt::Duration::clamp(BUILD_TIMEOUT_SECS, 0))
 }
 
-/// Assemble the four build steps for a deployment. Pure — unit-tested.
+/// Assemble the five build steps for a deployment. Pure — unit-tested.
 fn build_steps(
   base_image: &str,
   image_ref: &str,
@@ -291,7 +322,7 @@ fn build_steps(
     // 3. build (deps bake at build time — same shape as model (a))
     cb::BuildStep::default()
       .set_id("build")
-      .set_name(docker_builder)
+      .set_name(docker_builder.clone())
       .set_args(docker_build_args(image_ref, base_image, previous_ref)),
     // 4. manifest import: run the built image (its ENTRYPOINT is the
     //    sidecar — overridden by `entrypoint: sh`), import in /app,
@@ -307,6 +338,12 @@ fn build_steps(
         "SECTR_MANIFEST_OUT=/workspace/manifest.json".to_owned(),
       ])
       .set_args(vec!["-c".to_owned(), MANIFEST_SCRIPT.to_owned()]),
+    // 5. check the results before they're uploaded
+    cb::BuildStep::default()
+      .set_id("check")
+      .set_name(docker_builder)
+      .set_entrypoint("bash")
+      .set_args(vec!["-c".to_owned(), check_script()]),
   ]
 }
 
@@ -755,22 +792,20 @@ impl GcpPlatform {
     // Fetch the build's results from GCS via the EXISTING artifact store.
     let manifest_bytes = self
       .store
-      .get(&manifest_uri(
-        &self.gcs_bucket,
-        req.deployment_id,
-        req.version,
-      ))
+      .get_at_most(
+        &manifest_uri(&self.gcs_bucket, req.deployment_id, req.version),
+        MAX_MANIFEST_BYTES,
+      )
       .await
       .map_err(|e| BuildError::bare(format!("manifest result fetch: {e}")))?;
     let imported: Value = serde_json::from_slice(&manifest_bytes)
       .map_err(|e| BuildError::bare(format!("manifest result is not JSON: {e}")))?;
     let uses_uv = self
       .store
-      .get(&uses_uv_uri(
-        &self.gcs_bucket,
-        req.deployment_id,
-        req.version,
-      ))
+      .get_at_most(
+        &uses_uv_uri(&self.gcs_bucket, req.deployment_id, req.version),
+        MAX_USES_UV_BYTES,
+      )
       .await
       .map_err(|e| BuildError::bare(format!("uses_uv result fetch: {e}")))?;
     let uses_uv = matches!(std::str::from_utf8(&uses_uv).map(str::trim), Ok("true"));
@@ -905,12 +940,12 @@ mod tests {
   }
 
   #[test]
-  fn build_steps_are_assemble_dockerfile_build_manifest() {
+  fn build_steps_are_assemble_dockerfile_build_manifest_check() {
     let d = deployment();
     let build = full_build(d, 1);
-    assert_eq!(build.steps.len(), 4, "exactly the plan's four steps");
-    let [assemble, dockerfile, docker_build, manifest] = &build.steps[..] else {
-      panic!("four steps expected");
+    assert_eq!(build.steps.len(), 5, "exactly five steps");
+    let [assemble, dockerfile, docker_build, manifest, check] = &build.steps[..] else {
+      panic!("five steps expected");
     };
 
     // Step 1: assemble the extracted tarball into /workspace/app.
@@ -983,6 +1018,87 @@ mod tests {
     );
     assert!(manifest.args[1].contains("sectr.inspect"));
     assert!(manifest.args[1].contains("uv run --no-sync"));
+
+    // Step 5: the results are checked last, in an image the app doesn't control.
+    assert_eq!(check.id, "check");
+    assert_eq!(check.name, "gcr.io/cloud-builders/docker");
+    assert_eq!(check.args, vec!["-c".to_owned(), check_script()]);
+  }
+
+  /// Runs the check step's script in a scratch directory, as Cloud Build would
+  /// in /workspace.
+  fn run_check(setup: impl FnOnce(&std::path::Path)) -> Result<(), String> {
+    let dir = std::env::temp_dir().join(format!("sectr-check-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    setup(&dir);
+    let out = std::process::Command::new("bash")
+      .args(["-c", &check_script()])
+      .current_dir(&dir)
+      .output()
+      .expect("run bash");
+    std::fs::remove_dir_all(&dir).ok();
+    if out.status.success() {
+      Ok(())
+    } else {
+      Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+  }
+
+  #[test]
+  fn the_check_step_refuses_anything_but_small_plain_files() {
+    let good = |dir: &std::path::Path| {
+      std::fs::write(dir.join("manifest.json"), "{}").unwrap();
+      std::fs::write(dir.join("uses_uv"), "true\n").unwrap();
+    };
+    assert_eq!(run_check(good), Ok(()));
+
+    let err = run_check(|dir| {
+      good(dir);
+      std::fs::remove_file(dir.join("manifest.json")).unwrap();
+      std::os::unix::fs::symlink("/etc/hostname", dir.join("manifest.json")).unwrap();
+    })
+    .unwrap_err();
+    assert!(err.contains("manifest.json is not a plain file"), "{err}");
+
+    let err = run_check(|dir| {
+      good(dir);
+      std::fs::remove_file(dir.join("uses_uv")).unwrap();
+      std::fs::create_dir(dir.join("uses_uv")).unwrap();
+    })
+    .unwrap_err();
+    assert!(err.contains("uses_uv is not a plain file"), "{err}");
+
+    let err = run_check(|dir| {
+      good(dir);
+      std::fs::remove_file(dir.join("uses_uv")).unwrap();
+    })
+    .unwrap_err();
+    assert!(err.contains("uses_uv is not a plain file"), "{err}");
+
+    let err = run_check(|dir| {
+      good(dir);
+      let file = std::fs::File::create(dir.join("manifest.json")).unwrap();
+      file.set_len(MAX_MANIFEST_BYTES as u64 + 1).unwrap();
+    })
+    .unwrap_err();
+    assert!(err.contains("manifest.json is larger than"), "{err}");
+
+    let err = run_check(|dir| {
+      good(dir);
+      std::fs::write(dir.join("uses_uv"), "x".repeat(MAX_USES_UV_BYTES + 1)).unwrap();
+    })
+    .unwrap_err();
+    assert!(err.contains("uses_uv is larger than"), "{err}");
+
+    assert_eq!(
+      run_check(|dir| {
+        good(dir);
+        let file = std::fs::File::create(dir.join("manifest.json")).unwrap();
+        file.set_len(MAX_MANIFEST_BYTES as u64).unwrap();
+      }),
+      Ok(()),
+      "exactly at the limit is fine"
+    );
   }
 
   #[test]

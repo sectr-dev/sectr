@@ -59,6 +59,28 @@ impl ArtifactStore for FilesystemArtifactStore {
       .await
       .map_err(|_| DriverError::NotFound(format!("artifact {uri:?}")))
   }
+
+  async fn get_at_most(&self, uri: &str, max_bytes: usize) -> Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+    let key = uri
+      .strip_prefix("fs:")
+      .ok_or_else(|| DriverError::NotFound(format!("not a filesystem artifact uri: {uri:?}")))?;
+    let path = self.resolve(key)?;
+    let file = tokio::fs::File::open(&path)
+      .await
+      .map_err(|_| DriverError::NotFound(format!("artifact {uri:?}")))?;
+    // One byte past the limit is enough to know it's over.
+    let mut bytes = Vec::new();
+    file
+      .take(max_bytes as u64 + 1)
+      .read_to_end(&mut bytes)
+      .await
+      .map_err(|e| DriverError::Other(format!("read {}: {e}", path.display())))?;
+    if bytes.len() > max_bytes {
+      return Err(super::too_large(uri, max_bytes));
+    }
+    Ok(bytes)
+  }
 }
 
 #[cfg(test)]
