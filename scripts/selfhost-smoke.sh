@@ -41,6 +41,10 @@ cleanup() {
   if [ "$failed" = 1 ]; then
     echo "--- server log (main stack) ---" >&2
     compose_main logs --tail 40 sectr-server >&2 2>/dev/null || true
+    # When Postgres dies, its name stops resolving, so the server only reports
+    # a failed lookup. The reason is here (a full Docker disk, for one).
+    echo "--- postgres log (main stack) ---" >&2
+    compose_main logs --tail 10 postgres >&2 2>/dev/null || true
     if [ -n "${SECTR_SMOKE_KEEP:-}" ]; then
       echo "kept: docker compose -p $project, $tmp" >&2
       return
@@ -50,7 +54,7 @@ cleanup() {
     # Any runner still attached would stop the network being removed.
     docker ps -aq --filter "network=$network" | xargs -r docker rm -f >/dev/null 2>&1 || true
   done
-  docker rm -f "$external_pg" >/dev/null 2>&1 || true
+  docker rm -fv "$external_pg" >/dev/null 2>&1 || true
   compose_main down -v --remove-orphans >/dev/null 2>&1 || true
   compose_ext down -v --remove-orphans >/dev/null 2>&1 || true
   if [ -f "$deployments" ]; then
