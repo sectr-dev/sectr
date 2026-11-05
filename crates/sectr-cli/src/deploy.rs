@@ -260,9 +260,10 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
   {
     Resolved::Active => {
       eprintln!("✓ deployed: version {version} ({deployment_id}) is active");
-      // Best effort too, and no guess at a URL if the server doesn't say.
-      if let Some(link) = view_live_link(&target.api, &key, &app_id).await {
-        eprintln!("🚀 view live at: {link}");
+      // Best effort too: the deploy already succeeded.
+      match view_live_link(&target.api, &key, &app_id).await {
+        Ok(link) => eprintln!("🚀 view live at: {link}"),
+        Err(e) => eprintln!("(could not look up the dashboard link: {e:#})"),
       }
       // Every deployed route is also an AG-UI endpoint (CopilotKit / any
       // AG-UI client): print the full URL so the frontend needs no config.
@@ -285,9 +286,9 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
 }
 
 /// The app's page on the server's own dashboard, as `GET /me` reports it.
-async fn view_live_link(api: &str, key: &str, app_id: &str) -> Option<String> {
-  let dashboard = crate::auth::whoami(api, key).await.ok()?.dashboard_url?;
-  Some(format!("{dashboard}/apps/{app_id}"))
+async fn view_live_link(api: &str, key: &str, app_id: &str) -> anyhow::Result<String> {
+  let dashboard = crate::auth::whoami(api, key).await?.dashboard_url;
+  Ok(format!("{dashboard}/apps/{app_id}"))
 }
 
 /// `GET /apps/{id}` → the AG-UI endpoint URL of each route of the active
@@ -439,20 +440,22 @@ mod tests {
     )
     .await;
     assert_eq!(
-      view_live_link(&api, "skp_x", "app-1").await.as_deref(),
-      Some("https://sectr.example.com/apps/app-1")
+      view_live_link(&api, "skp_x", "app-1").await.unwrap(),
+      "https://sectr.example.com/apps/app-1"
     );
   }
 
   #[tokio::test]
-  async fn view_live_is_skipped_when_the_server_doesnt_say_or_me_fails() {
-    let older = me_stub(200, serde_json::json!({"org": {"id": "o", "name": "acme"}})).await;
-    assert_eq!(view_live_link(&older, "skp_x", "app-1").await, None);
+  async fn view_live_reports_why_it_has_no_link() {
     let failing = me_stub(500, serde_json::json!({})).await;
-    assert_eq!(view_live_link(&failing, "skp_x", "app-1").await, None);
-    assert_eq!(
-      view_live_link("http://127.0.0.1:1", "skp_x", "app-1").await,
-      None
+    let err = view_live_link(&failing, "skp_x", "app-1")
+      .await
+      .unwrap_err();
+    assert!(err.to_string().contains("500"), "{err}");
+    assert!(
+      view_live_link("http://127.0.0.1:1", "skp_x", "app-1")
+        .await
+        .is_err()
     );
   }
 
