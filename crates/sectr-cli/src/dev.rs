@@ -162,7 +162,7 @@ pub async fn run_dev(args: DevArgs) -> anyhow::Result<()> {
   let saved_login = crate::auth::load().ok().flatten();
   let dashboard = choose_dashboard(
     args.dashboard.as_deref(),
-    saved_login.as_ref().and_then(|c| c.dashboard.as_deref()),
+    saved_login.as_ref().map(|c| c.dashboard.as_str()),
   );
   let env_rel = config
     .dev

@@ -34,9 +34,8 @@ pub struct Credentials {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub key_id: Option<String>,
   /// The server's dashboard origin, saved at login so `sectr dev` can open
-  /// it without reaching the server. Absent in files from older versions.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub dashboard: Option<String>,
+  /// it without reaching the server.
+  pub dashboard: String,
 }
 
 fn credentials_path() -> anyhow::Result<PathBuf> {
@@ -51,7 +50,9 @@ fn credentials_path() -> anyhow::Result<PathBuf> {
 }
 
 /// Load stored credentials, if any (missing file = None; malformed file
-/// is an error — the user should see it, not silently fall through).
+/// is an error — the user should see it, not silently fall through). Files
+/// from before `dashboard` was saved are malformed too: logging in again
+/// replaces them.
 pub fn load() -> anyhow::Result<Option<Credentials>> {
   let path = credentials_path()?;
   let raw = match std::fs::read_to_string(&path) {
@@ -59,8 +60,12 @@ pub fn load() -> anyhow::Result<Option<Credentials>> {
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
     Err(e) => return Err(anyhow::anyhow!("read {}: {e}", path.display())),
   };
-  let creds: Credentials =
-    toml::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+  let creds: Credentials = toml::from_str(&raw).with_context(|| {
+    format!(
+      "parse {} (run `sectr auth login` to replace it)",
+      path.display()
+    )
+  })?;
   Ok(Some(creds))
 }
 
@@ -187,8 +192,8 @@ fn server_line(api: &str) -> String {
 pub struct Me {
   pub org_name: String,
   pub org_id: String,
-  /// The server's dashboard origin. Older servers don't report it.
-  pub dashboard_url: Option<String>,
+  /// The server's dashboard origin, without a trailing slash.
+  pub dashboard_url: String,
 }
 
 /// `GET /me` — the key-validation probe (login + whoami).
@@ -222,7 +227,8 @@ pub async fn whoami(api: &str, key: &str) -> anyhow::Result<Me> {
       .get("dashboard_url")
       .and_then(|v| v.as_str())
       .map(|url| url.trim_end_matches('/').to_owned())
-      .filter(|url| !url.is_empty()),
+      .filter(|url| !url.is_empty())
+      .context("server /me response has no dashboard_url")?,
   })
 }
 
@@ -235,7 +241,7 @@ mod tests {
       api: api.to_owned(),
       platform_key: "skp_saved".to_owned(),
       key_id: None,
-      dashboard: None,
+      dashboard: "https://sectr.example.com".to_owned(),
     }
   }
 
@@ -359,21 +365,28 @@ mod tests {
   }
 
   #[test]
-  fn credentials_from_older_versions_still_load() {
-    let old: Credentials =
-      toml::from_str("api = \"https://api.sectr.dev\"\nplatform_key = \"skp_a\"\n").unwrap();
-    assert_eq!(old.dashboard, None);
-    assert!(!toml::to_string_pretty(&old).unwrap().contains("dashboard"));
-
-    let new = Credentials {
-      dashboard: Some("http://localhost:3000".into()),
-      ..old
-    };
+  fn credentials_round_trip_and_need_the_dashboard() {
+    let creds = saved(SAVED_SERVER);
     let round_tripped: Credentials =
-      toml::from_str(&toml::to_string_pretty(&new).unwrap()).unwrap();
-    assert_eq!(
-      round_tripped.dashboard.as_deref(),
-      Some("http://localhost:3000")
+      toml::from_str(&toml::to_string_pretty(&creds).unwrap()).unwrap();
+    assert_eq!(round_tripped.dashboard, "https://sectr.example.com");
+    let without_dashboard =
+      toml::from_str::<Credentials>("api = \"https://api.sectr.dev\"\nplatform_key = \"skp_a\"\n");
+    assert!(without_dashboard.is_err());
+  }
+
+  #[tokio::test]
+  async fn me_must_name_the_dashboard() {
+    let app = axum::Router::new().route(
+      "/me",
+      axum::routing::get(|| async {
+        axum::Json(serde_json::json!({"org": {"id": "o", "name": "acme"}}))
+      }),
     );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let api = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let err = whoami(&api, "skp_x").await.unwrap_err().to_string();
+    assert!(err.contains("dashboard_url"), "{err}");
   }
 }
