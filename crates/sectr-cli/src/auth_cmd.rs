@@ -100,17 +100,14 @@ async fn run_login(args: &AuthArgs, with_key: bool, no_browser: bool) -> anyhow:
   };
   let Some(key) = key else {
     let approved = device_login(&api, !no_browser).await?;
-    // Best effort: the login succeeded either way. Without this, `sectr dev`
-    // just falls back to the hosted dashboard.
-    let dashboard = auth::whoami(&api, &approved.key)
+    let me = auth::whoami(&api, &approved.key)
       .await
-      .ok()
-      .and_then(|me| me.dashboard_url);
+      .map_err(|e| anyhow::anyhow!("approved, but reading the server's details failed: {e:#}"))?;
     auth::store(&Credentials {
       api: api.clone(),
       platform_key: approved.key,
       key_id: Some(approved.key_id),
-      dashboard,
+      dashboard: me.dashboard_url,
     })?;
     eprintln!(
       "logged in to {api} — org \"{}\" (stored in ~/.config/sectr/credentials.toml)",
@@ -453,7 +450,7 @@ mod tests {
       api: "https://saved.example.com/".into(),
       platform_key: "skp_a".into(),
       key_id: None,
-      dashboard: None,
+      dashboard: "https://saved.example.com".into(),
     };
     let flag = Some("https://flag.example.com/");
     let env = Some("https://env.example.com");
@@ -478,9 +475,12 @@ mod tests {
   }
 
   #[test]
-  fn old_credentials_without_key_id_parse_and_round_trip() {
-    let old: Credentials =
-      toml::from_str("api = \"https://api.sectr.dev\"\nplatform_key = \"skp_a\"\n").unwrap();
+  fn credentials_without_key_id_parse_and_round_trip() {
+    // Pasted keys have no key_id.
+    let old: Credentials = toml::from_str(
+      "api = \"https://api.sectr.dev\"\nplatform_key = \"skp_a\"\ndashboard = \"https://app.sectr.dev\"\n",
+    )
+    .unwrap();
     assert_eq!(old.key_id, None);
     assert!(!toml::to_string_pretty(&old).unwrap().contains("key_id"));
     let new = Credentials {
@@ -522,7 +522,7 @@ mod tests {
       api: api.clone(),
       platform_key: "skp_x".into(),
       key_id: key_id.map(str::to_owned),
-      dashboard: None,
+      dashboard: "https://app.sectr.test".into(),
     };
     assert_eq!(revoke_login_key(&creds(None)).await, Revoked::NotOurs);
     assert!(
