@@ -158,7 +158,7 @@ wait_ready "$api/readyz"
 ok "/readyz answers"
 
 log "dashboard"
-curl -fsS -o /dev/null "$dashboard/login" || die "dashboard /login"
+wait_ready "$dashboard/login"
 curl -fsS -o /dev/null "$dashboard/api/healthz" || die "dashboard /api rewrite"
 curl -fsS "$dashboard/runtime-config.js" | grep -qF "\"publicApiUrl\":\"$api\"" || die "/runtime-config.js has the wrong URL"
 ok "/login, the /api rewrite and /runtime-config.js"
