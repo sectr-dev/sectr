@@ -260,7 +260,11 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
   {
     Resolved::Active => {
       eprintln!("✓ deployed: version {version} ({deployment_id}) is active");
-      eprintln!("🚀 view live at: https://app.sectr.dev/apps/{app_id}");
+      // Best effort too: the deploy already succeeded.
+      match view_live_link(&target.api, &key, &app_id).await {
+        Ok(link) => eprintln!("🚀 view live at: {link}"),
+        Err(e) => eprintln!("(could not look up the dashboard link: {e:#})"),
+      }
       // Every deployed route is also an AG-UI endpoint (CopilotKit / any
       // AG-UI client): print the full URL so the frontend needs no config.
       // Best effort — the deploy already succeeded.
@@ -279,6 +283,12 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
       failure_detail(&error)
     ),
   }
+}
+
+/// The app's page on the server's own dashboard, as `GET /me` reports it.
+async fn view_live_link(api: &str, key: &str, app_id: &str) -> anyhow::Result<String> {
+  let dashboard = crate::auth::whoami(api, key).await?.dashboard_url;
+  Ok(format!("{dashboard}/apps/{app_id}"))
 }
 
 /// `GET /apps/{id}` → the AG-UI endpoint URL of each route of the active
@@ -403,6 +413,52 @@ where
 
 #[cfg(test)]
 mod tests {
+  /// A stub `GET /me` answering with this status and body.
+  async fn me_stub(status: u16, body: serde_json::Value) -> String {
+    use axum::http::StatusCode;
+    let app = axum::Router::new().route(
+      "/me",
+      axum::routing::get(move || {
+        let body = body.clone();
+        async move { (StatusCode::from_u16(status).unwrap(), axum::Json(body)) }
+      }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+  }
+
+  #[tokio::test]
+  async fn view_live_links_to_the_servers_own_dashboard() {
+    let api = me_stub(
+      200,
+      serde_json::json!({
+        "org": {"id": "o", "name": "acme"},
+        "dashboard_url": "https://sectr.example.com/",
+      }),
+    )
+    .await;
+    assert_eq!(
+      view_live_link(&api, "skp_x", "app-1").await.unwrap(),
+      "https://sectr.example.com/apps/app-1"
+    );
+  }
+
+  #[tokio::test]
+  async fn view_live_reports_why_it_has_no_link() {
+    let failing = me_stub(500, serde_json::json!({})).await;
+    let err = view_live_link(&failing, "skp_x", "app-1")
+      .await
+      .unwrap_err();
+    assert!(err.to_string().contains("500"), "{err}");
+    assert!(
+      view_live_link("http://127.0.0.1:1", "skp_x", "app-1")
+        .await
+        .is_err()
+    );
+  }
+
   use super::*;
 
   use std::collections::VecDeque;

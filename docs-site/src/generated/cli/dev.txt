@@ -6,6 +6,6 @@ Options:
       --path <PATH>            Project directory (must contain sectr.toml) [default: .]
       --config <CONFIG>        Config file path (relative to --path) [default: sectr.toml]
       --no-open                Don't open the dashboard (CI / containers)
-      --dashboard <DASHBOARD>  Dashboard to open (the deployed console by default; point it at a local `next dev` when working on the dashboard itself) [env: SECTR_DASHBOARD_URL=] [default: https://app.sectr.dev]
+      --dashboard <DASHBOARD>  Dashboard to open. Default: the saved login's dashboard, else https://app.sectr.dev. Point it at a local `next dev` when working on the dashboard itself [env: SECTR_DASHBOARD_URL=]
       --port <PORT>            Gateway port. Default: the port this project used last, else 8420. A port given here is strict: if it's busy, `sectr dev` exits
   -h, --help                   Print help
