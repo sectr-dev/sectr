@@ -51,14 +51,11 @@ pub struct DevArgs {
   /// Don't open the dashboard (CI / containers).
   #[arg(long)]
   pub no_open: bool,
-  /// Dashboard to open (the deployed console by default; point it at a
-  /// local `next dev` when working on the dashboard itself).
-  #[arg(
-    long,
-    env = "SECTR_DASHBOARD_URL",
-    default_value = "https://app.sectr.dev"
-  )]
-  pub dashboard: String,
+  /// Dashboard to open. Default: the saved login's dashboard, else
+  /// https://app.sectr.dev. Point it at a local `next dev` when working on
+  /// the dashboard itself.
+  #[arg(long, env = "SECTR_DASHBOARD_URL")]
+  pub dashboard: Option<String>,
   /// Gateway port. Default: the port this project used last, else 8420.
   /// A port given here is strict: if it's busy, `sectr dev` exits.
   #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
@@ -161,6 +158,12 @@ struct ParsedConfig {
 pub async fn run_dev(args: DevArgs) -> anyhow::Result<()> {
   let project = args.path.clone();
   let config = parse_sectr_toml(&project.join(&args.config))?;
+  // `sectr dev` works with no login, or a broken credentials file.
+  let saved_login = crate::auth::load().ok().flatten();
+  let dashboard = choose_dashboard(
+    args.dashboard.as_deref(),
+    saved_login.as_ref().and_then(|c| c.dashboard.as_deref()),
+  );
   let env_rel = config
     .dev
     .as_ref()
@@ -301,7 +304,7 @@ pub async fn run_dev(args: DevArgs) -> anyhow::Result<()> {
       &state,
       manifest_routes(&manifest),
     ))
-    .layer(gateway_cors(dashboard_origin(&args.dashboard)))
+    .layer(gateway_cors(dashboard_origin(&dashboard)))
     // AG-UI: the same endpoint as prod, no auth (like every dev
     // route). Merged AFTER the dashboard-only CORS layer — a frontend
     // under `next dev` (any localhost origin) calls it with a
@@ -309,7 +312,7 @@ pub async fn run_dev(args: DevArgs) -> anyhow::Result<()> {
     .merge(agui_router(service.clone(), journal.clone()).layer(agui_cors_layer()));
 
   let dashboard_url = dashboard_open_url(
-    &args.dashboard,
+    &dashboard,
     &state.app_id.to_string(),
     manifest_routes(&manifest).first().map(String::as_str),
     &gateway_url,
@@ -324,7 +327,7 @@ pub async fn run_dev(args: DevArgs) -> anyhow::Result<()> {
   }
 
   if tls.is_none() {
-    println!("Failed to fetch TLS cert for local.sectr.dev. Please report this as a bug.")
+    println!("note: no TLS certificate for local.sectr.dev, so the gateway is using plain HTTP");
   }
   println!("dashboard: {dashboard_url}");
   if !args.no_open {
@@ -797,6 +800,21 @@ async fn bootstrap_deployment(
   }
 }
 
+/// The hosted dashboard, opened when nothing else names one.
+const HOSTED_DASHBOARD: &str = "https://app.sectr.dev";
+
+/// Which dashboard `sectr dev` opens: `--dashboard` or `SECTR_DASHBOARD_URL`,
+/// then the saved login's, then the hosted one. Reads no network: `sectr dev`
+/// needs neither a server nor a login.
+fn choose_dashboard(explicit: Option<&str>, saved_login: Option<&str>) -> String {
+  explicit
+    .filter(|url| !url.trim().is_empty())
+    .or(saved_login)
+    .unwrap_or(HOSTED_DASHBOARD)
+    .trim_end_matches('/')
+    .to_owned()
+}
+
 /// Dev-gateway CORS: the console (deployed on the Workers domain, local
 /// `next dev`, or the local.sectr.dev gateway itself) is cross-origin to
 /// the gateway port — POST with a JSON content-type preflights, and
@@ -1058,6 +1076,25 @@ mod tests {
         "http://127.0.0.1:8080"
       ),
       "https://app.sectr.dev/apps/0196b8f0/playground?gateway=http://127.0.0.1:8080"
+    );
+  }
+
+  #[test]
+  fn sectr_dev_opens_the_explicit_then_the_saved_then_the_hosted_dashboard() {
+    let explicit = Some("http://localhost:4000/");
+    let saved = Some("https://sectr.example.com");
+    assert_eq!(choose_dashboard(explicit, saved), "http://localhost:4000");
+    assert_eq!(choose_dashboard(None, saved), "https://sectr.example.com");
+    assert_eq!(choose_dashboard(None, None), "https://app.sectr.dev");
+    assert_eq!(
+      choose_dashboard(Some(""), saved),
+      "https://sectr.example.com",
+      "an empty env value counts as unset"
+    );
+    assert_eq!(
+      dashboard_origin(&choose_dashboard(None, saved)),
+      Some("https://sectr.example.com"),
+      "the chosen dashboard's origin is what CORS allows"
     );
   }
 
@@ -1330,7 +1367,7 @@ mod tests {
       path: ".".into(),
       config: "sectr.toml".into(),
       no_open: true,
-      dashboard: "https://app.sectr.dev".into(),
+      dashboard: Some("https://app.sectr.dev".into()),
       port,
     }
   }

@@ -1166,6 +1166,7 @@ components:
         absent; `org` is the authenticated principal's org.
       required:
         - org
+        - dashboard_url
       properties:
         user:
           type: object
@@ -1193,6 +1194,12 @@ components:
               format: uuid
             name:
               type: string
+        dashboard_url:
+          type: string
+          format: uri
+          description: >-
+            The origin of this server's dashboard, with no trailing slash. Clients build links to it
+            from this.
     AppSummary:
       type: object
       required:

@@ -10,8 +10,9 @@
 //! - `sectr auth login --key skp_…` — validate and store a key you created
 //!   in Settings. `--with-key` reads one from a hidden prompt or stdin
 //!   (for scripts: `echo $KEY | sectr auth login --with-key`).
-//!   `--api` defaults to the public endpoint; pass
-//!   `--api http://localhost:8080` for a local server.
+//!   The server comes from `--api`, then `SECTR_API_URL`, then the saved
+//!   login, then the public endpoint; pass `--api http://localhost:8080`
+//!   the first time for a local server.
 //! - `sectr auth whoami` — the stored identity (org + server).
 //! - `sectr auth logout` — forget the key; a key obtained through the
 //!   browser login is also revoked.
@@ -29,7 +30,8 @@ use crate::auth::{self, Credentials};
 pub struct AuthArgs {
   #[command(subcommand)]
   pub command: AuthCommand,
-  /// The server base URL. Default: the public endpoint.
+  /// The server base URL. Default: SECTR_API_URL, then the saved login's
+  /// server, then the public endpoint.
   #[arg(long, global = true)]
   pub api: Option<String>,
   /// Platform API key (`skp_…`). With `login`, stores that key instead of
@@ -71,13 +73,24 @@ pub async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
   }
 }
 
-async fn run_login(args: &AuthArgs, with_key: bool, no_browser: bool) -> anyhow::Result<()> {
-  let api = args
-    .api
-    .clone()
-    .unwrap_or_else(|| DEFAULT_API.to_owned())
+/// Which server `sectr auth login` talks to. A broken credentials file
+/// doesn't block logging in again, which is how it gets replaced.
+fn login_server(flag: Option<&str>, env: Option<&str>, saved: Option<&Credentials>) -> String {
+  flag
+    .or(env.filter(|v| !v.trim().is_empty()))
+    .or(saved.map(|c| c.api.as_str()))
+    .unwrap_or(DEFAULT_API)
     .trim_end_matches('/')
-    .to_owned();
+    .to_owned()
+}
+
+async fn run_login(args: &AuthArgs, with_key: bool, no_browser: bool) -> anyhow::Result<()> {
+  let saved = auth::load().ok().flatten();
+  let api = login_server(
+    args.api.as_deref(),
+    std::env::var("SECTR_API_URL").ok().as_deref(),
+    saved.as_ref(),
+  );
 
   // Manual route: --key, or --with-key (hidden prompt / stdin).
   let key = match (&args.key, with_key) {
@@ -87,10 +100,17 @@ async fn run_login(args: &AuthArgs, with_key: bool, no_browser: bool) -> anyhow:
   };
   let Some(key) = key else {
     let approved = device_login(&api, !no_browser).await?;
+    // Best effort: the login succeeded either way. Without this, `sectr dev`
+    // just falls back to the hosted dashboard.
+    let dashboard = auth::whoami(&api, &approved.key)
+      .await
+      .ok()
+      .and_then(|me| me.dashboard_url);
     auth::store(&Credentials {
       api: api.clone(),
       platform_key: approved.key,
       key_id: Some(approved.key_id),
+      dashboard,
     })?;
     eprintln!(
       "logged in to {api} — org \"{}\" (stored in ~/.config/sectr/credentials.toml)",
@@ -102,15 +122,19 @@ async fn run_login(args: &AuthArgs, with_key: bool, no_browser: bool) -> anyhow:
   if key.trim().is_empty() {
     bail!("empty key");
   }
-  let (org, _org_id) = auth::whoami(&api, key.trim())
+  let me = auth::whoami(&api, key.trim())
     .await
     .map_err(|e| anyhow::anyhow!("{e:#}"))?;
   auth::store(&Credentials {
     api: api.clone(),
     platform_key: key.trim().to_owned(),
     key_id: None,
+    dashboard: me.dashboard_url,
   })?;
-  eprintln!("logged in to {api} — org \"{org}\" (stored in ~/.config/sectr/credentials.toml)");
+  eprintln!(
+    "logged in to {api} — org \"{}\" (stored in ~/.config/sectr/credentials.toml)",
+    me.org_name
+  );
   Ok(())
 }
 
@@ -315,14 +339,13 @@ async fn run_logout() -> anyhow::Result<()> {
 }
 
 async fn run_whoami(args: &AuthArgs) -> anyhow::Result<()> {
-  let stored = auth::load()?.context("no stored credentials — run `sectr auth login`")?;
-  // The explicit --api/--key flags override the stored identity (so
-  // `sectr auth whoami --key skp_new` previews a different identity).
-  let api = args.api.clone().unwrap_or(stored.api);
-  let key = args.key.clone().unwrap_or(stored.platform_key);
-  let (org, org_id) = auth::whoami(&api, &key).await?;
-  println!("server: {api}");
-  println!("org:    {org} ({org_id})");
+  // Explicit flags and env override the stored identity (so
+  // `sectr auth whoami --key skp_new` previews a different identity). The
+  // saved key still only goes to its own server.
+  let target = auth::resolve_quietly(args.api.as_deref(), args.key.as_deref())?;
+  let me = auth::whoami(&target.api, &target.key).await?;
+  println!("server: {}", target.api);
+  println!("org:    {} ({})", me.org_name, me.org_id);
   Ok(())
 }
 
@@ -425,6 +448,36 @@ mod tests {
   }
 
   #[test]
+  fn login_uses_the_flag_then_env_then_the_saved_server_then_hosted() {
+    let saved = Credentials {
+      api: "https://saved.example.com/".into(),
+      platform_key: "skp_a".into(),
+      key_id: None,
+      dashboard: None,
+    };
+    let flag = Some("https://flag.example.com/");
+    let env = Some("https://env.example.com");
+    assert_eq!(
+      login_server(flag, env, Some(&saved)),
+      "https://flag.example.com"
+    );
+    assert_eq!(
+      login_server(None, env, Some(&saved)),
+      "https://env.example.com"
+    );
+    assert_eq!(
+      login_server(None, None, Some(&saved)),
+      "https://saved.example.com"
+    );
+    assert_eq!(login_server(None, None, None), DEFAULT_API);
+    assert_eq!(
+      login_server(None, Some(" "), None),
+      DEFAULT_API,
+      "an empty env value counts as unset"
+    );
+  }
+
+  #[test]
   fn old_credentials_without_key_id_parse_and_round_trip() {
     let old: Credentials =
       toml::from_str("api = \"https://api.sectr.dev\"\nplatform_key = \"skp_a\"\n").unwrap();
@@ -469,6 +522,7 @@ mod tests {
       api: api.clone(),
       platform_key: "skp_x".into(),
       key_id: key_id.map(str::to_owned),
+      dashboard: None,
     };
     assert_eq!(revoke_login_key(&creds(None)).await, Revoked::NotOurs);
     assert!(

@@ -513,6 +513,7 @@ async fn me_returns_org_for_platform_principal() {
   assert_eq!(status, StatusCode::OK);
   assert_eq!(body["org"]["name"], "test-org");
   assert!(body["org"]["id"].is_string());
+  assert_eq!(body["dashboard_url"], "https://app.sectr.test");
 }
 
 #[tokio::test]

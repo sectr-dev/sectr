@@ -57,6 +57,7 @@ pub async fn me(
   };
   Json(json!({
       "org": { "id": org.id, "name": org.name },
+      "dashboard_url": state.config().dashboard_url,
   }))
   .into_response()
 }
