@@ -13,7 +13,8 @@
     next.config.ts) with platform-key auth (the full skp_… value lives in
     browser localStorage and rides every request as a Bearer header via
     the credential-provider seam — transport/control-plane.ts). The key
-    is exchanged from a Clerk session.
+    is exchanged from a Clerk session, or pasted when the build has no Clerk
+    key (a self-hosted install).
 
   The edge CANNOT reach a developer's localhost — so in dev-gateway mode
   ALL session I/O happens in the browser: session reads live in client
@@ -38,6 +39,7 @@ import {
     platformCredentials,
 } from "./transport/control-plane";
 import { fetchWithAuthRetry } from "./transport/auth-refresh";
+import { configuredPublicApiUrl } from "./runtime-config";
 
 /**
  * Base URL of the live backend. Empty = mock mode. Resolution order
@@ -90,16 +92,23 @@ export const isLocalGateway = (base: string) => {
 /** Prod mode: the same-origin rewrite to sectr-server. */
 export const PROD_MODE = !MOCK_MODE && !isLocalGateway(API_URL);
 
+/** Clerk sign-in. Off in mock/dev modes, and on a real server when the build
+ *  has no publishable key: a self-hosted install, which uses a pasted key. */
+export const CLERK_ENABLED =
+    PROD_MODE && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
 // The ONE dispatch: same interface, fixtures / real gateway / prod server.
 // The SSE tail gets its own base: in prod it connects DIRECT to the server
-// (NEXT_PUBLIC_SECTR_SERVER_URL) — the streaming path must not traverse the
-// /api rewrite, whose dev proxy starved streamed frames nondeterministically
-// (M1 run finding). Cross-origin; the server answers any origin (bearer auth).
-// Unset → fall back to the rewrite (correct, just proxy-mediated).
-const SSE_BASE_URL =
-    PROD_MODE && process.env.NEXT_PUBLIC_SECTR_SERVER_URL
-        ? process.env.NEXT_PUBLIC_SECTR_SERVER_URL
-        : API_URL;
+// (the runtime public URL, else NEXT_PUBLIC_SECTR_SERVER_URL) — the streaming
+// path must not traverse the /api rewrite, whose dev proxy starved streamed
+// frames nondeterministically (M1 run finding). Cross-origin; the server
+// answers any origin (bearer auth). Unset → fall back to the rewrite (correct,
+// just proxy-mediated). Read at load: the layout runs /runtime-config.js first.
+const SSE_BASE_URL = PROD_MODE
+    ? (configuredPublicApiUrl() ??
+      process.env.NEXT_PUBLIC_SECTR_SERVER_URL ??
+      API_URL)
+    : API_URL;
 
 const sessions = MOCK_MODE
     ? mockSessionsApi

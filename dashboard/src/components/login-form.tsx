@@ -35,7 +35,8 @@ import { Input } from "@/components/ui/input";
 const WAITLIST_URL = "https://sectr.dev/alpha";
 
 export function LoginForm() {
-  return api.PROD_MODE ? <ClerkLogin /> : <MockLogin />;
+  if (api.CLERK_ENABLED) return <ClerkLogin />;
+  return api.PROD_MODE ? <KeyLogin /> : <MockLogin />;
 }
 
 type Strategy = "oauth_github" | "oauth_google" | "oauth_vercel";
@@ -66,6 +67,81 @@ function MockLogin() {
       onStart={() => router.push(takeNext())}
       emailStep={<MockEmailStep onDone={() => router.push(takeNext())} />}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A pasted platform key (prod, no Clerk key in the build)
+
+function KeyLogin() {
+  const router = useRouter();
+  const [key, setKey] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(rememberNext, []);
+
+  // Already signed in: a stored key that still works skips the form.
+  useEffect(() => {
+    if (!api.getPlatformKey()) return;
+    void api.me().then(
+      () => router.replace(takeNext()),
+      () => {},
+    );
+  }, [router]);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const value = key.trim();
+    if (!value || checking) return;
+    setChecking(true);
+    setError(null);
+    try {
+      await api.login(value);
+      router.replace(takeNext());
+    } catch (err) {
+      // 403: a real key of the wrong kind, such as an invocation key.
+      const rejected =
+        err instanceof api.ApiError && (err.status === 401 || err.status === 403);
+      setError(
+        rejected
+          ? "That key isn't valid. It should be a platform key, starting with skp_."
+          : `Couldn't check that key — ${err instanceof Error ? err.message : "unknown error"}`,
+      );
+      setChecking(false);
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => void submit(e)} className="space-y-3">
+      <Input
+        type="password"
+        autoComplete="off"
+        autoFocus
+        spellCheck={false}
+        placeholder="skp_…"
+        aria-label="Platform key"
+        aria-invalid={error ? true : undefined}
+        className="h-11 font-mono text-base"
+        value={key}
+        disabled={checking}
+        onChange={(e) => setKey(e.target.value)}
+      />
+      {error && <p className="text-sm text-danger">{error}</p>}
+      <Button
+        type="submit"
+        size="lg"
+        className="h-11 w-full text-base"
+        disabled={checking || !key.trim()}
+      >
+        {checking && <LoaderCircle className="animate-spin" />}
+        Sign in
+      </Button>
+      <p className="text-center text-xs text-faint-foreground">
+        <code className="font-mono">setup.sh</code> printed your first key. You
+        can make more in Settings.
+      </p>
+    </form>
   );
 }
 

@@ -28,6 +28,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import * as api from "@/lib/api";
+import { publicServerUrl } from "@/lib/runtime-config";
 import type { App } from "@/lib/types";
 import { aguiUrl } from "@/lib/view";
 
@@ -46,10 +47,8 @@ const FRONTENDS: MenuOption[] = [
  *  it: the public API in prod and mock, the gateway under `sectr dev`.
  *  (Never API_URL in prod: that's the same-origin /api rewrite.) */
 function aguiBase(): string {
-    const prod =
-        process.env.NEXT_PUBLIC_SECTR_SERVER_URL ?? "https://api.sectr.dev";
     if (api.MOCK_MODE) return "https://api.sectr.dev";
-    return api.PROD_MODE ? prod : api.API_URL;
+    return api.PROD_MODE ? publicServerUrl() : api.API_URL;
 }
 
 /** Dev gateway (`sectr dev`): no key is needed. */

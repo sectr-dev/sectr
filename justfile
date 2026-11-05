@@ -152,7 +152,7 @@ check-examples:
 
 [private]
 check-dashboard-fast:
-    cd dashboard && npm ci --no-audit --no-fund && npm run typecheck
+    cd dashboard && npm ci --no-audit --no-fund && npm run typecheck && npm test
 
 # The agent skill still generates cleanly from the docs (no unsupported MDX, no dangling links).
 [private]
@@ -199,7 +199,7 @@ check-schema:
 
 [private]
 check-dashboard:
-    cd dashboard && npm ci --no-audit --no-fund && npm run build
+    cd dashboard && npm ci --no-audit --no-fund && npm test && npm run build
 
 # The npm packages: typecheck, build, test.
 [private]

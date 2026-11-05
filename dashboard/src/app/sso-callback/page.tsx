@@ -13,19 +13,19 @@ import { LoaderCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
-import { PROD_MODE } from "@/lib/api";
+import { CLERK_ENABLED } from "@/lib/api";
 import { markOauthReturn } from "@/lib/next-url";
 
 export default function SsoCallbackPage() {
   const router = useRouter();
 
-  // Clerk off (mock/dev modes): nothing to complete.
+  // Clerk off (mock/dev modes, self-hosted): nothing to complete.
   useEffect(() => {
-    if (!PROD_MODE) router.replace("/login");
+    if (!CLERK_ENABLED) router.replace("/login");
     else markOauthReturn();
   }, [router]);
 
-  if (!PROD_MODE) return null;
+  if (!CLERK_ENABLED) return null;
 
   return (
     <div className="flex min-h-svh items-center justify-center">
