@@ -19,8 +19,8 @@
 //! `sectr-app-<deployment-id>:v<version>` for docker tags; remote registries
 //! append their repo path but keep the `sectr-app-<id>:v<version>` tail.
 //! Target architecture: linux/amd64 for the remote builders (Cloud Run's default,
-//! and the only base image in Artifact Registry). The Docker backend builds for
-//! its daemon's architecture: the base image on GHCR is amd64 and arm64.
+//! and E2B's). The Docker backend builds for its daemon's architecture. The base
+//! image on GHCR is amd64 and arm64, and every backend builds on it.
 
 pub mod docker;
 #[cfg(feature = "e2b")] // the E2B sandbox execution backend
