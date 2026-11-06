@@ -48,6 +48,22 @@ if [ "$tier" = release ]; then
   need bws "Bitwarden Secrets Manager CLI: https://bitwarden.com/help/secrets-manager-cli/"
   cred "BWS_ACCESS_TOKEN" '[ -n "${BWS_ACCESS_TOKEN:-}" ]' "export BWS_ACCESS_TOKEN (keychain/env; never in the repo)"
   need npm "brew install node@22 (publish-npm)"
+  # publish-images runs `docker login ghcr.io`, which fails partway through a
+  # release if Docker's credential helper can't save a login. Amazon's
+  # ecr-login, for one, only reads: it answers `not implemented`. So save a
+  # dummy login with the helper ghcr.io would use, then erase it.
+  docker_config="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+  helper=$(jq -r '.credHelpers["ghcr.io"] // .credsStore // empty' "$docker_config" 2>/dev/null || true)
+  probe=https://sectr-doctor.invalid
+  if [ -z "$helper" ]; then
+    echo "  ok       docker login can save credentials (in $docker_config)"
+  elif printf '{"ServerURL":"%s","Username":"sectr-doctor","Secret":"x"}' "$probe" \
+      | "docker-credential-$helper" store >/dev/null 2>&1; then
+    printf '%s' "$probe" | "docker-credential-$helper" erase >/dev/null 2>&1 || true
+    echo "  ok       docker login can save credentials (docker-credential-$helper)"
+  else
+    echo "  MISSING  docker login can't save credentials: docker-credential-$helper refused  ->  in $docker_config, set \"credsStore\" to \"desktop\" (or give ghcr.io its own entry in \"credHelpers\")"; ok=0
+  fi
 
   # A build uses about 12 GB of each. Running out partway shows up as something
   # else: when Postgres can't start, the error is that its name won't resolve.
