@@ -102,6 +102,17 @@ impl ArtifactStore for GcsArtifactStore {
   }
 
   async fn get(&self, uri: &str) -> Result<Vec<u8>> {
+    self.read(uri, None).await
+  }
+
+  async fn get_at_most(&self, uri: &str, max_bytes: usize) -> Result<Vec<u8>> {
+    self.read(uri, Some(max_bytes)).await
+  }
+}
+
+impl GcsArtifactStore {
+  /// Read an object, stopping once it passes `max_bytes` if one is given.
+  async fn read(&self, uri: &str, max_bytes: Option<usize>) -> Result<Vec<u8>> {
     let key = self.parse(uri)?;
     let bucket = format!("projects/_/buckets/{}", self.bucket);
     let mut resp = self
@@ -124,6 +135,11 @@ impl ArtifactStore for GcsArtifactStore {
       .map_err(|e| DriverError::Other(format!("GCS get {uri:?} (mid-stream): {e}")))?
     {
       out.extend_from_slice(&chunk);
+      if let Some(max_bytes) = max_bytes
+        && out.len() > max_bytes
+      {
+        return Err(super::too_large(uri, max_bytes));
+      }
     }
     Ok(out)
   }

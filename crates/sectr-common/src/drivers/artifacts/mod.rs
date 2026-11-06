@@ -30,6 +30,16 @@ pub trait ArtifactStore: Send + Sync {
   async fn put(&self, key: &str, bytes: Vec<u8>) -> Result<String>;
   /// Fetch a blob by URI.
   async fn get(&self, uri: &str) -> Result<Vec<u8>>;
+  /// [`get`](Self::get), for a blob that something other than the server
+  /// wrote: fails once it passes `max_bytes`, without reading the rest.
+  async fn get_at_most(&self, uri: &str, max_bytes: usize) -> Result<Vec<u8>>;
+}
+
+/// The error for a blob over a [`ArtifactStore::get_at_most`] limit.
+pub(crate) fn too_large(uri: &str, max_bytes: usize) -> super::DriverError {
+  super::DriverError::Other(format!(
+    "artifact {uri:?} is larger than the {max_bytes}-byte limit"
+  ))
 }
 
 #[cfg(test)]
@@ -57,6 +67,19 @@ mod conformance_tests {
     assert_eq!(store.get(&uri).await.unwrap(), b"payload v2");
   }
 
+  async fn limited(store: &dyn ArtifactStore) {
+    let uri = store.put("org/app/limited", vec![b'x'; 100]).await.unwrap();
+    assert_eq!(store.get_at_most(&uri, 100).await.unwrap().len(), 100);
+    let err = store.get_at_most(&uri, 99).await.unwrap_err().to_string();
+    assert!(err.contains("99-byte limit"), "{err}");
+    assert!(
+      store
+        .get_at_most(&format!("{uri}-missing"), 100)
+        .await
+        .is_err()
+    );
+  }
+
   async fn not_found(store: &dyn ArtifactStore) {
     let uri = store.put("k", b"v".to_vec()).await.unwrap();
     assert!(store.get(&format!("{uri}-missing")).await.is_err());
@@ -69,6 +92,7 @@ mod conformance_tests {
   async fn in_memory_conformance() {
     let store = InMemoryArtifactStore::new();
     roundtrip(&store).await;
+    limited(&store).await;
     not_found(&store).await;
   }
 
@@ -77,6 +101,7 @@ mod conformance_tests {
     let root = std::env::temp_dir().join(format!("sectr-artifacts-conf-{}", uuid::Uuid::now_v7()));
     let store = FilesystemArtifactStore::new(&root);
     roundtrip(&store).await;
+    limited(&store).await;
     not_found(&store).await;
     std::fs::remove_dir_all(&root).ok();
   }
@@ -104,6 +129,7 @@ mod conformance_tests {
       .await
       .expect("gcs store");
     roundtrip(&store).await;
+    limited(&store).await;
     not_found(&store).await;
   }
 }

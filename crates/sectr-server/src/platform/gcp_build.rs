@@ -196,6 +196,12 @@ else
   exec python3 -m sectr.inspect
 fi";
 
+/// The most the server reads back of each build result. The app's code writes
+/// both, so neither is trusted: a manifest is a few KB, and `uses_uv` is one
+/// word.
+const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_USES_UV_BYTES: usize = 64;
+
 /// Step 2 args: write the generated Dockerfile (base64-embedded to keep the
 /// Dockerfile content out of shell-quoting reach).
 fn dockerfile_write_args(dockerfile: &str) -> Vec<String> {
@@ -755,22 +761,20 @@ impl GcpPlatform {
     // Fetch the build's results from GCS via the EXISTING artifact store.
     let manifest_bytes = self
       .store
-      .get(&manifest_uri(
-        &self.gcs_bucket,
-        req.deployment_id,
-        req.version,
-      ))
+      .get_at_most(
+        &manifest_uri(&self.gcs_bucket, req.deployment_id, req.version),
+        MAX_MANIFEST_BYTES,
+      )
       .await
       .map_err(|e| BuildError::bare(format!("manifest result fetch: {e}")))?;
     let imported: Value = serde_json::from_slice(&manifest_bytes)
       .map_err(|e| BuildError::bare(format!("manifest result is not JSON: {e}")))?;
     let uses_uv = self
       .store
-      .get(&uses_uv_uri(
-        &self.gcs_bucket,
-        req.deployment_id,
-        req.version,
-      ))
+      .get_at_most(
+        &uses_uv_uri(&self.gcs_bucket, req.deployment_id, req.version),
+        MAX_USES_UV_BYTES,
+      )
       .await
       .map_err(|e| BuildError::bare(format!("uses_uv result fetch: {e}")))?;
     let uses_uv = matches!(std::str::from_utf8(&uses_uv).map(str::trim), Ok("true"));
