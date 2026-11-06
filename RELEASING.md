@@ -78,8 +78,7 @@ inner tier must also pass under the outer ones.
    `rust-toolchain.toml`, Node by `.nvmrc`); `cargo install cargo-zigbuild
    --locked`; `dist` **0.33.0** (matches `cargo-dist-version` in
    `Cargo.toml`: https://github.com/axodotdev/cargo-dist/releases/tag/v0.33.0).
-3. To publish (phase 4 `just release`): `gh` (authed), `gcloud` (authed to
-   push to Artifact Registry), `bws` with `BWS_ACCESS_TOKEN` in your
+3. To publish (phase 4 `just release`): `gh` (authed), `bws` with `BWS_ACCESS_TOKEN` in your
    keychain/env, `wrangler` (optional; `npx` otherwise), and the private ops repo checked out next to this one (`../sectr-ops`, or set
    `SECTR_OPS_DIR`), which holds the hosted deploy and its ssh access. Credentials are never stored in the repo: scripts read
    them from the environment first, then Bitwarden Secrets Manager by secret
@@ -115,7 +114,7 @@ version, skipping any already on npm; auth via `NPM_TOKEN`, no
 `--provenance` since that needs a CI identity), `publish-skill.sh` (the
 agent skill, generated from the docs, pushed to the public
 github.com/sectr-dev/skills repo with your `gh` login; a no-op when it's
-already current), `publish-images.sh` (pushes the verified images to GHCR with `GHCR_TOKEN`, joins each into a multi-arch `:vX.Y.Z` and `:latest`, and pushes the amd64 base image to Artifact Registry for hosted; nothing is rebuilt), `smoke-docs.sh`, and `deploy-server.sh` in the ops repo. They are private recipes (`just publish-r2`
+already current), `publish-images.sh` (pushes the verified images to GHCR with `GHCR_TOKEN`, and joins each into a multi-arch `:vX.Y.Z` and `:latest`; nothing is rebuilt), `smoke-docs.sh`, and `deploy-server.sh` in the ops repo. They are private recipes (`just publish-r2`
 …), which `just release` sequences and which you can also run one at a time
 from the dev machine (see "Deploying one component").
 
@@ -184,8 +183,8 @@ from the dev machine (see "Deploying one component").
   the tag.
 - **Bad release:** the version is burned. Fix forward with the next patch. If
   the server is the problem, roll it back on the VM (see the ops repo); to re-point an image, join the previous version's
-  `:vX.Y.Z-amd64` and `:vX.Y.Z-arm64` as `:latest` with `docker buildx imagetools create`, and on
-  Artifact Registry push the previous `:vX` as `:latest`.
+  `:vX.Y.Z-amd64` and `:vX.Y.Z-arm64` as `:latest` with `docker buildx imagetools create`. Hosted
+  builds on the base image of its server's own version, so rolling the server back rolls the base back with it.
 - **Dev machine unavailable:** there is no GitHub fallback for building or
   deploying — by design there is one release path. Use another machine that
   has the setup above.

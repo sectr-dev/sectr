@@ -43,8 +43,6 @@ if [ "$tier" = release ]; then
   need gh "brew install gh"
   cred "gh authenticated (publish-skill pushes to sectr-dev/skills; also --require-gh)" "gh auth status" "gh auth login"
   have wrangler && echo "  ok       wrangler" || echo "  note     wrangler not installed (optional: npm i -g wrangler; publish-r2 uses npx otherwise)"
-  need gcloud "https://cloud.google.com/sdk/docs/install"
-  cred "gcloud authenticated" "gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q ." "gcloud auth login"
   need bws "Bitwarden Secrets Manager CLI: https://bitwarden.com/help/secrets-manager-cli/"
   cred "BWS_ACCESS_TOKEN" '[ -n "${BWS_ACCESS_TOKEN:-}" ]' "export BWS_ACCESS_TOKEN (keychain/env; never in the repo)"
   need npm "brew install node@22 (publish-npm)"

@@ -75,8 +75,8 @@ pub struct ServerConfig {
   /// The runner BASE image deploys build on (`SECTR_RUNNER_BASE_IMAGE`):
   /// python + uv + the sectr SDK + the sidecar binary — see
   /// `docker/runner-base.Dockerfile`. Required for `POST /deployments`.
-  /// On the docker platform it defaults to the published image of this
-  /// server's own version, so the sidecar and the server can't drift.
+  /// Defaults to the published image of this server's own version, so the
+  /// sidecar and the server can't drift.
   pub runner_base_image: Option<String>,
 
   /// Docker network runner containers join (`SECTR_RUNNER_NETWORK`). Unset
@@ -216,23 +216,23 @@ pub struct ServerConfig {
   pub limits: LimitsConfig,
 }
 
-/// The image repository the docker platform's default base image comes from.
+/// The image repository the default base image comes from. It's public, so
+/// a Cloud Build can pull it with no credentials.
 const PUBLISHED_RUNNER_BASE_IMAGE: &str = "ghcr.io/sectr-dev/sectr-runner-base";
 
-/// Resolve the runner base image. Only the docker platform has a default:
-/// the gcp and e2b builders need the image in their own registry
-/// (`check_gcp_config`).
-fn resolve_runner_base_image(platform: PlatformKind, configured: Option<String>) -> Option<String> {
-  let configured = configured.filter(|image| !image.trim().is_empty());
-  match platform {
-    PlatformKind::Docker => Some(configured.unwrap_or_else(|| {
-      format!(
-        "{PUBLISHED_RUNNER_BASE_IMAGE}:v{}",
-        env!("CARGO_PKG_VERSION")
-      )
-    })),
-    PlatformKind::Gcp | PlatformKind::E2b => configured,
-  }
+/// Resolve the runner base image: the configured one, or the published image
+/// of this server's own version. The same default on every platform.
+fn resolve_runner_base_image(configured: Option<String>) -> Option<String> {
+  Some(
+    configured
+      .filter(|image| !image.trim().is_empty())
+      .unwrap_or_else(|| {
+        format!(
+          "{PUBLISHED_RUNNER_BASE_IMAGE}:v{}",
+          env!("CARGO_PKG_VERSION")
+        )
+      }),
+  )
 }
 
 /// The limits on each runner container. E2B's defaults, so a turn gets the
@@ -499,10 +499,7 @@ impl ServerConfig {
         .map(str::to_owned)
         .collect(),
       runner_image: std::env::var("SECTR_RUNNER_IMAGE").ok(),
-      runner_base_image: resolve_runner_base_image(
-        platform,
-        std::env::var("SECTR_RUNNER_BASE_IMAGE").ok(),
-      ),
+      runner_base_image: resolve_runner_base_image(std::env::var("SECTR_RUNNER_BASE_IMAGE").ok()),
       runner_network: std::env::var("SECTR_RUNNER_NETWORK")
         .ok()
         .map(|n| n.trim().to_owned())
@@ -583,15 +580,14 @@ impl ServerConfig {
       config.gcs_bucket.as_deref(),
     )?;
     // Same discipline for the model-(b) provider keys (E2B's build half
-    // IS the gcp build half — project/region/build-SA/base-image are
-    // shared requirements; only the runner SA is gcp-specific).
+    // IS the gcp build half — project/region/build-SA are shared
+    // requirements; only the runner SA is gcp-specific).
     check_gcp_config(
       config.platform,
       config.gcp_project_id.as_deref(),
       config.gcp_region.as_deref(),
       config.gcp_build_sa_email.as_deref(),
       config.gcp_runner_sa_email.as_deref(),
-      config.runner_base_image.as_deref(),
     )?;
     if config.platform == PlatformKind::Docker {
       // A runner URL with no host would otherwise surface only at the first
@@ -619,7 +615,6 @@ fn check_gcp_config(
   gcp_region: Option<&str>,
   gcp_build_sa_email: Option<&str>,
   gcp_runner_sa_email: Option<&str>,
-  runner_base_image: Option<&str>,
 ) -> anyhow::Result<()> {
   if !platform.builds_on_gcp() {
     return Ok(());
@@ -645,23 +640,6 @@ fn check_gcp_config(
       "SECTR_GCP_RUNNER_SA_EMAIL is required when SECTR_PLATFORM=gcp \
              (the least-privilege runtime identity ensured jobs run AS — \
              the runner service account)"
-    );
-  }
-  // R4: the base image must live in the CONFIGURED region's registry —
-  // a mismatched host silently builds in the wrong region or fails at
-  // pull time (R6 finding).
-  let Some(base) = runner_base_image else {
-    anyhow::bail!(
-      "SECTR_RUNNER_BASE_IMAGE is required when SECTR_PLATFORM=gcp \
-             (the runner base image in AR — every deploy builds on it)"
-    );
-  };
-  let expected_host = format!("{}-docker.pkg.dev", gcp_region.unwrap_or(""));
-  let host = base.split('/').next().unwrap_or("");
-  if host != expected_host {
-    anyhow::bail!(
-      "SECTR_RUNNER_BASE_IMAGE {base:?} is not in the configured region's \
-             registry (expected host {expected_host:?} for SECTR_GCP_REGION)"
     );
   }
   Ok(())
@@ -899,7 +877,7 @@ mod tests {
   #[test]
   fn gcp_platform_requires_project_region_and_sas() {
     // Docker platform: the GCP keys are irrelevant.
-    check_gcp_config(PlatformKind::Docker, None, None, None, None, None).unwrap();
+    check_gcp_config(PlatformKind::Docker, None, None, None, None).unwrap();
 
     // Each missing key gets its own clear complaint.
     let e = check_gcp_config(
@@ -908,7 +886,6 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       Some("r@x"),
-      Some("us-east4-docker.pkg.dev/p/r/base:v1"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_PROJECT_ID"), "{e}");
@@ -918,7 +895,6 @@ mod tests {
       None,
       Some("sa@x"),
       Some("r@x"),
-      Some("us-east4-docker.pkg.dev/p/r/base:v1"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_REGION"), "{e}");
@@ -928,7 +904,6 @@ mod tests {
       Some("us-east4"),
       None,
       Some("r@x"),
-      Some("us-east4-docker.pkg.dev/p/r/base:v1"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_BUILD_SA_EMAIL"), "{e}");
@@ -938,35 +913,9 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       None,
-      Some("us-east4-docker.pkg.dev/p/r/base:v1"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_RUNNER_SA_EMAIL"), "{e}");
-    let e = check_gcp_config(
-      PlatformKind::Gcp,
-      Some("p"),
-      Some("us-east4"),
-      Some("sa@x"),
-      Some("r@x"),
-      None,
-    )
-    .unwrap_err();
-    assert!(e.to_string().contains("SECTR_RUNNER_BASE_IMAGE"), "{e}");
-    let e = check_gcp_config(
-      PlatformKind::Gcp,
-      Some("p"),
-      Some("us-east4"),
-      Some("sa@x"),
-      Some("r@x"),
-      Some("us-central1-docker.pkg.dev/p/r/base:v1"),
-    )
-    .unwrap_err();
-    assert!(
-      e.to_string()
-        .contains("not in the configured region's registry"),
-      "{e}"
-    );
-
     // All present: accepted.
     check_gcp_config(
       PlatformKind::Gcp,
@@ -974,7 +923,6 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       Some("r@x"),
-      Some("us-east4-docker.pkg.dev/p/r/base:v1"),
     )
     .unwrap();
   }
@@ -1008,7 +956,6 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       None,
-      Some("us-east4-docker.pkg.dev/p/r/base:v1"),
     )
     .unwrap();
   }
@@ -1046,31 +993,21 @@ mod tests {
   }
 
   #[test]
-  fn the_default_base_image_follows_the_version_and_only_applies_to_docker() {
+  fn the_default_base_image_follows_the_version() {
     let published = format!(
       "ghcr.io/sectr-dev/sectr-runner-base:v{}",
       env!("CARGO_PKG_VERSION")
     );
+    assert_eq!(resolve_runner_base_image(None), Some(published.clone()));
     assert_eq!(
-      resolve_runner_base_image(PlatformKind::Docker, None),
-      Some(published.clone())
-    );
-    assert_eq!(
-      resolve_runner_base_image(PlatformKind::Docker, Some(" ".into())),
+      resolve_runner_base_image(Some(" ".into())),
       Some(published),
       "an empty value from a compose file counts as unset"
     );
     assert_eq!(
-      resolve_runner_base_image(PlatformKind::Docker, Some("mine:1".into())),
+      resolve_runner_base_image(Some("mine:1".into())),
       Some("mine:1".into())
     );
-    for platform in [PlatformKind::Gcp, PlatformKind::E2b] {
-      assert_eq!(resolve_runner_base_image(platform, None), None);
-      assert_eq!(
-        resolve_runner_base_image(platform, Some("mine:1".into())),
-        Some("mine:1".into())
-      );
-    }
   }
 
   #[test]

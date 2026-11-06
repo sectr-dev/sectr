@@ -188,7 +188,6 @@ Release v$VER complete:
   SDK              sectr==$VER on PyPI
   npm              @sectr/copilotkit@$VER (+ the sectr shell, first release only)
   Images           sectr-runner-base, sectr-server, sectr-dashboard:v$VER (+ :latest) on GHCR
-  Base image       sectr-runner-base:v$VER (+ :latest) in Artifact Registry
   Server           deployed and health-checked
   Docs             docs.sectr.dev shows v$VER
   main             contains the bump; release/v$VER deleted
