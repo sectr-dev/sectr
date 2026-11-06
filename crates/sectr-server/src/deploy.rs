@@ -544,30 +544,6 @@ async fn build_and_activate(
     .artifact_uri
     .as_deref()
     .ok_or("deployment has no artifact_uri — cannot build")?;
-  // Layer-cache hint for the remote builder: the previous deployment's
-  // image ref, computed THROUGH the platform (`provisional_build_ref` is
-  // the platform's own deterministic naming — none of it leaks here).
-  // Image refs are deployment-scoped while the version counter is
-  // app-scoped, so the previous image belongs to the previous row's id —
-  // not to `version - 1` under this one.
-  let previous_build_ref = match state.registry().list_deployments(deployment.app_id).await {
-    Ok(rows) => rows
-      .iter()
-      .filter(|d| d.version < deployment.version)
-      .max_by_key(|d| d.version)
-      .map(|prev| {
-        state
-          .platform()
-          .provisional_build_ref(prev.id, prev.version)
-      }),
-    // Only a cache hint — degrade, but leave a trace (a silent None
-    // would hide a registry problem behind 'cold build every time').
-    Err(e) => {
-      tracing::warn!(deployment = %deployment.id, error = %e,
-                "could not list deployments for the previous-image cache hint");
-      None
-    }
-  };
   // The build is behind the RunnerPlatform seam: the ONE platform object shared with the ingest
   // hub/dispatcher — the same task, whichever backend it is.
   let output = state
@@ -577,7 +553,6 @@ async fn build_and_activate(
       version: deployment.version,
       artifact_uri: artifact_uri.to_owned(),
       entry: parsed.entry.clone(),
-      previous_build_ref,
     })
     .await
     // The row's `error` tail: message + the builder's own log tail (the
@@ -836,6 +811,7 @@ mod tests {
       gcp_region: None,
       gcp_ar_repo: "sectr-runners".into(),
       gcp_build_sa_email: None,
+      gcp_push_sa_email: None,
       gcp_runner_sa_email: None,
       e2b_api_key: None,
       e2b_domain: "e2b.app".into(),

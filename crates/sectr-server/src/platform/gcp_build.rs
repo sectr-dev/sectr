@@ -7,57 +7,77 @@
 //!
 //! The deploy path uploads the app tarball to GCS (`BuildRequest.artifact_uri`
 //! is a `gs:` URI — the gcs↔gcp pairing is enforced in `config.rs`), then
-//! calls `build()`. This impl submits ONE Cloud Build build:
+//! calls `build()`. This impl runs TWO Cloud Builds, because the app's own
+//! code runs during a build (dependency install, the manifest import), and
+//! every build step can use the build identity's credentials.
 //!
-//! 1. **assemble** — Cloud Build extracts the tarball into `/workspace` (the
-//!    tarball members are the app tree, unpacked at its root by `deploy.rs`'s
-//!    store contract); this step gathers them into `/workspace/app` so the
-//!    shared Dockerfile's `COPY app /app` holds.
+//! **The user-code build** holds nothing worth taking. It runs AS
+//! `SECTR_GCP_BUILD_SA_EMAIL`, which can only write logs, and sets no
+//! `source`, `images` or `artifacts`. Its files move only through V4 URLs the
+//! server signs, each for one method on one object:
+//!
+//! 1. **fetch** — downloads the app tarball by a signed GET and unpacks it
+//!    into `/workspace/app`, where the shared Dockerfile's `COPY app /app`
+//!    expects it.
 //! 2. **dockerfile** — writes the SAME generated Dockerfile [`generate_dockerfile`]
 //!    produces for [`DockerPlatform`](super::DockerPlatform) (base64-embedded —
 //!    no shell-escaping of Dockerfile content), so both platforms build
 //!    byte-identical image content.
-//! 3. **build** — `docker build` with `--cache-from` (base image first, then
-//!    the deployment's previous version — best-effort: Cloud Build's docker
-//!    layer cache is EPHEMERAL per builder VM, so a cache hit is a bonus, not
-//!    a guarantee; the plan accepts first-build-after-idle at 2–5 min).
+//! 3. **build** — `docker build` on the public base image (GHCR, pulled with
+//!    no credentials), caching from it. Not from the deployment's previous
+//!    image: that would need registry read, which covers every org's images.
 //! 4. **manifest** — runs the built image with `SECTR_MANIFEST=1` +
 //!    `SECTR_MANIFEST_OUT=/workspace/manifest.json` (Cloud Build steps share
 //!    `/workspace`) and records `uses_uv` (the same pyproject.toml guard
 //!    `DockerPlatform` applies to pick `uv run --no-sync` — a remote builder
 //!    must REPORT it, the server never sees the unpacked tree).
+//! 5. **save** — `docker save` writes the image to `/workspace/image.tar`.
+//! 6. **upload** — PUTs `image.tar`, `manifest.json` and `uses_uv` to their
+//!    signed URLs.
 //!
-//! The `Build.images` field performs the automatic Artifact Registry push of
-//! `sectr-app-<deployment-id>:v<version>` ,
-//! and the `Build.artifacts.objects` field uploads the results to the
-//! deterministic `gs://<bucket>/builds/<deployment-id>/v<version>/` layout
-//! (R3): `manifest.json` (the raw `sectr.inspect` output — the server-side
-//! manifest composition stays in `deploy.rs`, cloud-neutral) plus `uses_uv`.
-//! After the build finishes, this impl fetches both via the EXISTING
-//! [`ArtifactStore`] (the same `GcsArtifactStore` the deploy path uses — no
-//! second GCS client) and ensures the Cloud Run Job exists (step 4: template
-//! = AR image + sidecar cmd + static ingest env; job lifecycle =
-//! deployment lifecycle).
+//! We assume the app's code controls this whole build, so no step in it is a
+//! boundary, and everything it uploads is hostile. The boundaries are where
+//! it lands. Each upload URL is create-only and size-capped (both signed
+//! headers, enforced by Cloud Storage), and every attempt writes under a
+//! fresh prefix, `builds/<deployment-id>/v<version>/<attempt>/`. The server
+//! reads `manifest.json` and `uses_uv` back through the [`ArtifactStore`]
+//! with capped reads (the raw `sectr.inspect` output — the server-side
+//! manifest composition stays in `deploy.rs`, cloud-neutral).
+//!
+//! **The push build** runs no app code. It runs AS `SECTR_GCP_PUSH_SA_EMAIL`,
+//! the one identity that can write images, on a fresh VM (Cloud Build gives
+//! every build its own). It downloads `image.tar` by a signed GET and runs
+//! `crane push` (gcrane, pinned by digest) to
+//! `sectr-app-<deployment-id>:v<version>`. Not `docker load`: crane uploads
+//! the layers without unpacking them, ignores any names the tar declares, and
+//! refuses a tar holding more than one image. Then the server deletes
+//! `image.tar` (a bucket lifecycle rule catches any it misses). The gcp
+//! platform then ensures the Cloud Run Job (its template is the AR image,
+//! the sidecar cmd and the static ingest env; job lifecycle = deployment
+//! lifecycle); the E2B platform builds its template instead.
 //!
 //! # Auth & IAM
 //!
 //! - The SERVER authenticates via ADC / `GOOGLE_APPLICATION_CREDENTIALS`
-//!   (the sectr-server SA key on the VPS) and needs
-//!   `roles/cloudbuild.builds.editor` (builds.create/get) + the
-//!   `iam.serviceAccountUser` binding on the build SA — both granted.
-//! - The build RUNS AS `SECTR_GCP_BUILD_SA_EMAIL` (the `Build.service_account`
-//!   field is the impersonation mechanism — no token machinery): builder SA
-//!   has AR writer + bucket objectAdmin + log writer, all granted.
-//! - **Known infra gap (open for the live-verification handoff)**: iam.tf
-//!   grants sectr-server NO Cloud Run role, so `ensure_job` will 403 until a
-//!   `roles/run.admin` (or jobs-scoped equivalent) binding for sectr-server
-//!   is added (G2's runner-side infra is the natural home). Likewise raw
-//!   build logs live in Cloud Logging (sectr-server has no logging.viewer),
-//!   so a FAILED build's `logs_tail` is composed from the build resource's
+//!   (the sectr-server SA key on the VPS). It needs
+//!   `roles/cloudbuild.builds.editor`, `iam.serviceAccountUser` on both build
+//!   identities, and objectAdmin on the bucket, which is what its signed URLs
+//!   grant. The key signs them locally, with no network call.
+//! - The user-code build runs AS the build SA: `roles/logging.logWriter`
+//!   only. With a URL, the app's code can read its own tarball and create
+//!   its own three result files once; nothing else.
+//! - The push build runs AS the push SA: writer on the `sectr-runners` repo,
+//!   plus `roles/logging.logWriter` so a failed push leaves logs.
+//! - The `Build.service_account` field is the impersonation mechanism (no
+//!   token machinery).
+//! - **Known infra gap**: iam.tf grants sectr-server NO Cloud Run role, so
+//!   `ensure_job` will 403 until a `roles/run.admin` (or jobs-scoped
+//!   equivalent) binding for sectr-server is added. Likewise raw build logs
+//!   live in Cloud Logging (sectr-server has no logging.viewer), so a FAILED
+//!   build's `logs_tail` is composed from the build resource's
 //!   `failure_info` + per-step statuses + the console `log_url` — not the
-//!   raw step output. Setting `logs_bucket` to our GCS bucket would capture
-//!   raw logs but requires a storage grant to the Cloud Build service agent
-//!   that iam.tf deliberately does not include.
+//!   raw step output, which also means one org's build can't forge another's
+//!   error message.
 //!
 //! # Crate note (deviation from the original task text)
 //!
@@ -79,6 +99,7 @@ use google_cloud_build_v1::model as cb;
 use google_cloud_gax::error::rpc::Code as GaxCode;
 use google_cloud_lro::Poller as _;
 use google_cloud_run_v2::model as run;
+use google_cloud_storage::builder::storage::SignedUrlBuilder;
 use google_cloud_wkt as wkt;
 
 use sectr_common::drivers::ArtifactStore;
@@ -94,6 +115,10 @@ const BUILD_TIMEOUT_SECS: i64 = 1800;
 /// Hard ceiling on waiting for the create-build operation (build timeout +
 /// queueing slack).
 const BUILD_POLL_TIMEOUT: Duration = Duration::from_secs(BUILD_TIMEOUT_SECS as u64 + 600);
+/// The push build only downloads one tar and pushes it: 20 min covers the
+/// largest tar the user-code build may upload.
+const PUSH_TIMEOUT_SECS: i64 = 1200;
+const PUSH_POLL_TIMEOUT: Duration = Duration::from_secs(PUSH_TIMEOUT_SECS as u64 + 600);
 /// Hard ceiling on the ensure-job LRO (job creation is fast; slack is for
 /// retry backoff).
 const JOB_POLL_TIMEOUT: Duration = Duration::from_secs(300);
@@ -130,24 +155,20 @@ pub(crate) fn job_id(deployment_id: Uuid) -> String {
 /// providers.
 pub(crate) const TEMPLATE_NAME_PREFIX: &str = "sectr-app-";
 
-/// Deterministic gs:// layout for the build's results (R3).
-fn builds_prefix(gcs_bucket: &str, deployment_id: Uuid, version: i64) -> String {
-  format!("gs://{gcs_bucket}/builds/{deployment_id}/v{version}")
+/// The object prefix of one build attempt's files (R3, plus the attempt):
+/// `builds/<deployment-id>/v<version>/<attempt>`. Every attempt gets a fresh
+/// id, so no two builds, retries of one version included, share an object.
+/// The create-only uploads depend on that.
+fn attempt_prefix(deployment_id: Uuid, version: i64, attempt: Uuid) -> String {
+  format!("builds/{deployment_id}/v{version}/{attempt}")
 }
 
-fn manifest_uri(gcs_bucket: &str, deployment_id: Uuid, version: i64) -> String {
-  format!(
-    "{}/manifest.json",
-    builds_prefix(gcs_bucket, deployment_id, version)
-  )
-}
-
-fn uses_uv_uri(gcs_bucket: &str, deployment_id: Uuid, version: i64) -> String {
-  format!(
-    "{}/uses_uv",
-    builds_prefix(gcs_bucket, deployment_id, version)
-  )
-}
+/// The files the user-code build uploads, under its attempt prefix. The
+/// bucket's lifecycle rule deletes leftover `builds/**/image.tar` objects
+/// after a day, so the name is part of the ops contract.
+const IMAGE_TAR: &str = "image.tar";
+const MANIFEST_JSON: &str = "manifest.json";
+const USES_UV: &str = "uses_uv";
 
 /// Split a `gs://<bucket>/<key>` URI (the tarball's artifact URI). Same
 /// segment discipline as [`GcsArtifactStore`](sectr_common::drivers)'s own
@@ -177,11 +198,18 @@ fn parse_gs_uri(uri: &str) -> Result<(String, String), BuildError> {
 // Build-config generation (pure — the unit-tested shape)
 // ---------------------------------------------------------------------------
 
-/// Step 1: gather the extracted tarball's members into `/workspace/app`.
-/// Cloud Build unpacks the source archive at `/workspace` root; the shared
-/// Dockerfile expects the app at `app/`.
-const ASSEMBLE_SCRIPT: &str = "mkdir -p /workspace/app && \
-     find /workspace -mindepth 1 -maxdepth 1 ! -name app -exec mv -t /workspace/app {} +";
+/// Step 1: download the app tarball by its signed URL (`$0`) and unpack it
+/// into `/workspace/app`, where the shared Dockerfile expects it. The
+/// tarball's members are the app tree.
+const FETCH_SOURCE_SCRIPT: &str = "set -eu
+curl -fsS -o /workspace/source.tar.gz \"$0\"
+mkdir -p /workspace/app
+tar -xzf /workspace/source.tar.gz -C /workspace/app
+rm /workspace/source.tar.gz";
+
+/// Push step 1: download the saved image by its signed URL (`$0`).
+const FETCH_IMAGE_SCRIPT: &str = "set -eu
+curl -fsS -o /workspace/image.tar \"$0\"";
 
 /// Step 4: the authoritative manifest import + `uses_uv` recording — the
 /// SAME interpreter discipline `DockerPlatform` uses (`uv run --no-sync`
@@ -201,6 +229,100 @@ fi";
 /// word.
 const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_USES_UV_BYTES: usize = 64;
+/// The largest saved image the user-code build may upload.
+const MAX_IMAGE_TAR_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// What the user-code build uploads, in order, and each one's size cap.
+const UPLOADS: [(&str, u64); 3] = [
+  (IMAGE_TAR, MAX_IMAGE_TAR_BYTES),
+  (MANIFEST_JSON, MAX_MANIFEST_BYTES as u64),
+  (USES_UV, MAX_USES_UV_BYTES as u64),
+];
+
+/// The image every step but the import and the push runs in. It ships curl.
+const DOCKER_BUILDER: &str = "gcr.io/cloud-builders/docker";
+/// The push step's image, pinned by digest: it's the one step that can
+/// write images, so it runs exactly the code we tested.
+const GCRANE: &str = "gcr.io/go-containerregistry/gcrane:v0.22.1@sha256:67b9993e083198db3d30ae6d2bb685cc67a45494a3c485ef2fa9994715bee9ff";
+
+// ---------------------------------------------------------------------------
+// Signed URLs (the specs are pure — unit-tested; signing needs the key)
+// ---------------------------------------------------------------------------
+
+/// One V4 signed URL to make: a method on one object, plus the headers the
+/// request must send. A signed header is part of the signature, so a
+/// request that drops or changes it is refused.
+#[derive(Debug, Clone, PartialEq)]
+struct UrlSpec {
+  method: google_cloud_storage::http::Method,
+  object: String,
+  headers: Vec<(&'static str, String)>,
+  expiry: Duration,
+}
+
+impl UrlSpec {
+  fn get(object: String, expiry: Duration) -> Self {
+    UrlSpec {
+      method: google_cloud_storage::http::Method::GET,
+      object,
+      headers: Vec::new(),
+      expiry,
+    }
+  }
+
+  /// An upload that can create the object once and never replace it, at
+  /// most `max_bytes` long. Cloud Storage enforces both conditions, even
+  /// for a chunked upload that sends no length.
+  fn create(object: String, max_bytes: u64, expiry: Duration) -> Self {
+    UrlSpec {
+      method: google_cloud_storage::http::Method::PUT,
+      object,
+      headers: vec![
+        ("x-goog-if-generation-match", "0".to_owned()),
+        ("x-goog-content-length-range", format!("0,{max_bytes}")),
+      ],
+      expiry,
+    }
+  }
+
+  fn delete(object: String) -> Self {
+    UrlSpec {
+      method: google_cloud_storage::http::Method::DELETE,
+      object,
+      headers: Vec::new(),
+      expiry: Duration::from_secs(300),
+    }
+  }
+}
+
+/// The user-code build's uploads, in [`UPLOADS`] order. The URLs outlive
+/// the build's own timeout, with slack for queueing.
+fn upload_specs(prefix: &str) -> Vec<UrlSpec> {
+  UPLOADS
+    .iter()
+    .map(|(file, max_bytes)| {
+      UrlSpec::create(format!("{prefix}/{file}"), *max_bytes, BUILD_POLL_TIMEOUT)
+    })
+    .collect()
+}
+
+/// The last user-code step: upload each file in [`UPLOADS`] to its signed
+/// URL (`$0`, `$1`, `$2`), sending exactly the headers the URL was signed
+/// with.
+fn upload_script(specs: &[UrlSpec]) -> String {
+  let mut lines = vec!["set -eu".to_owned()];
+  for (i, ((file, _), spec)) in UPLOADS.iter().zip(specs).enumerate() {
+    let headers: String = spec
+      .headers
+      .iter()
+      .map(|(k, v)| format!(" -H '{k}: {v}'"))
+      .collect();
+    lines.push(format!(
+      "curl -fsS -X PUT{headers} --upload-file /workspace/{file} \"${i}\""
+    ));
+  }
+  lines.join("\n")
+}
 
 /// Step 2 args: write the generated Dockerfile (base64-embedded to keep the
 /// Dockerfile content out of shell-quoting reach).
@@ -212,10 +334,11 @@ fn dockerfile_write_args(dockerfile: &str) -> Vec<String> {
   ]
 }
 
-/// Step 3 args: the docker build. Cache order matters (checked by test): the
-/// base image FIRST (its python/uv/sdk layers are the bulk), then the
-/// deployment's previous version (best-effort; may not exist).
-fn docker_build_args(image_ref: &str, base_image: &str, previous_ref: Option<&str>) -> Vec<String> {
+/// Step 3 args: the docker build, caching from the base image (its
+/// python/uv/sdk layers are the bulk). Not from the deployment's previous
+/// image: reading it would need registry access, which this build must not
+/// have.
+fn docker_build_args(image_ref: &str, base_image: &str) -> Vec<String> {
   let mut args = vec![
     "build".to_owned(),
     // Cloud Build docker builds need the explicit named network for
@@ -228,12 +351,9 @@ fn docker_build_args(image_ref: &str, base_image: &str, previous_ref: Option<&st
     "--platform=linux/amd64".to_owned(),
     "--cache-from".to_owned(),
     base_image.to_owned(),
+    "-t".to_owned(),
+    image_ref.to_owned(),
   ];
-  if let Some(prev) = previous_ref {
-    args.push("--cache-from".to_owned());
-    args.push(prev.to_owned());
-  }
-  args.extend(["-t".to_owned(), image_ref.to_owned()]);
   // The build context: /workspace (the Dockerfile + assembled app live
   // there). Cloud Build steps run in /workspace, so `.` is the context.
   // (Live-verification finding, 2026-09-16: without it docker reads
@@ -243,21 +363,13 @@ fn docker_build_args(image_ref: &str, base_image: &str, previous_ref: Option<&st
   args
 }
 
-/// The full Cloud Build config: steps 1–4 above, `images` = the automatic AR
-/// push, `artifacts` = the deterministic result upload, `service_account` =
-/// the least-privilege build identity.
-fn build_config(
-  source: cb::StorageSource,
-  steps: Vec<cb::BuildStep>,
-  images: Vec<String>,
-  artifacts: cb::Artifacts,
-  service_account: &str,
-) -> cb::Build {
+/// A Cloud Build config: `steps`, run AS `service_account`. Neither build
+/// sets `source`, `images` or `artifacts`: each moves files only through the
+/// signed URLs in its steps, so neither depends on what its identity can
+/// read or write in the bucket.
+fn build_config(steps: Vec<cb::BuildStep>, service_account: &str, timeout_secs: i64) -> cb::Build {
   cb::Build::default()
-    .set_source(cb::Source::default().set_storage_source(source))
-    .set_steps(steps)
-    .set_images(images)
-    .set_artifacts(artifacts)
+    .set_steps(escape_substitutions(steps))
     .set_service_account(service_account.to_owned())
     // Builds running AS a custom service account must not use the
     // default LEGACY logging (live-verification finding, 2026-09-16:
@@ -269,39 +381,68 @@ fn build_config(
     .set_options(
       cb::BuildOptions::default().set_logging(cb::build_options::LoggingMode::CloudLoggingOnly),
     )
-    .set_timeout(wkt::Duration::clamp(BUILD_TIMEOUT_SECS, 0))
+    .set_timeout(wkt::Duration::clamp(timeout_secs, 0))
 }
 
-/// Assemble the four build steps for a deployment. Pure — unit-tested.
+/// Cloud Build reads `$NAME` in step args and env as its own substitution,
+/// and refuses a build that names one it doesn't know. We use none, so every
+/// `$` is meant for the shell: `$$` passes it through.
+fn escape_substitutions(steps: Vec<cb::BuildStep>) -> Vec<cb::BuildStep> {
+  let escape = |v: &mut Vec<String>| {
+    for a in v.iter_mut() {
+      *a = a.replace('$', "$$");
+    }
+  };
+  steps
+    .into_iter()
+    .map(|mut step| {
+      escape(&mut step.args);
+      escape(&mut step.env);
+      step
+    })
+    .collect()
+}
+
+/// The user-code build's six steps. Everything from step 3 on runs the
+/// app's code or could be changed by it, so nothing here is a boundary:
+/// what it uploads is checked where it's received. Pure — unit-tested.
 fn build_steps(
   base_image: &str,
   image_ref: &str,
   entry: &str,
-  previous_ref: Option<&str>,
+  source_url: &str,
+  upload_specs: &[UrlSpec],
+  upload_urls: &[String],
 ) -> Vec<cb::BuildStep> {
-  let docker_builder = "gcr.io/cloud-builders/docker".to_owned();
   let dockerfile = generate_dockerfile(base_image);
+  let mut upload_args = vec!["-c".to_owned(), upload_script(upload_specs)];
+  upload_args.extend(upload_urls.iter().cloned());
   vec![
-    // 1. assemble: extracted tarball members → /workspace/app
+    // 1. fetch: the app tarball, by its signed URL → /workspace/app
     cb::BuildStep::default()
-      .set_id("assemble")
-      .set_name(docker_builder.clone())
+      .set_id("fetch")
+      .set_name(DOCKER_BUILDER)
       .set_entrypoint("bash")
-      .set_args(vec!["-c".to_owned(), ASSEMBLE_SCRIPT.to_owned()]),
+      .set_args(vec![
+        "-c".to_owned(),
+        FETCH_SOURCE_SCRIPT.to_owned(),
+        source_url.to_owned(),
+      ]),
     // 2. dockerfile: the shared generator's output
     cb::BuildStep::default()
       .set_id("dockerfile")
-      .set_name(docker_builder.clone())
+      .set_name(DOCKER_BUILDER)
       .set_entrypoint("bash")
       .set_args(dockerfile_write_args(&dockerfile)),
     // 3. build (deps bake at build time — same shape as model (a))
     cb::BuildStep::default()
       .set_id("build")
-      .set_name(docker_builder)
-      .set_args(docker_build_args(image_ref, base_image, previous_ref)),
+      .set_name(DOCKER_BUILDER)
+      .set_args(docker_build_args(image_ref, base_image)),
     // 4. manifest import: run the built image (its ENTRYPOINT is the
     //    sidecar — overridden by `entrypoint: sh`), import in /app,
-    //    manifest lands in the shared /workspace.
+    //    manifest lands in the shared /workspace. Cloud Build runs the
+    //    image it just built, by its tag; it never pulls it.
     cb::BuildStep::default()
       .set_id("manifest")
       .set_name(image_ref.to_owned())
@@ -310,21 +451,54 @@ fn build_steps(
       .set_env(vec![
         "SECTR_MANIFEST=1".to_owned(),
         format!("SECTR_ENTRY={entry}"),
-        "SECTR_MANIFEST_OUT=/workspace/manifest.json".to_owned(),
+        format!("SECTR_MANIFEST_OUT=/workspace/{MANIFEST_JSON}"),
       ])
       .set_args(vec!["-c".to_owned(), MANIFEST_SCRIPT.to_owned()]),
+    // 5. save: the image, as one file for the push build
+    cb::BuildStep::default()
+      .set_id("save")
+      .set_name(DOCKER_BUILDER)
+      .set_args(vec![
+        "save".to_owned(),
+        "-o".to_owned(),
+        format!("/workspace/{IMAGE_TAR}"),
+        image_ref.to_owned(),
+      ]),
+    // 6. upload: each file to its create-only, size-capped signed URL
+    cb::BuildStep::default()
+      .set_id("upload")
+      .set_name(DOCKER_BUILDER)
+      .set_entrypoint("bash")
+      .set_args(upload_args),
   ]
 }
 
-/// The results upload: `manifest.json` + `uses_uv` → the deterministic
-/// prefix. Uses the Build's `artifacts` field (cleaner than a gsutil step —
-/// no extra image pull, and it runs AFTER all steps succeed).
-fn build_artifacts(result_prefix: &str) -> cb::Artifacts {
-  cb::Artifacts::default().set_objects(
-    cb::artifacts::ArtifactObjects::default()
-      .set_location(format!("{result_prefix}/"))
-      .set_paths(vec!["manifest.json".to_owned(), "uses_uv".to_owned()]),
-  )
+/// The push build's two steps. It runs no app code: it downloads the saved
+/// image and pushes it under the one name the server chose. `crane push`
+/// uploads the tar's layers without unpacking them, ignores any names the
+/// tar declares, and refuses a tar holding more than one image. It
+/// authenticates to Artifact Registry as the build's identity. Pure —
+/// unit-tested.
+fn push_steps(image_tar_url: &str, image_ref: &str) -> Vec<cb::BuildStep> {
+  vec![
+    cb::BuildStep::default()
+      .set_id("fetch")
+      .set_name(DOCKER_BUILDER)
+      .set_entrypoint("bash")
+      .set_args(vec![
+        "-c".to_owned(),
+        FETCH_IMAGE_SCRIPT.to_owned(),
+        image_tar_url.to_owned(),
+      ]),
+    cb::BuildStep::default()
+      .set_id("push")
+      .set_name(GCRANE)
+      .set_args(vec![
+        "push".to_owned(),
+        format!("/workspace/{IMAGE_TAR}"),
+        image_ref.to_owned(),
+      ]),
+  ]
 }
 
 /// The Cloud Run Job template: the template IS the deployment —
@@ -437,7 +611,10 @@ pub struct GcpPlatform {
   pub(crate) project_id: String,
   pub(crate) region: String,
   ar_repo: String,
+  /// The user-code build runs AS this. It needs only to write logs.
   build_sa_email: String,
+  /// The push build runs AS this: the one build that can write images.
+  push_sa_email: String,
   /// SA the ensured jobs run AS (least-privilege runtime identity — AR
   /// reader only; the runner dials out and needs nothing else). `None`
   /// on the build-only constructor (E2B backend — it never ensures jobs;
@@ -446,12 +623,17 @@ pub struct GcpPlatform {
   runner_sa_email: Option<String>,
   gcs_bucket: String,
   /// Required at build time (same failure point as [`DockerPlatform`]):
-  /// the runner base image — must live in AR (Cloud Build
-  /// cannot see a VPS-local tag).
+  /// the runner base image. Public (GHCR by default): the user-code build
+  /// pulls it with no credentials.
   runner_base_image: Option<String>,
   pub(crate) runner_server_url: String,
   runner_sidecar_cmd: Vec<String>,
   store: Arc<dyn ArtifactStore>,
+  /// Signs the builds' URLs, as the server's own identity (the
+  /// `sectr-server` key signs locally, with no network call).
+  signer: google_cloud_auth::signer::Signer,
+  /// Deletes the saved image after its push, by signed URL.
+  http: reqwest::Client,
   /// Manifest resolution at spawn (self-healing ensure: the image ref
   /// lives in the composed manifest — same pattern as DockerPlatform).
   pub(crate) registry: Arc<dyn Registry>,
@@ -504,6 +686,9 @@ impl GcpPlatform {
     let build_sa_email = config.gcp_build_sa_email.clone().ok_or_else(|| {
       anyhow::anyhow!("SECTR_GCP_BUILD_SA_EMAIL is required when SECTR_PLATFORM=gcp")
     })?;
+    let push_sa_email = config.gcp_push_sa_email.clone().ok_or_else(|| {
+      anyhow::anyhow!("SECTR_GCP_PUSH_SA_EMAIL is required when SECTR_PLATFORM=gcp")
+    })?;
     let runner_sa_email = if require_runner_sa {
       Some(config.gcp_runner_sa_email.clone().ok_or_else(|| {
         anyhow::anyhow!("SECTR_GCP_RUNNER_SA_EMAIL is required when SECTR_PLATFORM=gcp")
@@ -537,17 +722,23 @@ impl GcpPlatform {
       .build()
       .await
       .map_err(|e| anyhow::anyhow!("connect to Cloud Run Executions: {e}"))?;
+    let signer = google_cloud_auth::credentials::Builder::default()
+      .build_signer()
+      .map_err(|e| anyhow::anyhow!("make a URL signer from the server's credentials: {e}"))?;
     Ok(GcpPlatform {
       project_id,
       region,
       ar_repo: config.gcp_ar_repo.clone(),
       build_sa_email,
+      push_sa_email,
       runner_sa_email,
       gcs_bucket,
       runner_base_image: config.runner_base_image.clone(),
       runner_server_url: config.runner_server_url.clone(),
       runner_sidecar_cmd: config.runner_sidecar_cmd.clone(),
       store,
+      signer,
+      http: reqwest::Client::new(),
       registry,
       builder,
       jobs,
@@ -642,13 +833,28 @@ impl GcpPlatform {
     Ok(output)
   }
 
-  /// The Cloud Build half WITHOUT the platform's deployment-resource step
-  ///: image build → AR push → authoritative manifest →
-  /// results fetch. The gcp platform adds `ensure_job` on top (above);
-  /// the E2B platform adds the E2B template build instead.
+  /// The Cloud Build half WITHOUT the platform's deployment-resource step:
+  /// the user-code build, its results, then the push build. The gcp
+  /// platform adds `ensure_job` on top (above); the E2B platform adds the
+  /// E2B template build instead.
   pub(crate) async fn cloud_build_impl(
     &self,
     req: BuildRequest,
+  ) -> Result<BuildOutput, BuildError> {
+    let attempt = Uuid::new_v4();
+    let prefix = attempt_prefix(req.deployment_id, req.version, attempt);
+    let outcome = self.build_and_push(&req, &prefix).await;
+    // The saved image only carries the build to the push. Delete it
+    // whatever happened: the app's code may have uploaded it even if its
+    // build then failed. The bucket's lifecycle rule catches a miss.
+    self.delete_quietly(format!("{prefix}/{IMAGE_TAR}")).await;
+    outcome
+  }
+
+  async fn build_and_push(
+    &self,
+    req: &BuildRequest,
+    prefix: &str,
   ) -> Result<BuildOutput, BuildError> {
     let base_image = self.runner_base_image.as_deref().ok_or_else(|| {
       BuildError::bare("SECTR_RUNNER_BASE_IMAGE is not configured — no base image to build on")
@@ -657,46 +863,142 @@ impl GcpPlatform {
     let (src_bucket, src_object) = parse_gs_uri(&req.artifact_uri)?;
     if src_bucket != self.gcs_bucket {
       return Err(BuildError::bare(format!(
-        "artifact {src_bucket:?} is not the configured GCS bucket {:?} — the build SA \
-                 only has object access there",
+        "artifact {src_bucket:?} is not the configured GCS bucket {:?} — the server signs \
+                 URLs for that bucket only",
         self.gcs_bucket
       )));
     }
 
-    // --cache-from: base image, then the PREVIOUS deployment's image
-    // ref (platform-named, carried on the request — image refs are
-    // deployment-scoped, so this cannot be derived from `version - 1`).
-    // Best-effort: Cloud Build's docker cache is ephemeral per builder.
-    let previous_ref = req.previous_build_ref.as_deref();
-
-    // The serviceAccount field wants the FULL resource name (bare
-    // emails fail with 'Failed to parse resource name' — live-verification
-    // finding, 2026-09-16); the config value stays an email.
-    let build_sa = format!(
-      "projects/{}/serviceAccounts/{}",
-      self.project_id, self.build_sa_email
-    );
+    // 1. The user-code build. Its identity can only write logs; its files
+    //    move through URLs signed for exactly those objects.
+    let source_url = self
+      .sign(&UrlSpec::get(src_object, BUILD_POLL_TIMEOUT))
+      .await?;
+    let uploads = upload_specs(prefix);
+    let mut upload_urls = Vec::with_capacity(uploads.len());
+    for spec in &uploads {
+      upload_urls.push(self.sign(spec).await?);
+    }
     let build = build_config(
-      cb::StorageSource::default()
-        .set_bucket(src_bucket)
-        .set_object(src_object),
-      build_steps(base_image, &image_ref, &req.entry, previous_ref),
-      vec![image_ref.clone()],
-      build_artifacts(&builds_prefix(
-        &self.gcs_bucket,
-        req.deployment_id,
-        req.version,
-      )),
-      &build_sa,
+      build_steps(
+        base_image,
+        &image_ref,
+        &req.entry,
+        &source_url,
+        &uploads,
+        &upload_urls,
+      ),
+      &self.sa_resource(&self.build_sa_email),
+      BUILD_TIMEOUT_SECS,
     );
+    let finished = self.run_build(build, BUILD_POLL_TIMEOUT).await?;
+    if finished.status != cb::build::Status::Success {
+      let (message, logs_tail) = failure_report(&finished);
+      return Err(BuildError { message, logs_tail });
+    }
 
-    // Submit + poll to completion. NOT the LRO poller: a FAILED build
-    // arrives as an operation ERROR ('Build failed; check build logs'),
-    // which would discard the Build resource that failure_report needs
-    // (live-verification finding, 2026-09-16). Instead: submit once,
-    // take the build id from the operation's metadata, and poll
-    // get_build — which returns the full resource through terminal
-    // states, failed or not.
+    // 2. Its results. The app's code wrote them, so the reads are capped.
+    let result_uri = |file: &str| format!("gs://{}/{prefix}/{file}", self.gcs_bucket);
+    let manifest_bytes = self
+      .store
+      .get_at_most(&result_uri(MANIFEST_JSON), MAX_MANIFEST_BYTES)
+      .await
+      .map_err(|e| BuildError::bare(format!("manifest result fetch: {e}")))?;
+    let imported: Value = serde_json::from_slice(&manifest_bytes)
+      .map_err(|e| BuildError::bare(format!("manifest result is not JSON: {e}")))?;
+    let uses_uv = self
+      .store
+      .get_at_most(&result_uri(USES_UV), MAX_USES_UV_BYTES)
+      .await
+      .map_err(|e| BuildError::bare(format!("uses_uv result fetch: {e}")))?;
+    let uses_uv = matches!(std::str::from_utf8(&uses_uv).map(str::trim), Ok("true"));
+
+    // 3. The push build: no app code, and the only build that can write
+    //    images.
+    let tar_url = self
+      .sign(&UrlSpec::get(
+        format!("{prefix}/{IMAGE_TAR}"),
+        PUSH_POLL_TIMEOUT,
+      ))
+      .await?;
+    let push = build_config(
+      push_steps(&tar_url, &image_ref),
+      &self.sa_resource(&self.push_sa_email),
+      PUSH_TIMEOUT_SECS,
+    );
+    let finished = self.run_build(push, PUSH_POLL_TIMEOUT).await?;
+    if finished.status != cb::build::Status::Success {
+      let (message, logs_tail) = failure_report(&finished);
+      return Err(BuildError {
+        message: format!("pushing the image: {message}"),
+        logs_tail,
+      });
+    }
+
+    Ok(BuildOutput {
+      image_ref,
+      imported_manifest: imported,
+      uses_uv,
+    })
+  }
+
+  /// The serviceAccount field wants the FULL resource name (bare emails
+  /// fail with 'Failed to parse resource name' — live-verification finding,
+  /// 2026-09-16); the config values stay emails.
+  fn sa_resource(&self, email: &str) -> String {
+    format!("projects/{}/serviceAccounts/{email}", self.project_id)
+  }
+
+  /// Sign one URL. The error never includes a URL: a signed URL is a
+  /// credential until it expires.
+  async fn sign(&self, spec: &UrlSpec) -> Result<String, BuildError> {
+    let mut builder = SignedUrlBuilder::for_object(
+      format!("projects/_/buckets/{}", self.gcs_bucket),
+      spec.object.clone(),
+    )
+    .with_method(spec.method.clone())
+    .with_expiration(spec.expiry);
+    for (name, value) in &spec.headers {
+      builder = builder.with_header(*name, value.clone());
+    }
+    builder
+      .sign_with(&self.signer)
+      .await
+      .map_err(|e| BuildError::bare(format!("sign a URL for {:?}: {e}", spec.object)))
+  }
+
+  /// Delete one object, logging (not failing) on error.
+  async fn delete_quietly(&self, object: String) {
+    let url = match self.sign(&UrlSpec::delete(object.clone())).await {
+      Ok(url) => url,
+      Err(e) => {
+        tracing::warn!(%object, error = %e.message, "could not delete a saved build image");
+        return;
+      }
+    };
+    match self.http.delete(url).send().await {
+      Ok(r) if r.status().is_success() || r.status() == reqwest::StatusCode::NOT_FOUND => {}
+      Ok(r) => {
+        tracing::warn!(%object, status = %r.status(), "could not delete a saved build image")
+      }
+      Err(e) => {
+        let e = e.without_url();
+        tracing::warn!(%object, error = %e, "could not delete a saved build image");
+      }
+    }
+  }
+
+  /// Submit a build and poll it to a terminal state. NOT the LRO poller: a
+  /// FAILED build arrives as an operation ERROR ('Build failed; check build
+  /// logs'), which would discard the Build resource that failure_report
+  /// needs (live-verification finding, 2026-09-16). Instead: submit once,
+  /// take the build id from the operation's metadata, and poll get_build —
+  /// which returns the full resource through terminal states, failed or not.
+  async fn run_build(
+    &self,
+    build: cb::Build,
+    poll_timeout: Duration,
+  ) -> Result<cb::Build, BuildError> {
     let op = self
       .builder
       .create_build()
@@ -722,7 +1024,7 @@ impl GcpPlatform {
           op.name
         ))
       })?;
-    let deadline = tokio::time::Instant::now() + BUILD_POLL_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + poll_timeout;
     let finished: cb::Build = loop {
       let b = self
         .builder
@@ -746,44 +1048,13 @@ impl GcpPlatform {
       if tokio::time::Instant::now() >= deadline {
         return Err(BuildError::bare(format!(
           "Cloud Build {build_id} did not finish within {}s",
-          BUILD_POLL_TIMEOUT.as_secs()
+          poll_timeout.as_secs()
         )));
       }
       tokio::time::sleep(Duration::from_secs(5)).await;
     };
     tracing::info!(build = %finished.id, status = %finished.status, "Cloud Build finished");
-
-    if finished.status != cb::build::Status::Success {
-      let (message, logs_tail) = failure_report(&finished);
-      return Err(BuildError { message, logs_tail });
-    }
-
-    // Fetch the build's results from GCS via the EXISTING artifact store.
-    let manifest_bytes = self
-      .store
-      .get_at_most(
-        &manifest_uri(&self.gcs_bucket, req.deployment_id, req.version),
-        MAX_MANIFEST_BYTES,
-      )
-      .await
-      .map_err(|e| BuildError::bare(format!("manifest result fetch: {e}")))?;
-    let imported: Value = serde_json::from_slice(&manifest_bytes)
-      .map_err(|e| BuildError::bare(format!("manifest result is not JSON: {e}")))?;
-    let uses_uv = self
-      .store
-      .get_at_most(
-        &uses_uv_uri(&self.gcs_bucket, req.deployment_id, req.version),
-        MAX_USES_UV_BYTES,
-      )
-      .await
-      .map_err(|e| BuildError::bare(format!("uses_uv result fetch: {e}")))?;
-    let uses_uv = matches!(std::str::from_utf8(&uses_uv).map(str::trim), Ok("true"));
-
-    Ok(BuildOutput {
-      image_ref,
-      imported_manifest: imported,
-      uses_uv,
-    })
+    Ok(finished)
   }
 }
 
@@ -794,10 +1065,11 @@ mod tests {
   const PROJECT: &str = "example-project-123456";
   const REGION: &str = "us-east4";
   const REPO: &str = "sectr-runners";
-  const BUCKET: &str = "sectr-artifacts-example-project-123456";
-  const BASE: &str =
-    "us-east4-docker.pkg.dev/example-project-123456/sectr-runners/sectr-runner-base:v1";
+  const BASE: &str = "ghcr.io/sectr-dev/sectr-runner-base:v1.2.3";
   const SA: &str = "sectr-builder@example-project-123456.iam.gserviceaccount.com";
+  const PUSH_SA: &str = "sectr-pusher@example-project-123456.iam.gserviceaccount.com";
+  const SOURCE_URL: &str = "https://signed.example/org/app/1.tar.gz";
+  const TAR_URL: &str = "https://signed.example/image.tar";
 
   fn deployment() -> Uuid {
     // A fixed id: the assertions below pin exact strings.
@@ -808,19 +1080,49 @@ mod tests {
     ar_image_ref(PROJECT, REGION, REPO, deployment, version)
   }
 
-  fn full_build(deployment: Uuid, version: i64) -> cb::Build {
-    let image_ref = image(deployment, version);
-    let previous = (version > 1).then(|| image(deployment, version - 1));
-    let steps = build_steps(BASE, &image_ref, "agent:agent", previous.as_deref());
+  fn attempt() -> Uuid {
+    Uuid::parse_str("0b5e7a1c-2d3e-4f50-8a6b-7c8d9e0f1a2b").unwrap()
+  }
+
+  fn sa(email: &str) -> String {
+    format!("projects/{PROJECT}/serviceAccounts/{email}")
+  }
+
+  /// A stand-in URL per spec: the signature itself needs the key.
+  fn urls(specs: &[UrlSpec]) -> Vec<String> {
+    specs
+      .iter()
+      .map(|s| format!("https://signed.example/{}", s.object))
+      .collect()
+  }
+
+  fn user_build(deployment: Uuid, version: i64) -> cb::Build {
+    let specs = upload_specs(&attempt_prefix(deployment, version, attempt()));
+    let steps = build_steps(
+      BASE,
+      &image(deployment, version),
+      "agent:agent",
+      SOURCE_URL,
+      &specs,
+      &urls(&specs),
+    );
+    build_config(steps, &sa(SA), BUILD_TIMEOUT_SECS)
+  }
+
+  fn push_build(deployment: Uuid, version: i64) -> cb::Build {
     build_config(
-      cb::StorageSource::default()
-        .set_bucket(BUCKET)
-        .set_object("org/app/1.tar.gz"),
-      steps,
-      vec![image_ref.clone()],
-      build_artifacts(&builds_prefix(BUCKET, deployment, version)),
-      &format!("projects/{PROJECT}/serviceAccounts/{SA}"),
+      push_steps(TAR_URL, &image(deployment, version)),
+      &sa(PUSH_SA),
+      PUSH_TIMEOUT_SECS,
     )
+  }
+
+  fn step<'a>(build: &'a cb::Build, id: &str) -> &'a cb::BuildStep {
+    build
+      .steps
+      .iter()
+      .find(|s| s.id == id)
+      .unwrap_or_else(|| panic!("no step {id:?}"))
   }
 
   // -- naming / layout contract (R3/R4 anchors) --------------------------
@@ -838,12 +1140,15 @@ mod tests {
       "the ref must be a pure function of its inputs"
     );
     assert_eq!(
-      manifest_uri(BUCKET, d, 3),
-      format!("gs://{BUCKET}/builds/{d}/v3/manifest.json")
+      attempt_prefix(d, 3, attempt()),
+      format!("builds/{d}/v3/{}", attempt())
     );
-    assert_eq!(
-      uses_uv_uri(BUCKET, d, 3),
-      format!("gs://{BUCKET}/builds/{d}/v3/uses_uv")
+    // The bucket's lifecycle rule deletes `builds/**/image.tar` (ops repo,
+    // storage.tf): the saved image must keep that name and place.
+    let tar = format!("{}/{IMAGE_TAR}", attempt_prefix(d, 3, attempt()));
+    assert!(
+      tar.starts_with("builds/") && tar.ends_with("/image.tar"),
+      "{tar}"
     );
     assert_eq!(job_id(d), format!("sectr-app-{d}"));
     // Cloud Run job-name rules: lowercase alphanumerics + hyphens, ≤ 63.
@@ -864,73 +1169,62 @@ mod tests {
   // struct-tested, which would require constructing client instances.
 
   #[test]
-  fn build_config_shape_matches_the_plan_spec() {
+  fn the_user_code_build_holds_no_source_registry_or_bucket_access() {
     let d = deployment();
-    let build = full_build(d, 1);
+    let build = user_build(d, 1);
 
-    // source = the tarball already in GCS.
-    let source = build.source.expect("build must carry a source");
-    let storage = match source.source {
-      Some(cb::source::Source::StorageSource(s)) => *s,
-      other => panic!("expected a storage source, got {other:?}"),
-    };
-    assert_eq!(storage.bucket, BUCKET);
-    assert_eq!(storage.object, "org/app/1.tar.gz");
-
-    // Build runs AS the least-privilege build SA (the impersonation
-    // mechanism — sectr-server needs serviceAccountUser
-    // on exactly this SA). The Build API wants the full resource name.
-    assert_eq!(
-      build.service_account,
-      format!("projects/{PROJECT}/serviceAccounts/{SA}")
+    // Files move only through the signed URLs in its steps.
+    assert!(
+      build.source.is_none(),
+      "no `source`: it would read the bucket as the build SA"
+    );
+    assert!(
+      build.images.is_empty(),
+      "no `images`: the user-code build must never push"
+    );
+    assert!(
+      build.artifacts.is_none(),
+      "no `artifacts`: it would write the bucket as the build SA"
     );
 
-    // images field = the automatic AR push of the R4 ref.
-    assert_eq!(build.images, vec![image(d, 1)]);
-
-    // logging mode: CLOUD_LOGGING_ONLY (required with a custom build SA;
-    // see build_config).
+    // Runs AS the build SA, which only writes logs. The Build API wants
+    // the full resource name.
+    assert_eq!(build.service_account, sa(SA));
     let options = build.options.expect("build options must be set");
     assert_eq!(
       options.logging,
       cb::build_options::LoggingMode::CloudLoggingOnly
     );
-
-    // timeout is capped (Cloud Build's default 10 min is too tight for
-    // a cold uv sync).
-    let timeout = build.timeout.expect("build timeout must be set");
-    assert_eq!(timeout.seconds(), BUILD_TIMEOUT_SECS);
-
-    // artifacts = the deterministic result upload.
-    let objects = build.artifacts.expect("artifacts must be set").objects;
-    let objects = objects.expect("artifact objects must be set");
-    assert_eq!(objects.location, format!("gs://{BUCKET}/builds/{d}/v1/"));
-    assert_eq!(objects.paths, vec!["manifest.json", "uses_uv"]);
+    assert_eq!(
+      build.timeout.expect("build timeout must be set").seconds(),
+      BUILD_TIMEOUT_SECS
+    );
   }
 
   #[test]
-  fn build_steps_are_assemble_dockerfile_build_manifest() {
+  fn user_code_build_steps_fetch_build_import_save_upload() {
     let d = deployment();
-    let build = full_build(d, 1);
-    assert_eq!(build.steps.len(), 4, "exactly the plan's four steps");
-    let [assemble, dockerfile, docker_build, manifest] = &build.steps[..] else {
-      panic!("four steps expected");
-    };
+    let build = user_build(d, 1);
+    let ids: Vec<&str> = build.steps.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+      ids,
+      ["fetch", "dockerfile", "build", "manifest", "save", "upload"]
+    );
 
-    // Step 1: assemble the extracted tarball into /workspace/app.
-    assert_eq!(assemble.name, "gcr.io/cloud-builders/docker");
-    assert_eq!(assemble.entrypoint, "bash");
-    let script = &assemble.args[1];
-    assert!(script.contains("mkdir -p /workspace/app"), "{script}");
-    assert!(script.contains("mv -t /workspace/app"), "{script}");
+    // fetch: the tarball by its signed URL, unpacked into /workspace/app.
+    let fetch = step(&build, "fetch");
+    assert_eq!(fetch.name, DOCKER_BUILDER);
+    assert_eq!(fetch.args[2], SOURCE_URL);
+    assert!(fetch.args[1].contains("curl -fsS"), "{}", fetch.args[1]);
+    assert!(
+      fetch.args[1].contains("-C /workspace/app"),
+      "{}",
+      fetch.args[1]
+    );
 
-    // Step 2: the Dockerfile written to /workspace decodes to EXACTLY
-    // what the shared generator produces (byte-identical image content
-    // with DockerPlatform).
-    assert_eq!(dockerfile.entrypoint, "bash");
-    let write_cmd = &dockerfile.args[1];
-    // printf '%s' '<b64>' | base64 -d … — the 4th single-quote-delimited
-    // segment is the embedded dockerfile.
+    // dockerfile: decodes to EXACTLY what the shared generator produces
+    // (byte-identical image content with DockerPlatform).
+    let write_cmd = &step(&build, "dockerfile").args[1];
     let b64 = write_cmd
       .split('\'')
       .nth(3)
@@ -944,29 +1238,27 @@ mod tests {
       "the Cloud Build image content must match the DockerPlatform's"
     );
 
-    // Step 3: docker build tagged with the AR ref, context = /workspace,
-    // arch pinned (R4: Cloud Run is x86_64).
-    assert_eq!(docker_build.name, "gcr.io/cloud-builders/docker");
-    assert!(
-      docker_build
-        .args
-        .contains(&"--platform=linux/amd64".to_owned())
-    );
-    assert!(docker_build.args.contains(&"-t".to_owned()));
-    assert!(docker_build.args.contains(&image(d, 1)));
-    assert!(
-      docker_build
-        .args
-        .contains(&"--network=cloudbuild".to_owned())
-    );
+    // build: tagged with the AR ref, arch pinned (R4), context last, and
+    // cached from the base image only.
+    let docker_build = &step(&build, "build").args;
+    assert!(docker_build.contains(&"--platform=linux/amd64".to_owned()));
+    assert!(docker_build.contains(&"--network=cloudbuild".to_owned()));
+    assert!(docker_build.contains(&image(d, 1)));
+    assert_eq!(docker_build.last(), Some(&".".to_owned()));
+    let cache_from: Vec<&String> = docker_build
+      .iter()
+      .zip(docker_build.iter().skip(1))
+      .filter(|(flag, _)| *flag == "--cache-from")
+      .map(|(_, v)| v)
+      .collect();
     assert_eq!(
-      docker_build.args.last(),
-      Some(&".".to_owned()),
-      "the build context (/workspace) must be the last arg"
+      cache_from,
+      [BASE],
+      "no previous image: reading it needs registry access"
     );
 
-    // Step 4: the built image runs the import with the manifest env;
-    // the step runs the image by ref (no pull — it was just built).
+    // manifest: runs the image just built, by its tag.
+    let manifest = step(&build, "manifest");
     assert_eq!(manifest.name, image(d, 1));
     assert_eq!(
       manifest.entrypoint, "sh",
@@ -981,45 +1273,144 @@ mod tests {
     assert_eq!(env["SECTR_MANIFEST"], "1");
     assert_eq!(env["SECTR_ENTRY"], "agent:agent");
     assert_eq!(env["SECTR_MANIFEST_OUT"], "/workspace/manifest.json");
-    assert!(
-      manifest.args[1].contains("pyproject.toml"),
-      "the uses_uv guard must mirror DockerPlatform's"
-    );
-    assert!(manifest.args[1].contains("sectr.inspect"));
     assert!(manifest.args[1].contains("uv run --no-sync"));
+    assert!(manifest.args[1].contains("sectr.inspect"));
+
+    // save: the image as one file.
+    assert_eq!(
+      step(&build, "save").args,
+      ["save", "-o", "/workspace/image.tar", image(d, 1).as_str()]
+    );
   }
 
   #[test]
-  fn cache_from_orders_base_then_previous_version() {
+  fn uploads_are_create_only_capped_and_under_one_attempt_prefix() {
     let d = deployment();
+    let prefix = attempt_prefix(d, 1, attempt());
+    let specs = upload_specs(&prefix);
+    let objects: Vec<&str> = specs.iter().map(|s| s.object.as_str()).collect();
+    assert_eq!(
+      objects,
+      [
+        format!("{prefix}/image.tar"),
+        format!("{prefix}/manifest.json"),
+        format!("{prefix}/uses_uv"),
+      ]
+    );
+    for (spec, cap) in specs.iter().zip([8u64 << 30, 16 << 20, 64]) {
+      assert_eq!(spec.method, google_cloud_storage::http::Method::PUT);
+      assert_eq!(
+        spec.headers,
+        [
+          ("x-goog-if-generation-match", "0".to_owned()),
+          ("x-goog-content-length-range", format!("0,{cap}")),
+        ],
+        "{}",
+        spec.object
+      );
+      assert!(
+        spec.expiry.as_secs() > BUILD_TIMEOUT_SECS as u64,
+        "a URL must outlive the build that uses it"
+      );
+    }
 
-    // First version: only the base image is a cache source (there is no
-    // previous version of the deployment to point at).
-    let v1 = docker_build_args(&image(d, 1), BASE, None);
-    let positions: Vec<usize> = v1
-      .iter()
-      .enumerate()
-      .filter(|(_, a)| *a == "--cache-from")
-      .map(|(i, _)| i)
-      .collect();
-    assert_eq!(positions.len(), 1, "first version: base image only");
-    assert_eq!(v1[positions[0] + 1], BASE);
+    // The upload step sends each URL exactly the headers it was signed
+    // with (a missing or changed signed header is refused), in order.
+    let build = user_build(d, 1);
+    let upload = step(&build, "upload");
+    assert_eq!(&upload.args[2..], urls(&specs).as_slice());
+    let script = &upload.args[1];
+    for (i, spec) in specs.iter().enumerate() {
+      let file = spec.object.rsplit('/').next().unwrap();
+      let line = script
+        .lines()
+        .find(|l| l.contains(&format!("/workspace/{file} ")))
+        .unwrap_or_else(|| panic!("no upload of {file}: {script}"));
+      assert!(line.ends_with(&format!("\"$${i}\"")), "{line}");
+      for (name, value) in &spec.headers {
+        assert!(line.contains(&format!("-H '{name}: {value}'")), "{line}");
+      }
+    }
   }
 
   #[test]
-  fn cache_from_includes_previous_version_when_one_exists() {
+  fn every_shell_dollar_is_escaped_from_cloud_build_substitution() {
+    for build in [user_build(deployment(), 1), push_build(deployment(), 1)] {
+      for s in &build.steps {
+        for value in s.args.iter().chain(&s.env) {
+          assert!(
+            !value.replace("$$", "").contains('$'),
+            "step {:?} has an unescaped $ (Cloud Build would refuse the build): {value}",
+            s.id
+          );
+        }
+      }
+    }
+    // And the shell still gets its `$0`.
+    let build = user_build(deployment(), 1);
+    assert!(step(&build, "fetch").args[1].contains("\"$$0\""));
+  }
+
+  #[test]
+  fn the_push_build_runs_no_app_code_and_pushes_one_fixed_name() {
     let d = deployment();
-    let v3 = docker_build_args(&image(d, 3), BASE, Some(&image(d, 2)));
-    let positions: Vec<usize> = v3
-      .iter()
-      .enumerate()
-      .filter(|(_, a)| *a == "--cache-from")
-      .map(|(i, _)| i)
-      .collect();
-    assert_eq!(positions.len(), 2);
-    // ORDER: base image first, previous version second.
-    assert_eq!(v3[positions[0] + 1], BASE);
-    assert_eq!(v3[positions[1] + 1], image(d, 2));
+    let build = push_build(d, 1);
+    assert_eq!(build.service_account, sa(PUSH_SA));
+    assert!(build.source.is_none() && build.images.is_empty() && build.artifacts.is_none());
+    assert_eq!(
+      build.timeout.expect("push timeout must be set").seconds(),
+      PUSH_TIMEOUT_SECS
+    );
+    let ids: Vec<&str> = build.steps.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["fetch", "push"]);
+
+    let fetch = step(&build, "fetch");
+    assert_eq!(fetch.name, DOCKER_BUILDER);
+    assert_eq!(fetch.args[2], TAR_URL);
+
+    // crane push: no `docker load` (it would unpack the app's layers
+    // where the build can write images), and the name is the server's.
+    let push = step(&build, "push");
+    assert_eq!(push.name, GCRANE);
+    assert!(
+      GCRANE.contains("@sha256:"),
+      "the push image is pinned by digest"
+    );
+    assert_eq!(
+      push.args,
+      ["push", "/workspace/image.tar", image(d, 1).as_str()]
+    );
+    for s in &build.steps {
+      assert_ne!(
+        s.name,
+        image(d, 1),
+        "the push build never runs the app's image"
+      );
+      assert!(
+        !s.args.iter().any(|a| a.contains("docker load")),
+        "no docker load"
+      );
+    }
+  }
+
+  /// The regression guard: the build that runs the app's code must never
+  /// push or run as the push identity. (The live IAM is checked by the ops
+  /// repo's doctor.)
+  #[test]
+  fn only_the_push_build_can_write_images() {
+    let d = deployment();
+    let user = user_build(d, 1);
+    let push = push_build(d, 1);
+    assert_ne!(user.service_account, push.service_account);
+    assert!(user.images.is_empty());
+    assert!(!user.steps.iter().any(|s| s.name == GCRANE));
+    assert!(
+      !user
+        .steps
+        .iter()
+        .any(|s| s.args.first().is_some_and(|a| a == "push")),
+      "no docker push in the user-code build"
+    );
   }
 
   // -- job spec (step 4 of the plan's spec) -------------------------------
