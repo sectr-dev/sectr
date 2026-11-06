@@ -12,7 +12,7 @@ mod fake;
 mod stderr_tail;
 mod subprocess;
 
-pub use docker::{ContainerRun, DockerSandboxDriver};
+pub use docker::{ContainerRun, DockerSandboxDriver, ListedContainer, OneShotOutput, OneShotRun};
 pub use fake::FakeSandboxDriver;
 pub use stderr_tail::{STDERR_TAIL_BYTES, StderrTail, startup_failure_message};
 pub use subprocess::SubprocessDriver;
