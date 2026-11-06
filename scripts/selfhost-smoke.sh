@@ -9,6 +9,9 @@
 # Builds the three images unless SECTR_SMOKE_REGISTRY names a prefix that already
 # has them: <prefix>/sectr-{runner-base,server,dashboard}:v<version>.
 #
+# With --release, runs once per architecture on the images `just build` made,
+# which are the ones a release goes on to publish.
+#
 # Everything has a unique name and is removed afterward, so this can't touch a
 # real install on the same Docker daemon. Set SECTR_SMOKE_KEEP=1 to keep a failed
 # stack for debugging.
@@ -18,6 +21,21 @@ cd "$root"
 
 ver=$(scripts/set-version.sh --check | sed -n 's/^all manifests agree at //p')
 [ -n "$ver" ] || { echo "selfhost-smoke: the version manifests disagree" >&2; exit 1; }
+
+if [ "${1:-}" = --release ]; then
+  . scripts/lib.sh
+  for arch in "${RELEASE_ARCHS[@]}"; do
+    prefix="sectr-release-smoke-$arch"
+    for image in "${RELEASE_IMAGES[@]}"; do docker tag "$image:v$ver-$arch" "$prefix/$image:v$ver"; done
+    log "$arch"
+    status=0
+    SECTR_SMOKE_REGISTRY="$prefix" "$0" || status=$?
+    for image in "${RELEASE_IMAGES[@]}"; do docker rmi "$prefix/$image:v$ver" >/dev/null; done
+    [ "$status" = 0 ] || exit "$status"
+  done
+  exit 0
+fi
+
 id="smoke-$$"
 tmp="$(mktemp -d)"
 project="sectr-$id"

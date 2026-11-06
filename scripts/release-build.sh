@@ -4,7 +4,8 @@
 #   server/  sectr-server (aarch64 glibc 2.34, --features e2b)
 #   sdk/     sectr wheel + sdist
 #   npm/     one tarball per js/ package (sectr-copilotkit-<ver>.tgz, sectr-0.0.0.tgz)
-#   image.txt  local runner-base image tag (linux/amd64)
+#   image.txt  the local image tags, one per line: sectr-runner-base, sectr-server
+#              and sectr-dashboard, each as :vX.Y.Z-amd64 and :vX.Y.Z-arm64
 # Usage: scripts/release-build.sh [--no-image]
 # Built once; publish-* / deploy-server reuse these. BUILT_FROM_SHA records
 # the commit so the release gate can check they match the tag.
@@ -55,23 +56,39 @@ for d in js/*/; do
 done
 
 if [ "$build_image" = 1 ]; then
-  log "runner base image (linux/amd64)"
+  log "images (${RELEASE_ARCHS[*]})"
   # CI runners are disk-tight: the debug build (from clippy/tests/docs checks)
   # is dead weight by now, and docker needs the space.
   if [ -n "${CI:-}" ]; then rm -rf target/debug; fi
   df -h . >&2 || true
-  tag="sectr-runner-base:v$ver"
-  cache=()
-  # Local layer-cache export needs a docker-container builder; the default
-  # driver already keeps layers in the engine, so re-runs are cached anyway.
-  # Skipped on CI: nothing persists there and mode=max writes every layer to a
-  # disk that is already full of cargo target dirs.
-  if [ -z "${CI:-}" ] && [ "$(docker buildx inspect 2>/dev/null | awk '/^Driver:/ { print $2 }')" != docker ]; then
-    cache=(--cache-from "type=local,src=.cache/buildx" --cache-to "type=local,dest=.cache/buildx,mode=max")
-  fi
-  docker buildx build --platform linux/amd64 -f docker/runner-base.Dockerfile \
-    "${cache[@]}" --load -t "$tag" . >&2
-  echo "$tag" > "$out/image.txt"
+  # Each build adds about 12 GB of layers, and nothing else limits the cache.
+  # Most of the old ones can't be reused anyway, once the crates have changed.
+  docker buildx prune -f --max-used-space 15GB >&2
+  sha=$(git rev-parse HEAD)
+  for image in "${RELEASE_IMAGES[@]}"; do
+    for arch in "${RELEASE_ARCHS[@]}"; do
+      tag="$image:v$ver-$arch"
+      log "$tag"
+      # publish-images.sh pushes and joins plain single-platform images, so
+      # attestations are off by name: --load alone keeps them on some image
+      # stores. It also uses the revision label to check an image is this build.
+      SECONDS=0
+      docker buildx build --platform "linux/$arch" -f "$(image_dockerfile "$image")" \
+        --provenance=false --sbom=false \
+        --label "org.opencontainers.image.source=https://github.com/sectr-dev/sectr" \
+        --label "org.opencontainers.image.version=$ver" \
+        --label "org.opencontainers.image.revision=$sha" \
+        --load -t "$tag" . >&2
+      log "$tag built in ${SECONDS}s"
+      echo "$tag" >> "$out/image.txt"
+    done
+  done
+  # The name the daemon-gated tests look for, in this machine's architecture.
+  case "$(uname -m)" in
+    arm64|aarch64) native=arm64 ;;
+    *) native=amd64 ;;
+  esac
+  docker tag "sectr-runner-base:v$ver-$native" "sectr-runner-base:v$ver"
 fi
 
 ( cd "$out" && find . -type f ! -name SHA256SUMS ! -name BUILT_FROM_SHA | sort | xargs shasum -a 256 > SHA256SUMS )

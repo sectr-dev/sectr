@@ -9,7 +9,10 @@
 #     the right version; each installs (with its peers) and imports, and
 #     @sectr/copilotkit's SectrRunner subclasses the peer's AgentRunner
 #     (and SectrAgent the peer's HttpAgent)
-#   - base image: SDK imports at the right version, sidecar links cleanly
+#   - images, on each architecture: the image and its binary are that
+#     architecture. Base: SDK imports at the right version, sidecar links
+#     cleanly. Server: `--help`. Dashboard: starts and serves its runtime
+#     config, and holds no sharp
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -109,15 +112,54 @@ if check_npm "$tgz" sectr "$shell_ver"; then
   else bad "sectr: npm install failed"; fi
 fi
 
+# elf_machine IMAGE PLATFORM PATH — a binary's ELF machine field, as hex. Emulation
+# runs either architecture, so running a binary doesn't show which one it is.
+elf_machine() { docker run --rm --platform "$2" --entrypoint sh "$1" -c "od -An -tx1 -j18 -N2 $3" | tr -d ' \n'; }
+
 if [ -f "$out/image.txt" ]; then
-  img=$(cat "$out/image.txt")
-  echo "base image $img"
-  got=$(docker run --rm --platform linux/amd64 "$img" python -c 'import importlib.metadata as m, sectr; print(m.version("sectr"))') || got=""
-  [ "$got" = "$ver" ] && ok "SDK in image, version $got" || bad "image SDK version '$got' != $ver"
-  # The sidecar has no --help (it starts serving from env), so check it links.
-  docker run --rm --platform linux/amd64 --entrypoint sh "$img" -c \
-    'test -x /usr/local/bin/sectr-worker && ! ldd /usr/local/bin/sectr-worker | grep -q "not found"' \
-    && ok "sectr-worker present, libraries resolve" || bad "sectr-worker missing or has unresolved libraries"
+  for arch in "${RELEASE_ARCHS[@]}"; do
+    platform="linux/$arch"
+    case "$arch" in amd64) machine=3e00 ;; arm64) machine=b700 ;; esac
+    for image in "${RELEASE_IMAGES[@]}"; do
+      grep -qx "$image:v$ver-$arch" "$out/image.txt" || bad "$image:v$ver-$arch is not in image.txt"
+      got=$(docker image inspect "$image:v$ver-$arch" --format '{{.Architecture}}') || got=""
+      [ "$got" = "$arch" ] || bad "$image:v$ver-$arch is '$got'"
+    done
+
+    img="sectr-runner-base:v$ver-$arch"
+    echo "$img"
+    got=$(docker run --rm --platform "$platform" "$img" python -c 'import importlib.metadata as m, sectr; print(m.version("sectr"))') || got=""
+    [ "$got" = "$ver" ] && ok "SDK in image, version $got" || bad "image SDK version '$got' != $ver"
+    # The sidecar has no --help (it starts serving from env), so check it links.
+    docker run --rm --platform "$platform" --entrypoint sh "$img" -c \
+      'test -x /usr/local/bin/sectr-worker && ! ldd /usr/local/bin/sectr-worker | grep -q "not found"' \
+      && ok "sectr-worker present, libraries resolve" || bad "sectr-worker missing or has unresolved libraries"
+    [ "$(elf_machine "$img" "$platform" /usr/local/bin/sectr-worker)" = "$machine" ] \
+      && ok "sectr-worker is $arch" || bad "sectr-worker is not $arch"
+
+    img="sectr-server:v$ver-$arch"
+    echo "$img"
+    docker run --rm --platform "$platform" "$img" --help >/dev/null \
+      && ok "--help" || bad "$img --help failed"
+    [ "$(elf_machine "$img" "$platform" /usr/local/bin/sectr-server)" = "$machine" ] \
+      && ok "sectr-server is $arch" || bad "sectr-server is not $arch"
+
+    img="sectr-dashboard:v$ver-$arch"
+    echo "$img"
+    docker run --rm --platform "$platform" --entrypoint sh "$img" -c \
+      'test ! -e node_modules/sharp && test ! -e node_modules/@img' \
+      && ok "no sharp or libvips (LGPL)" || bad "sharp or libvips is back in the image"
+    id=$(docker run -d --platform "$platform" -p 127.0.0.1::3000 -e SECTR_PUBLIC_API_URL=https://verify.example "$img")
+    port=$(docker port "$id" 3000/tcp | head -1 | sed 's/.*://')
+    got=""
+    for _ in $(seq 1 60); do
+      got=$(curl -fsS -m 3 "http://127.0.0.1:$port/runtime-config.js" 2>/dev/null) && break
+      sleep 1
+    done
+    [[ "$got" == *'"publicApiUrl":"https://verify.example"'* ]] \
+      && ok "starts and serves its runtime config" || bad "dashboard did not start: $(docker logs --tail 5 "$id" 2>&1)"
+    docker rm -f "$id" >/dev/null
+  done
 fi
 
 [ $fail = 0 ] && echo "artifacts verified" || { echo "artifact verification FAILED" >&2; exit 1; }

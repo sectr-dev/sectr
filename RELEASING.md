@@ -19,7 +19,7 @@ lives in the `justfile`; GitHub workflows are thin wrappers around it.
 | Run one slice of that | `just verify rust\|python\|dashboard\|docs\|js\|conformance` |
 | Run the adapter conformance cases | `just conformance` (`just conformance <filter>` runs a subset of the `adapter/endpoint/scenario/case` ids, e.g. `openai_agents` or `chat/two_turns`; a progress bar on a terminal, a line per case otherwise or with `--output plain`; then a matrix of known failures, the known failures grouped by issue, and the warnings: problems a case notes without failing, grouped by the issue they're filed under or flagged untracked, one example per kind; `--warnings <file>` writes every warning as JSON lines) |
 | Regenerate the conformance projects and relock them | `just conformance-gen` |
-| Run the self-hosted stack end to end | `just selfhost-smoke` (also part of the release's checks; builds the images unless `SECTR_SMOKE_REGISTRY` names a prefix that has them) |
+| Run the self-hosted stack end to end | `just selfhost-smoke` (builds the images unless `SECTR_SMOKE_REGISTRY` names a prefix that has them; a release runs it on both architectures of the images it's about to publish) |
 | Check tools are installed | `just doctor` (`just doctor release` also checks publish/deploy tools and credentials) |
 | Build all release artifacts, no publish | `just build` (`just build no-image` skips the docker image) |
 | Cut a release | `just release patch\|minor\|major` (flags: `--dry-run`, `--require-gh`, `--skip-verify "<reason>"`, `--yes`; `just release --help` lists the stages) |
@@ -83,7 +83,7 @@ inner tier must also pass under the outer ones.
    keychain/env, `wrangler` (optional; `npx` otherwise), and the private ops repo checked out next to this one (`../sectr-ops`, or set
    `SECTR_OPS_DIR`), which holds the hosted deploy and its ssh access. Credentials are never stored in the repo: scripts read
    them from the environment first, then Bitwarden Secrets Manager by secret
-   name (`PYPI_TOKEN`, `NPM_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CF_R2_TOKEN`, plus
+   name (`PYPI_TOKEN`, `NPM_TOKEN`, `GHCR_TOKEN` (a token with `write:packages`), `CLOUDFLARE_ACCOUNT_ID`, `CF_R2_TOKEN`, plus
    the hosted deploy's, listed in the ops repo). `just doctor release` checks every
    one, running the ops repo's own check for the hosted deploy.
 4. `just doctor` (or `just doctor release`) — lists anything missing with a
@@ -95,15 +95,17 @@ inner tier must also pass under the outer ones.
 `dist/` (4 CLI tarballs + checksums, installer, `dist-manifest.json`),
 `server/sectr-server` (aarch64, glibc 2.34, `--features e2b`), `sdk/`
 (wheel + sdist), `npm/` (`sectr-copilotkit-X.Y.Z.tgz`, plus the
-`sectr-0.0.0.tgz` shell, which is outside the lockstep), `image.txt` (local `linux/amd64` runner base image tag), and
+`sectr-0.0.0.tgz` shell, which is outside the lockstep), `image.txt` (the local image tags: `sectr-runner-base`, `sectr-server` and `sectr-dashboard`, each as `:vX.Y.Z-amd64` and `:vX.Y.Z-arm64`), and
 `BUILT_FROM_SHA`. `just verify` builds them and then runs
 `scripts/verify-artifacts.sh` (CLI `--version`, server runs under Oracle
 Linux 9, wheel installs and imports and carries its MIT license metadata,
 each npm tarball holds only `dist/` + README + LICENSE, is MIT at the right
-version, and installs with its peers and imports, image has the SDK and a
-linkable sidecar). The Linux CLI targets are cross-built from the Mac by `dist` via
-`cargo-zigbuild`; the x86_64 base image needs Docker Desktop's Rosetta
-emulation (or `docker buildx` pointed at an amd64 builder).
+version, and installs with its peers and imports, and on both architectures: the images and their binaries are that architecture, the base image has the SDK and a
+linkable sidecar, the server runs `--help`, the dashboard starts and holds no `sharp`). The Linux CLI targets are cross-built from the Mac by `dist` via
+`cargo-zigbuild`; building the images for the other architecture needs Docker Desktop's
+emulation (or `docker buildx` pointed at a builder for it). The six images take about 14
+minutes and 12 GB of Docker's disk on the dev Mac, so `just doctor release` wants 15 GB free,
+and each build first trims the build cache to 15 GB. CI builds only amd64.
 
 Publish stages are scripts in `scripts/`, each re-runnable and each honouring
 `DRY_RUN=1` (prints what it would do): `publish-r2.sh` (then
@@ -113,7 +115,7 @@ version, skipping any already on npm; auth via `NPM_TOKEN`, no
 `--provenance` since that needs a CI identity), `publish-skill.sh` (the
 agent skill, generated from the docs, pushed to the public
 github.com/sectr-dev/skills repo with your `gh` login; a no-op when it's
-already current), `publish-base-image.sh`, `smoke-docs.sh`, and `deploy-server.sh` in the ops repo. They are private recipes (`just publish-r2`
+already current), `publish-images.sh` (pushes the verified images to GHCR with `GHCR_TOKEN`, joins each into a multi-arch `:vX.Y.Z` and `:latest`, and pushes the amd64 base image to Artifact Registry for hosted; nothing is rebuilt), `smoke-docs.sh`, and `deploy-server.sh` in the ops repo. They are private recipes (`just publish-r2`
 …), which `just release` sequences and which you can also run one at a time
 from the dev machine (see "Deploying one component").
 
@@ -143,7 +145,7 @@ from the dev machine (see "Deploying one component").
    ci-full`, 10–25 min) → `tag` → *confirmation prompt* (`--yes` skips) →
    `push` → `merge-back` (main gets the bump; branch deleted) →
    `publish-r2` (+ `curl | sh` smoke check) → `publish-sdk` →
-   `publish-npm` → `publish-skill` → `publish-base-image` → `deploy-server` (health-checked, on-VM rollback) →
+   `publish-npm` → `publish-skill` → `publish-images` → `deploy-server` (health-checked, on-VM rollback) →
    `smoke-docs` (≤ 5 min wait for Cloudflare). Progress is logged in
    `.release/vX.Y.Z.log`.
 4. Optional second opinion: `--require-gh` pushes the branch before tagging
@@ -181,8 +183,9 @@ from the dev machine (see "Deploying one component").
   no longer matches the tag, resume rebuilds the artifacts from a worktree at
   the tag.
 - **Bad release:** the version is burned. Fix forward with the next patch. If
-  the server is the problem, roll it back on the VM (see the ops repo); to re-point the base image, push the previous
-  `:vX` as `:latest`.
+  the server is the problem, roll it back on the VM (see the ops repo); to re-point an image, join the previous version's
+  `:vX.Y.Z-amd64` and `:vX.Y.Z-arm64` as `:latest` with `docker buildx imagetools create`, and on
+  Artifact Registry push the previous `:vX` as `:latest`.
 - **Dev machine unavailable:** there is no GitHub fallback for building or
   deploying — by design there is one release path. Use another machine that
   has the setup above.
@@ -191,7 +194,7 @@ from the dev machine (see "Deploying one component").
 
 For an emergency fix to a single thing, run the stage from the dev machine
 at the version you want live (artifacts come from `just build`, or are built
-if missing): `just publish-base-image [vX.Y.Z]`, `just deploy-server
+if missing): `just publish-images [vX.Y.Z]`, `just deploy-server
 [vX.Y.Z]`, `just publish-sdk [vX.Y.Z]`, `just publish-npm [vX.Y.Z]`, `just
 publish-r2 [vX.Y.Z]`. The agent skill isn't tied to a release at all: `just
 publish-skill` brings github.com/sectr-dev/skills up to date with the docs

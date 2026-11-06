@@ -18,8 +18,9 @@
 //! Image-tag convention all platforms must follow (the R4 contract anchor):
 //! `sectr-app-<deployment-id>:v<version>` for docker tags; remote registries
 //! append their repo path but keep the `sectr-app-<id>:v<version>` tail.
-//! Target architecture: linux/amd64 (Cloud Run's default; the base image is
-//! published for amd64 only).
+//! Target architecture: linux/amd64 for the remote builders (Cloud Run's default,
+//! and the only base image in Artifact Registry). The Docker backend builds for
+//! its daemon's architecture: the base image on GHCR is amd64 and arm64.
 
 pub mod docker;
 #[cfg(feature = "e2b")] // the E2B sandbox execution backend

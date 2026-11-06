@@ -49,6 +49,22 @@ if [ "$tier" = release ]; then
   cred "BWS_ACCESS_TOKEN" '[ -n "${BWS_ACCESS_TOKEN:-}" ]' "export BWS_ACCESS_TOKEN (keychain/env; never in the repo)"
   need npm "brew install node@22 (publish-npm)"
 
+  # A build uses about 12 GB of each. Running out partway shows up as something
+  # else: when Postgres can't start, the error is that its name won't resolve.
+  echo "disk:"
+  disk_ok() { # label, free KB, hint
+    local gb=$(($2 / 1048576))
+    if [ "$gb" -ge 15 ]; then printf '  ok       %s (%s GB free)\n' "$1" "$gb"
+    else printf '  MISSING  %s has %s GB free, and a release needs 15  ->  %s\n' "$1" "$gb" "$3"; ok=0; fi
+  }
+  disk_ok "this disk" "$(df -k . | awk 'NR==2 { print $4 }')" "free some space, for example with cargo clean"
+  docker_kb=$(docker run --rm alpine:3 df -k / 2>/dev/null | awk 'NR==2 { print $4 }')
+  if [ -n "$docker_kb" ]; then
+    disk_ok "Docker's disk" "$docker_kb" "docker buildx prune --max-used-space 15GB, or raise the limit in Docker Desktop"
+  else
+    echo "  MISSING  Docker's free space  ->  check that docker run works"; ok=0
+  fi
+
   echo "release credentials (environment, else Bitwarden Secrets Manager by name):"
   bw_keys=""
   if have bws && have jq && [ -n "${BWS_ACCESS_TOKEN:-}" ]; then
@@ -63,6 +79,7 @@ if [ "$tier" = release ]; then
   }
   secret_ok PYPI_TOKEN UV_PUBLISH_TOKEN                # publish-sdk
   secret_ok NPM_TOKEN                                  # publish-npm: @sectr scope + the unscoped sectr
+  secret_ok GHCR_TOKEN                                 # publish-images: a token with write:packages
   secret_ok CLOUDFLARE_ACCOUNT_ID                      # publish-r2 (wrangler)
   secret_ok CF_R2_TOKEN CLOUDFLARE_API_TOKEN           # publish-r2: R2 Edit on sectr-releases
 

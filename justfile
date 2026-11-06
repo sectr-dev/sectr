@@ -71,6 +71,11 @@ release-resume *args:
 selfhost-smoke:
     scripts/selfhost-smoke.sh
 
+# The same, once per architecture on the images `just build` made.
+[private]
+selfhost-smoke-release:
+    scripts/selfhost-smoke.sh --release
+
 # Back out a release before its tag is pushed (deletes the release branch and local tag).
 release-abort version="":
     scripts/release.sh abort {{version}}
@@ -224,7 +229,7 @@ check-docs:
 # gate's marker) — but only for a clean tree, since the marker vouches for
 # exactly the committed SHA.
 [private]
-ci-full: check-version check-rust-full check-python check-examples conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts selfhost-smoke
+ci-full: check-version check-rust-full check-python check-examples conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts selfhost-smoke-release
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "${E2E_STAGING:-}" = 1 ]; then just e2e-staging; fi
@@ -278,8 +283,8 @@ publish-skill version="":
     scripts/publish-skill.sh {{version}}
 
 [private]
-publish-base-image version="":
-    scripts/publish-base-image.sh {{version}}
+publish-images version="":
+    scripts/publish-images.sh {{version}}
 
 [private]
 deploy-server version="":
