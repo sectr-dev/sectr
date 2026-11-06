@@ -63,7 +63,8 @@ stage_cut() {
     sdk-python/tests/conformance/gen/uv.lock examples/*/uv.lock \
     dashboard/package.json dashboard/package-lock.json \
     docs-site/package.json docs-site/package-lock.json \
-    js/copilotkit/package.json js/copilotkit/package-lock.json
+    js/copilotkit/package.json js/copilotkit/package-lock.json \
+    selfhost/.env.example
   git commit -q -m "release: v$VER"
   # Anything left over means the list above drifted from set-version.sh.
   [ -z "$(git status --porcelain)" ] || { git status --porcelain >&2; die "unstaged changes left after the release commit (file list drifted from set-version.sh)"; }

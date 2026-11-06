@@ -1,0 +1,86 @@
+# Self-hosted Sectr. Run ./setup.sh once, then: docker compose up -d
+# The guide: https://docs.sectr.dev/guides/self-hosting/
+
+services:
+  # The bundled database. To use your own, set SECTR_PG_URL and take `postgres`
+  # out of COMPOSE_PROFILES in .env.
+  postgres:
+    image: postgres:16
+    profiles: [postgres]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sectr
+      POSTGRES_DB: sectr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    # Only the internal network: runners, which run user code, have no route here.
+    networks: [sectr-internal]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U sectr -d sectr]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Runs once and exits, so `up` pulls the image every deploy builds on before
+  # the first deploy needs it.
+  runner-base:
+    image: ${SECTR_REGISTRY:-ghcr.io/sectr-dev}/sectr-runner-base:v${SECTR_VERSION:?run ./setup.sh first, or set SECTR_VERSION in .env}
+    pull_policy: missing
+    command: ["true"]
+    network_mode: none
+    restart: "no"
+
+  sectr-server:
+    image: ${SECTR_REGISTRY:-ghcr.io/sectr-dev}/sectr-server:v${SECTR_VERSION:?run ./setup.sh first, or set SECTR_VERSION in .env}
+    pull_policy: missing
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+      runner-base:
+        condition: service_completed_successfully
+    # Every setting in .env reaches the server, including the optional ones.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SECTR_PG_URL: ${SECTR_PG_URL:?run ./setup.sh first, or set SECTR_PG_URL in .env}
+      SECTR_RUNNER_BASE_IMAGE: ${SECTR_REGISTRY:-ghcr.io/sectr-dev}/sectr-runner-base:v${SECTR_VERSION}
+      SECTR_RUNNER_NETWORK: ${SECTR_RUNNER_NETWORK:-sectr-runners}
+      SECTR_RUNNER_SERVER_URL: ${SECTR_RUNNER_SERVER_URL:-ws://sectr-server:8080/ingest}
+      SECTR_ARTIFACTS_DIR: /var/lib/sectr/artifacts
+      SECTR_BUILD_DIR: /var/lib/sectr/build
+    ports:
+      - "${SECTR_SERVER_PORT:-8080}:8080"
+    volumes:
+      # Effectively root on this machine: the server builds and runs agents
+      # through it. See the guide.
+      - ${SECTR_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - artifacts:/var/lib/sectr/artifacts
+      - build:/var/lib/sectr/build
+    networks: [sectr-internal, sectr-runners]
+
+  sectr-dashboard:
+    image: ${SECTR_REGISTRY:-ghcr.io/sectr-dev}/sectr-dashboard:v${SECTR_VERSION:?run ./setup.sh first, or set SECTR_VERSION in .env}
+    pull_policy: missing
+    restart: unless-stopped
+    depends_on: [sectr-server]
+    environment:
+      SECTR_PUBLIC_API_URL: ${SECTR_PUBLIC_API_URL:-http://localhost:8080}
+    ports:
+      - "${SECTR_DASHBOARD_PORT:-3000}:3000"
+    networks: [sectr-internal]
+
+networks:
+  sectr-internal:
+  # The server creates runner containers on this network by name, so its name
+  # is fixed rather than prefixed with the compose project's.
+  sectr-runners:
+    name: ${SECTR_RUNNER_NETWORK:-sectr-runners}
+
+volumes:
+  postgres:
+  artifacts:
+  build:

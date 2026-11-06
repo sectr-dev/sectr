@@ -19,6 +19,7 @@ lives in the `justfile`; GitHub workflows are thin wrappers around it.
 | Run one slice of that | `just verify rust\|python\|dashboard\|docs\|js\|conformance` |
 | Run the adapter conformance cases | `just conformance` (`just conformance <filter>` runs a subset of the `adapter/endpoint/scenario/case` ids, e.g. `openai_agents` or `chat/two_turns`; a progress bar on a terminal, a line per case otherwise or with `--output plain`; then a matrix of known failures, the known failures grouped by issue, and the warnings: problems a case notes without failing, grouped by the issue they're filed under or flagged untracked, one example per kind; `--warnings <file>` writes every warning as JSON lines) |
 | Regenerate the conformance projects and relock them | `just conformance-gen` |
+| Run the self-hosted stack end to end | `just selfhost-smoke` (also part of the release's checks; builds the images unless `SECTR_SMOKE_REGISTRY` names a prefix that has them) |
 | Check tools are installed | `just doctor` (`just doctor release` also checks publish/deploy tools and credentials) |
 | Build all release artifacts, no publish | `just build` (`just build no-image` skips the docker image) |
 | Cut a release | `just release patch\|minor\|major` (flags: `--dry-run`, `--require-gh`, `--skip-verify "<reason>"`, `--yes`; `just release --help` lists the stages) |
