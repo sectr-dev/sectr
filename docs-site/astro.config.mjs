@@ -184,6 +184,7 @@ export default defineConfig({
                             label: "Approvals (human in the loop)",
                             link: "/guides/approvals/",
                         },
+                        { label: "Self-hosting", link: "/guides/self-hosting/" },
                         // {
                         //     label: "Choosing a framework",
                         //     link: "/guides/framework-adapters/",

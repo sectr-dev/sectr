@@ -6,17 +6,16 @@
 #   - SECTR_PG_URL (Neon direct / compose Postgres — LISTEN/NOTIFY needs an
 #     unpooled connection)
 #   - /var/run/docker.sock mounted: runner spawn + deploy builds drive the
-#     host daemon through it (the MVP's documented security surface)
-#   - SECTR_BUILD_DIR bind-mounted AT THE SAME PATH it is configured with:
-#     the deploy step bind-mounts paths under it, and the daemon resolves
-#     bind-mount SOURCES in its own namespace, not the container's
+#     host daemon through it (the documented security surface)
 # syntax=docker/dockerfile:1
 FROM rust:1-slim-bookworm AS build
+# One target dir per architecture: a release builds this image for both.
+ARG TARGETARCH
 WORKDIR /src
 COPY Cargo.toml Cargo.lock /src/
 COPY crates /src/crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+    --mount=type=cache,id=sectr-server-target-$TARGETARCH,target=/src/target \
     cargo build --release -p sectr-server \
     && cp /src/target/release/sectr-server /usr/local/bin/sectr-server
 
@@ -24,4 +23,4 @@ FROM debian:bookworm-slim
 # CA bundle comes from the build stage (same distro) — no apt in runtime.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /usr/local/bin/sectr-server /usr/local/bin/sectr-server
-ENTRYPOINT ["/usr/local/bin/sectr-server", "--serve"]
+ENTRYPOINT ["/usr/local/bin/sectr-server", "serve"]

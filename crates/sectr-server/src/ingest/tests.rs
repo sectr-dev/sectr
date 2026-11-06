@@ -85,6 +85,8 @@ fn test_config(lease_ttl_secs: u64) -> crate::config::ServerConfig {
     runner_sidecar_cmd: vec!["/usr/local/bin/sectr-worker".into()],
     runner_image: None,
     runner_base_image: None,
+    runner_network: None,
+    runner_resources: Default::default(),
     build_dir: "/tmp/sectr-build".into(),
     dashboard_url: "https://app.sectr.test".into(),
   }
@@ -1287,8 +1289,7 @@ async fn real_container_runs_turns_end_to_end() {
   let Some((w, spawner)) = world_docker(30).await else {
     return;
   };
-  let driver = spawner.driver();
-  let name = crate::platform::docker::runner_container_name(w.session);
+  let seen = watch_runners(spawner.driver().clone(), w.session);
 
   // Turn 1: the container spawned, dialed in, ran the turn in-container.
   wait_tail(
@@ -1302,21 +1303,8 @@ async fn real_container_runs_turns_end_to_end() {
   )
   .await;
   wait_lease_gone(&w).await;
-  assert!(
-    driver.exists(&name).await.unwrap(),
-    "container alive mid-session"
-  );
-  // ...torn down by the sentinel:
-  for _ in 0..60 {
-    if !driver.exists(&name).await.unwrap() {
-      break;
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-  }
-  assert!(
-    !driver.exists(&name).await.unwrap(),
-    "sentinel must tear the container down"
-  );
+  wait_runners_gone(spawner.driver(), w.session).await;
+  assert_eq!(seen.names().len(), 1, "one container ran turn 1");
 
   // Turn 2: cold re-invoke — a fresh container, same session.
   let (status, _) = post(
@@ -1339,16 +1327,64 @@ async fn real_container_runs_turns_end_to_end() {
     ],
   )
   .await;
-  for _ in 0..60 {
-    if !driver.exists(&name).await.unwrap() {
-      break;
+  wait_runners_gone(spawner.driver(), w.session).await;
+  assert_eq!(seen.names().len(), 2, "turn 2 ran in a fresh container");
+}
+
+/// The containers seen for one session, by name, while a test runs.
+struct RunnerWatch {
+  names: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+  task: tokio::task::JoinHandle<()>,
+}
+
+impl RunnerWatch {
+  fn names(&self) -> Vec<String> {
+    self.names.lock().unwrap().iter().cloned().collect()
+  }
+}
+
+impl Drop for RunnerWatch {
+  fn drop(&mut self) {
+    self.task.abort();
+  }
+}
+
+/// Containers are short-lived, so a test can't look them up once afterward:
+/// poll the session's label while the turn runs.
+fn watch_runners(driver: DockerSandboxDriver, session: uuid::Uuid) -> RunnerWatch {
+  let names = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+  let seen = names.clone();
+  let task = tokio::spawn(async move {
+    loop {
+      if let Ok(listed) = driver
+        .list_by_label("sectr.session", &session.to_string())
+        .await
+      {
+        seen
+          .lock()
+          .unwrap()
+          .extend(listed.into_iter().map(|c| c.name));
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+  });
+  RunnerWatch { names, task }
+}
+
+/// Wait until the session has no container left, in any state.
+async fn wait_runners_gone(driver: &DockerSandboxDriver, session: uuid::Uuid) {
+  let mut remaining = Vec::new();
+  for _ in 0..200 {
+    remaining = driver
+      .list_by_label("sectr.session", &session.to_string())
+      .await
+      .unwrap();
+    if remaining.is_empty() {
+      return;
     }
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
   }
-  assert!(
-    !driver.exists(&name).await.unwrap(),
-    "turn 2's container torn down too"
-  );
+  panic!("the session's containers must be gone at the boundary: {remaining:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1426,6 +1462,19 @@ fn multipart_body(tarball: &[u8], manifest_toml: &str) -> (String, Vec<u8>) {
 /// the test drives the REAL deploy pipeline (multipart upload → build →
 /// activate) and then runs a session against the built image.
 async fn world_deploy(lease_ttl_secs: u64) -> Option<World> {
+  world_deploy_on(lease_ttl_secs, E2E_IMAGE, "172.17.0.1", |_| {})
+    .await
+    .map(|(world, _)| world)
+}
+
+/// [`world_deploy`] on a chosen base image, dialing the server at `host`,
+/// with the config adjusted by `configure`.
+async fn world_deploy_on(
+  lease_ttl_secs: u64,
+  base_image: &str,
+  host: &str,
+  configure: impl FnOnce(&mut crate::config::ServerConfig),
+) -> Option<(World, Arc<crate::platform::DockerPlatform>)> {
   let store: PgStore = test_pg::fresh_store().await?;
   let registry: Arc<dyn Registry> = Arc::new(store.registry());
   let journal: Arc<dyn sectr_common::journal::Journal> = Arc::new(store.journal());
@@ -1449,12 +1498,13 @@ async fn world_deploy(lease_ttl_secs: u64) -> Option<World> {
   let ttl = chrono::Duration::seconds(lease_ttl_secs as i64);
   let driver = DockerSandboxDriver::connect_env().expect("docker");
   let mut config = test_config(lease_ttl_secs);
-  config.runner_base_image = Some(E2E_IMAGE.to_owned());
-  config.runner_server_url = format!("ws://172.17.0.1:{}/ingest", addr.port());
+  config.runner_base_image = Some(base_image.to_owned());
+  config.runner_server_url = format!("ws://{host}:{}/ingest", addr.port());
   config.build_dir = std::env::temp_dir()
     .join(format!("sectr-build-{}", uuid::Uuid::now_v7()))
     .to_string_lossy()
     .into_owned();
+  configure(&mut config);
 
   let artifact_store: Arc<dyn sectr_common::drivers::ArtifactStore> =
     Arc::new(sectr_common::drivers::FilesystemArtifactStore::new(
@@ -1496,18 +1546,21 @@ async fn world_deploy(lease_ttl_secs: u64) -> Option<World> {
     tokio::spawn(async move { axum::serve(listener, server_router).await.expect("server") });
   }
 
-  Some(World {
-    app: router,
-    hub,
-    spawner: Arc::new(AcceptedSpawner::default()),
-    platform_key: platform,
-    registry,
-    journal,
-    pool: store.pool().clone(),
-    session: uuid::Uuid::nil(), // set by the test after creation
-    deployment_id: uuid::Uuid::nil(),
-    addr,
-  })
+  Some((
+    World {
+      app: router,
+      hub,
+      spawner: Arc::new(AcceptedSpawner::default()),
+      platform_key: platform,
+      registry,
+      journal,
+      pool: store.pool().clone(),
+      session: uuid::Uuid::nil(), // set by the test after creation
+      deployment_id: uuid::Uuid::nil(),
+      addr,
+    },
+    spawner,
+  ))
 }
 
 /// Deploy E2E: `POST /deployments` (multipart tarball + sectr.toml) runs the
@@ -1633,17 +1686,7 @@ async fn deploy_builds_an_image_and_runs_it() {
 
   // 3. The sentinel tore the container down.
   let driver = DockerSandboxDriver::connect_env().unwrap();
-  let name = crate::platform::docker::runner_container_name(w.session);
-  for _ in 0..60 {
-    if !driver.exists(&name).await.unwrap() {
-      break;
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-  }
-  assert!(
-    !driver.exists(&name).await.unwrap(),
-    "the built container must be torn down at the sentinel"
-  );
+  wait_runners_gone(&driver, w.session).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,8 +1702,7 @@ async fn deploy_builds_an_image_and_runs_it() {
 ///      through the RESTARTED binary, follow-up turns);
 ///   2. an approval decision across the restart re-spawns a fresh container
 ///      (the in-memory grant map died with the process — the turn's
-///      token is gone, the deterministic container name collides with the
-///      orphan, `remove-if-exists` wins);
+///      token is gone, and the new turn's container has its own name);
 ///   3. a mid-turn crash is reclaimed by the reconciler (the hung runner
 ///      holds its SSE open — no stream end, so the ENGINE cannot synthesize
 ///      the turn end; only the lease expiry can) and the session stays
@@ -2098,9 +2140,13 @@ async fn server_restart_durability_end_to_end() {
   // Best-effort cleanup of the three runners, without asserting:
   let driver = DockerSandboxDriver::connect_env().unwrap();
   for s in [s_complete, s_approve, s_hang] {
-    let _ = driver
-      .kill(&crate::platform::docker::runner_container_name(s))
-      .await;
+    for container in driver
+      .list_by_label("sectr.session", &s.to_string())
+      .await
+      .unwrap_or_default()
+    {
+      let _ = driver.kill(&container.name).await;
+    }
   }
 
   drop(server); // the guard kills + reaps
@@ -2163,3 +2209,5 @@ async fn two_concurrent_turns_on_one_deployment() {
   assert_eq!(a_events[2].seq, 2);
   assert_eq!(b_events[2].seq, 2);
 }
+
+mod docker;

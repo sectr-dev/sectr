@@ -101,9 +101,8 @@ struct Grant {
   lease_id: Option<Uuid>,
   assignment: Option<Assignment>,
   /// The platform's OPAQUE handle for the CURRENT invocation's process
-  /// (Cloud Run: the execution resource name; docker: None — it manages
-  /// its own lifecycle via deterministic names). Consumed by the
-  /// boundary teardown. Lives exactly as long as the turn.
+  /// (Cloud Run: the execution resource name; docker: the container name).
+  /// Consumed by the boundary teardown. Lives exactly as long as the turn.
   execution: Option<String>,
 }
 
@@ -1047,8 +1046,8 @@ impl crate::dispatch::TurnDispatcher for SidecarDispatcher {
           Ok(handle) => {
             spawn_span.record("outcome", "ok");
             // Carry the platform's opaque handle on the grant
-            // (Cloud Run: the execution name — the boundary
-            // teardown cancels it; docker: None).
+            // (Cloud Run: the execution name; docker: the container
+            // name — the boundary teardown uses it).
             self.hub.store_execution(session, handle).await;
           }
           Err(e) => {

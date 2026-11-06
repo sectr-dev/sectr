@@ -18,8 +18,9 @@
 //! Image-tag convention all platforms must follow (the R4 contract anchor):
 //! `sectr-app-<deployment-id>:v<version>` for docker tags; remote registries
 //! append their repo path but keep the `sectr-app-<id>:v<version>` tail.
-//! Target architecture: linux/amd64 (Cloud Run's default; the base image is
-//! published for amd64 only).
+//! Target architecture: linux/amd64 for the remote builders (Cloud Run's default,
+//! and the only base image in Artifact Registry). The Docker backend builds for
+//! its daemon's architecture: the base image on GHCR is amd64 and arm64.
 
 pub mod docker;
 #[cfg(feature = "e2b")] // the E2B sandbox execution backend
@@ -42,6 +43,20 @@ pub use e2b::E2bPlatform;
 #[cfg(feature = "gcp")]
 pub use gcp_build::GcpPlatform;
 
+/// The host a runner-server URL points at (`ws://ingest.sectr.dev/ingest`
+/// → `ingest.sectr.dev`). Backends tag their runners with it.
+pub(crate) fn server_host_of(runner_server_url: &str) -> anyhow::Result<String> {
+  reqwest::Url::parse(runner_server_url)
+    .ok()
+    .and_then(|u| u.host_str().map(str::to_owned))
+    .ok_or_else(|| {
+      anyhow::anyhow!(
+        "SECTR_RUNNER_SERVER_URL {runner_server_url:?} has no host (runners are tagged with it \
+         so the orphan reaper only touches its own)"
+      )
+    })
+}
+
 /// The per-backend runner platform: build (deploy path) + spawn/teardown
 /// (dispatch/ingest path). One object, selected by the backend flag.
 #[async_trait]
@@ -63,11 +78,9 @@ pub trait RunnerPlatform: Send + Sync {
   /// Model (b): ensure-job-if-absent (self-healing) + run-execution with
   /// per-execution env (ingest URL + the per-turn token). Fire-and-forget
   /// — the sidecar dials the ingest path; completion arrives via ingest.
-  /// Returns the platform's OPAQUE handle for the running invocation
-  /// (`Some` for backends whose teardown needs it — Cloud Run's execution
-  /// resource name; `None` when the platform manages its own lifecycle,
-  /// e.g. docker's deterministic container names). No platform types leak
-  /// past this seam.
+  /// Returns the platform's OPAQUE handle for the running invocation:
+  /// Cloud Run's execution resource name, the E2B sandbox id, or the Docker
+  /// container name. No platform types leak past this seam.
   async fn spawn(
     &self,
     session: Uuid,
@@ -77,8 +90,8 @@ pub trait RunnerPlatform: Send + Sync {
   ) -> Result<Option<String>, DispatchError>;
   /// Turn-boundary teardown. `handle` = whatever [`spawn`](Self::spawn)
   /// returned for the CURRENT invocation, carried by the hub's grant
-  /// (`None` when the platform manages its own lifecycle). Model (a):
-  /// kill the container by deterministic name. Model (b): cancel the
+  /// (`None` when no spawn result was recorded: nothing to tear down).
+  /// Model (a): kill the container the handle names. Model (b): cancel the
   /// execution — only meaningful on suspension/reclaim; the sentinel
   /// ends the execution by itself, so canceling an already-finished
   /// execution is a no-op. Log-not-fail, idempotent.
@@ -173,5 +186,23 @@ impl BuildError {
       message: message.into(),
       logs_tail: String::new(),
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn server_host_is_the_runner_url_host() {
+    assert_eq!(
+      server_host_of("wss://ingest.sectr.dev/ingest").unwrap(),
+      "ingest.sectr.dev"
+    );
+    assert_eq!(
+      server_host_of("ws://172.17.0.1:8080/ingest").unwrap(),
+      "172.17.0.1"
+    );
+    assert!(server_host_of("not a url").is_err());
   }
 }

@@ -29,6 +29,7 @@ DASH_LOCK=dashboard/package-lock.json
 DOCS_LOCK=docs-site/package-lock.json
 NPM_PACKAGE_JSON=js/copilotkit/package.json
 NPM_LOCK=js/copilotkit/package-lock.json
+SELFHOST_ENV=selfhost/.env.example
 
 fail() { echo "error: $*" >&2; exit 1; }
 
@@ -73,6 +74,15 @@ EOF
 # Rewrite the version in all three lockstep manifests.
 set_version() {
     local VER=$1
+
+    python3 - "$SELFHOST_ENV" "$VER" <<'EOF'
+import sys, re
+path, ver = sys.argv[1], sys.argv[2]
+text = open(path).read()
+new, n = re.subn(r'^SECTR_VERSION=.*$', 'SECTR_VERSION=' + ver, text, count=1, flags=re.M)
+assert n == 1, "SECTR_VERSION not found"
+open(path, "w").write(new)
+EOF
 
     python3 - "$CARGO_TOML" "$VER" <<'EOF'
 import sys, re
@@ -179,7 +189,8 @@ EOF
     DL=$(read_lock "$DASH_LOCK")
     TDL=$(read_lock "$DOCS_LOCK")
     JL=$(read_lock "$NPM_LOCK")
-    for entry in "$CARGO_TOML:$C" "$CARGO_LOCK:$L" "$PYPROJECT:$P" "$PACKAGE_JSON:$N" "$DOCS_PACKAGE_JSON:$D" "$DASH_LOCK:$DL" "$DOCS_LOCK:$TDL" "$NPM_PACKAGE_JSON:$J" "$NPM_LOCK:$JL"; do
+    SE=$(sed -n 's/^SECTR_VERSION=//p' "$SELFHOST_ENV")
+    for entry in "$CARGO_TOML:$C" "$CARGO_LOCK:$L" "$PYPROJECT:$P" "$PACKAGE_JSON:$N" "$DOCS_PACKAGE_JSON:$D" "$DASH_LOCK:$DL" "$DOCS_LOCK:$TDL" "$NPM_PACKAGE_JSON:$J" "$NPM_LOCK:$JL" "$SELFHOST_ENV:$SE"; do
         name=${entry%%:*}; ver=${entry#*:}
         echo "$name: ${ver:-<missing>}"
         if [[ -z "$ver" ]]; then status=1

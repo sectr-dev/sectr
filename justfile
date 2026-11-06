@@ -67,6 +67,15 @@ release *args:
 release-resume *args:
     scripts/release.sh resume {{args}}
 
+# The self-hosted stack end to end: compose, a deployed app, approval, secrets, runner isolation, external Postgres. Needs Docker.
+selfhost-smoke:
+    scripts/selfhost-smoke.sh
+
+# The same, once per architecture on the images `just build` made.
+[private]
+selfhost-smoke-release:
+    scripts/selfhost-smoke.sh --release
+
 # Back out a release before its tag is pushed (deletes the release branch and local tag).
 release-abort version="":
     scripts/release.sh abort {{version}}
@@ -181,6 +190,9 @@ check-rust-full:
     just services-up
     trap 'just services-down' EXIT
     docker pull postgres:16 >/dev/null
+    # The daemon-gated tests find a non-default socket (Docker Desktop's)
+    # only through DOCKER_HOST, and otherwise skip without saying so.
+    export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{"{{"}}.Endpoints.docker.Host{{"}}"}}')}"
     cargo fmt --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo test --workspace --all-features
@@ -217,7 +229,7 @@ check-docs:
 # gate's marker) — but only for a clean tree, since the marker vouches for
 # exactly the committed SHA.
 [private]
-ci-full: check-version check-rust-full check-python check-examples conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts
+ci-full: check-version check-rust-full check-python check-examples conformance check-schema check-dashboard check-docs check-js release-build verify-artifacts selfhost-smoke-release
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "${E2E_STAGING:-}" = 1 ]; then just e2e-staging; fi
@@ -271,8 +283,8 @@ publish-skill version="":
     scripts/publish-skill.sh {{version}}
 
 [private]
-publish-base-image version="":
-    scripts/publish-base-image.sh {{version}}
+publish-images version="":
+    scripts/publish-images.sh {{version}}
 
 [private]
 deploy-server version="":

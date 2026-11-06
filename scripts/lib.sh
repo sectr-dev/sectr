@@ -82,3 +82,21 @@ need_artifacts() {
   [ -f "$(artifacts_dir "$1")/BUILT_FROM_SHA" ] \
     || die "no build for v$1 at $(artifacts_dir "$1") — run: just build"
 }
+
+# The images a release builds and publishes, each once per architecture, tagged
+# locally as <image>:vX.Y.Z-<arch>.
+RELEASE_IMAGES=(sectr-runner-base sectr-server sectr-dashboard)
+# CI is an advisory check on an amd64 runner, where an emulated arm64 Rust
+# compile would outlast the job. Releases are cut from the dev machine.
+RELEASE_ARCHS=(amd64 arm64)
+if [ -n "${CI:-}" ]; then RELEASE_ARCHS=(amd64); fi
+
+# image_dockerfile IMAGE — the Dockerfile that builds a release image.
+image_dockerfile() {
+  case "$1" in
+    sectr-runner-base) echo docker/runner-base.Dockerfile ;;
+    sectr-server) echo docker/Dockerfile.server ;;
+    sectr-dashboard) echo docker/Dockerfile.dashboard ;;
+    *) die "unknown image $1" ;;
+  esac
+}

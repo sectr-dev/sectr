@@ -14,11 +14,11 @@
 #     tag        annotated tag vX.Y.Z on the verified SHA   (--dry-run stops here)
 #   after (the version is burned; use `resume` to finish):
 #     push, merge-back, publish-r2, publish-sdk, publish-npm,
-#     publish-skill, publish-base-image, deploy-server, smoke-docs
+#     publish-skill, publish-images, deploy-server, smoke-docs
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-POST_STAGES=(push merge-back publish-r2 publish-sdk publish-npm publish-skill publish-base-image deploy-server smoke-docs)
+POST_STAGES=(push merge-back publish-r2 publish-sdk publish-npm publish-skill publish-images deploy-server smoke-docs)
 # Test hook: branch releases are cut from / merged back into (default main).
 BASE=${RELEASE_BASE_BRANCH:-main}
 
@@ -63,7 +63,8 @@ stage_cut() {
     sdk-python/tests/conformance/gen/uv.lock examples/*/uv.lock \
     dashboard/package.json dashboard/package-lock.json \
     docs-site/package.json docs-site/package-lock.json \
-    js/copilotkit/package.json js/copilotkit/package-lock.json
+    js/copilotkit/package.json js/copilotkit/package-lock.json \
+    selfhost/.env.example
   git commit -q -m "release: v$VER"
   # Anything left over means the list above drifted from set-version.sh.
   [ -z "$(git status --porcelain)" ] || { git status --porcelain >&2; die "unstaged changes left after the release commit (file list drifted from set-version.sh)"; }
@@ -154,7 +155,7 @@ stage_publish_r2() {
 stage_publish_sdk()        { ensure_artifacts_for_tag; just publish-sdk "$VER"; }
 stage_publish_npm()        { ensure_artifacts_for_tag; just publish-npm "$VER"; }
 stage_publish_skill()      { just publish-skill "$VER"; }
-stage_publish_base_image() { ensure_artifacts_for_tag; just publish-base-image "$VER"; }
+stage_publish_images()     { ensure_artifacts_for_tag; just publish-images "$VER"; }
 stage_deploy_server()      { ensure_artifacts_for_tag; just deploy-server "$VER"; }
 stage_smoke_docs()         { scripts/smoke-docs.sh "$VER"; }
 
@@ -186,6 +187,7 @@ Release v$VER complete:
   CLI + installer  https://dl.sectr.dev/v$VER/  (latest/ if newest)
   SDK              sectr==$VER on PyPI
   npm              @sectr/copilotkit@$VER (+ the sectr shell, first release only)
+  Images           sectr-runner-base, sectr-server, sectr-dashboard:v$VER (+ :latest) on GHCR
   Base image       sectr-runner-base:v$VER (+ :latest) in Artifact Registry
   Server           deployed and health-checked
   Docs             docs.sectr.dev shows v$VER

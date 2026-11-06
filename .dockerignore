@@ -13,3 +13,6 @@ examples
 scratch
 docs
 *.md
+**/node_modules
+**/.env*
+dashboard/.open-next
