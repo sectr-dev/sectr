@@ -1,6 +1,6 @@
 {
   "name": "@sectr/copilotkit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Run CopilotKit on Sectr: an AG-UI agent that reconnects reloaded pages, and a stateless Copilot Runtime runner, both backed by your Sectr agent.",
   "keywords": [
     "copilotkit",
