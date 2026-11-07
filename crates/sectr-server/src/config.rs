@@ -147,6 +147,12 @@ pub struct ServerConfig {
   /// `platform = Gcp` — the server submits builds impersonating it via
   /// the Build.service_account field.
   pub gcp_build_sa_email: Option<String>,
+  /// The service account the push build runs AS
+  /// (`SECTR_GCP_PUSH_SA_EMAIL`, e.g.
+  /// `sectr-pusher@<project>.iam.gserviceaccount.com`). The push build runs
+  /// no app code and is the only build that can write images; the build SA
+  /// above runs the app's code and can't. Required when building on GCP.
+  pub gcp_push_sa_email: Option<String>,
   /// SA the ensured Cloud Run Jobs run AS (SECTR_GCP_RUNNER_SA_EMAIL) —
   /// the least-privilege runtime identity (AR reader only; the runner
   /// dials out and needs nothing else). Required for platform gcp.
@@ -530,6 +536,7 @@ impl ServerConfig {
       gcp_region: std::env::var("SECTR_GCP_REGION").ok(),
       gcp_ar_repo: std::env::var("SECTR_GCP_AR_REPO").unwrap_or_else(|_| "sectr-runners".into()),
       gcp_build_sa_email: std::env::var("SECTR_GCP_BUILD_SA_EMAIL").ok(),
+      gcp_push_sa_email: std::env::var("SECTR_GCP_PUSH_SA_EMAIL").ok(),
       gcp_runner_sa_email: std::env::var("SECTR_GCP_RUNNER_SA_EMAIL").ok(),
       e2b_api_key: std::env::var("SECTR_E2B_API_KEY").ok(),
       e2b_domain: std::env::var("SECTR_E2B_DOMAIN")
@@ -580,7 +587,7 @@ impl ServerConfig {
       config.gcs_bucket.as_deref(),
     )?;
     // Same discipline for the model-(b) provider keys (E2B's build half
-    // IS the gcp build half — project/region/build-SA are shared
+    // IS the gcp build half — project/region/build-SA/push-SA are shared
     // requirements; only the runner SA is gcp-specific).
     check_gcp_config(
       config.platform,
@@ -588,6 +595,7 @@ impl ServerConfig {
       config.gcp_region.as_deref(),
       config.gcp_build_sa_email.as_deref(),
       config.gcp_runner_sa_email.as_deref(),
+      config.gcp_push_sa_email.as_deref(),
     )?;
     if config.platform == PlatformKind::Docker {
       // A runner URL with no host would otherwise surface only at the first
@@ -615,6 +623,7 @@ fn check_gcp_config(
   gcp_region: Option<&str>,
   gcp_build_sa_email: Option<&str>,
   gcp_runner_sa_email: Option<&str>,
+  gcp_push_sa_email: Option<&str>,
 ) -> anyhow::Result<()> {
   if !platform.builds_on_gcp() {
     return Ok(());
@@ -629,6 +638,13 @@ fn check_gcp_config(
     anyhow::bail!(
       "SECTR_GCP_BUILD_SA_EMAIL is required when SECTR_PLATFORM={} \
              (the Cloud Build service account builds run AS)",
+      platform.as_str()
+    );
+  }
+  if gcp_push_sa_email.is_none() {
+    anyhow::bail!(
+      "SECTR_GCP_PUSH_SA_EMAIL is required when SECTR_PLATFORM={} \
+             (the service account the image push build runs AS)",
       platform.as_str()
     );
   }
@@ -877,7 +893,7 @@ mod tests {
   #[test]
   fn gcp_platform_requires_project_region_and_sas() {
     // Docker platform: the GCP keys are irrelevant.
-    check_gcp_config(PlatformKind::Docker, None, None, None, None).unwrap();
+    check_gcp_config(PlatformKind::Docker, None, None, None, None, None).unwrap();
 
     // Each missing key gets its own clear complaint.
     let e = check_gcp_config(
@@ -886,6 +902,7 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       Some("r@x"),
+      Some("p@x"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_PROJECT_ID"), "{e}");
@@ -895,6 +912,7 @@ mod tests {
       None,
       Some("sa@x"),
       Some("r@x"),
+      Some("p@x"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_REGION"), "{e}");
@@ -904,6 +922,7 @@ mod tests {
       Some("us-east4"),
       None,
       Some("r@x"),
+      Some("p@x"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_BUILD_SA_EMAIL"), "{e}");
@@ -913,9 +932,21 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       None,
+      Some("p@x"),
     )
     .unwrap_err();
     assert!(e.to_string().contains("SECTR_GCP_RUNNER_SA_EMAIL"), "{e}");
+    let e = check_gcp_config(
+      PlatformKind::E2b,
+      Some("p"),
+      Some("us-east4"),
+      Some("sa@x"),
+      None,
+      None,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("SECTR_GCP_PUSH_SA_EMAIL"), "{e}");
+
     // All present: accepted.
     check_gcp_config(
       PlatformKind::Gcp,
@@ -923,6 +954,7 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       Some("r@x"),
+      Some("p@x"),
     )
     .unwrap();
   }
@@ -956,6 +988,7 @@ mod tests {
       Some("us-east4"),
       Some("sa@x"),
       None,
+      Some("p@x"),
     )
     .unwrap();
   }

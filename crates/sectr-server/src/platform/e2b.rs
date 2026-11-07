@@ -33,8 +33,8 @@
 //!
 //! # Template lifecycle (build = deployment version)
 //!
-//! `build()` = `gcp.cloud_build_impl()` (Cloud Build → AR → manifest, all
-//! unchanged) **+ the E2B template build**: create-or-reuse the template
+//! `build()` = `gcp.cloud_build_impl()` (the user-code Cloud Build, then the
+//! push build to AR; see `gcp_build`) **+ the E2B template build**: create-or-reuse the template
 //! named `sectr-app-<deployment-id>` (name pattern `^[a-z0-9-_]+$` ≤128 —
 //! project-local, one template per deployment, mirrors the Cloud Run
 //! one-job-per-deployment decision), then start a build with

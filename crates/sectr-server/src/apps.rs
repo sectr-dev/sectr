@@ -309,6 +309,7 @@ mod tests {
       gcp_region: None,
       gcp_ar_repo: "sectr-runners".into(),
       gcp_build_sa_email: None,
+      gcp_push_sa_email: None,
       gcp_runner_sa_email: None,
       e2b_api_key: None,
       e2b_domain: "e2b.app".into(),

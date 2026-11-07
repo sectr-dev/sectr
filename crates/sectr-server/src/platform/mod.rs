@@ -142,15 +142,6 @@ pub struct BuildRequest {
   /// From sectr.toml (`agent.entry`) — the authoritative-manifest import
   /// points sectr.inspect at it.
   pub entry: String,
-  /// Layer-cache hint: the PREVIOUS deployment's image ref, in the
-  /// platform's own naming (computed through `provisional_build_ref` by
-  /// the deploy path — no naming scheme leaks across the seam). Image
-  /// refs are deployment-scoped while the version counter is app-scoped,
-  /// so this cannot be derived from `version - 1` alone. `None` on first
-  /// deploy or when no earlier deployment exists. DockerPlatform ignores
-  /// it (its warm local daemon cache makes it moot); the remote builder
-  /// passes it as `--cache-from`.
-  pub previous_build_ref: Option<String>,
 }
 
 pub struct BuildOutput {

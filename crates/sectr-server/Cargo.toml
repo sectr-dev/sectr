@@ -38,6 +38,10 @@ google-cloud-run-v2 = { workspace = true, optional = true }
 google-cloud-wkt = { workspace = true, optional = true }
 google-cloud-gax = { workspace = true, optional = true }
 google-cloud-lro = { workspace = true, optional = true }
+# Signed URLs for the hosted builds' files (the server signs; the builds
+# hold no bucket access).
+google-cloud-storage = { workspace = true, optional = true }
+google-cloud-auth = { workspace = true, optional = true }
 
 # E2bPlatform — REST client only (no Rust SDK exists); the
 # build half is still Cloud Build, so `e2b` implies `gcp`. NOTE: that pulls
@@ -64,6 +68,8 @@ gcp = [
     "dep:google-cloud-wkt",
     "dep:google-cloud-gax",
     "dep:google-cloud-lro",
+    "dep:google-cloud-storage",
+    "dep:google-cloud-auth",
 ]
 # E2B runner backend: Cloud Build build half (via `gcp`) +
 # the E2B REST client. Implies gcp (which implies gcs) — the E2B backend
