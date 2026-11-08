@@ -41,6 +41,9 @@ use serde_json::{Value, json};
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
+use sectr_common::endpoint::{
+  ANSWERED_HTTP, COULD_NOT_CONNECT, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, WAKE_TIMEOUT, WRONG_INGEST,
+};
 use sectr_common::registry::Registry;
 
 use crate::config::EndpointConfig;
@@ -53,7 +56,7 @@ pub const HANDLE_PREFIX: &str = "endpoint:";
 
 /// Every wake failure's message starts with this, so the dashboard can tell
 /// them apart from other session errors.
-pub const WAKE_FAILED: &str = "endpoint wake failed:";
+pub use sectr_common::endpoint::WAKE_FAILED;
 
 /// The registration probe's timeout: long enough for a cold start.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -169,7 +172,7 @@ impl EndpointPlatform {
          the image's CMD is `sectr-worker --serve`."
       )),
       (code, _) => Err(format!(
-        "the endpoint at {url} answered HTTP {code}, not a Sectr sidecar in serve mode. Check \
+        "the endpoint at {url} {ANSWERED_HTTP} {code}, not a Sectr sidecar in serve mode. Check \
          that the image's CMD is `sectr-worker --serve`."
       )),
     }
@@ -284,7 +287,7 @@ impl EndpointPlatform {
         Err(retried.unwrap_or(WakeFailure {
           outcome: "deadline",
           message: format!(
-            "{WAKE_FAILED} the endpoint did not start the turn within {}s",
+            "{WAKE_FAILED} the endpoint {WAKE_TIMEOUT} {}s",
             deadline.as_secs()
           ),
         }))
@@ -360,7 +363,7 @@ async fn wake_task(task: WakeTask) {
         break WakeFailure {
           outcome: "blocked",
           message: format!(
-            "{WAKE_FAILED} {host} resolves to a private address, which this server doesn't allow"
+            "{WAKE_FAILED} {host} {PRIVATE_ADDRESS}, which this server doesn't allow"
           ),
         };
       }
@@ -373,7 +376,7 @@ async fn wake_task(task: WakeTask) {
       Err(e) if e.is_connect() => WakeFailure {
         outcome: "connect_error",
         message: format!(
-          "{WAKE_FAILED} could not connect to {host} ({})",
+          "{WAKE_FAILED} {COULD_NOT_CONNECT} {host} ({})",
           source_text(&e)
         ),
       },
@@ -400,7 +403,7 @@ async fn wake_task(task: WakeTask) {
               Some("token_rejected") => WakeFailure {
                 outcome: "token_rejected",
                 message: format!(
-                  "{WAKE_FAILED} the endpoint's sidecar dialed a server that doesn't know this \
+                  "{WAKE_FAILED} the endpoint's sidecar {WRONG_INGEST} \
                    turn. Check that its SECTR_INGEST_URL is {ingest_url}"
                 ),
               },
@@ -440,7 +443,7 @@ async fn wake_task(task: WakeTask) {
           WakeFailure {
             outcome: "http_error",
             message: format!(
-              "{WAKE_FAILED} {host} answered HTTP {status}: {}",
+              "{WAKE_FAILED} {host} {ANSWERED_HTTP} {status}: {}",
               quote(&body)
             ),
           }
@@ -448,7 +451,7 @@ async fn wake_task(task: WakeTask) {
           break WakeFailure {
             outcome: "http_error",
             message: format!(
-              "{WAKE_FAILED} {host} answered HTTP {status}: {}",
+              "{WAKE_FAILED} {host} {ANSWERED_HTTP} {status}: {}",
               quote(&body)
             ),
           };
@@ -504,11 +507,11 @@ fn source_text(error: &(dyn std::error::Error + 'static)) -> String {
 fn request_failure(url: &Url, error: &reqwest::Error) -> String {
   let host = url.host_str().unwrap_or_default();
   if guard::is_blocked_error(error) {
-    format!("{host} resolves to a private address, which this server doesn't allow")
+    format!("{host} {PRIVATE_ADDRESS}, which this server doesn't allow")
   } else if error.is_timeout() {
-    format!("the endpoint at {url} didn't answer in time")
+    format!("the endpoint at {url} {NO_ANSWER_IN_TIME}")
   } else if error.is_connect() {
-    format!("could not connect to {host} ({})", source_text(error))
+    format!("{COULD_NOT_CONNECT} {host} ({})", source_text(error))
   } else {
     format!("the request to {host} failed ({})", source_text(error))
   }

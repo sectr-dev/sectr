@@ -27,6 +27,8 @@ use std::sync::Arc;
 use reqwest::Url;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
+use sectr_common::endpoint::PRIVATE_ADDRESS;
+
 /// Whether an address is one the guard refuses.
 pub fn is_blocked(ip: IpAddr) -> bool {
   match ip {
@@ -97,7 +99,7 @@ pub fn check_url(url: &Url, allow_private: bool) -> Result<(), String> {
   };
   if blocked {
     return Err(format!(
-      "{host} resolves to a private address, which this server doesn't allow"
+      "{host} {PRIVATE_ADDRESS}, which this server doesn't allow"
     ));
   }
   Ok(())
@@ -132,7 +134,7 @@ fn check_resolved(host: &str, addrs: &[SocketAddr]) -> Result<(), BlockedHost> {
 /// The error the resolver fails with: [`is_blocked_error`] finds it in a
 /// reqwest error's source chain.
 #[derive(Debug, thiserror::Error)]
-#[error("{0} resolves to a private address, which this server doesn't allow")]
+#[error("{0} {PRIVATE_ADDRESS}, which this server doesn't allow")]
 pub struct BlockedHost(pub String);
 
 /// Whether a request failed because the guard refused the host.

@@ -888,7 +888,8 @@ async fn registration_needs_endpoint_deployments_on() {
   assert_eq!(status, axum::http::StatusCode::OK);
   assert_eq!(
     serde_json::from_str::<Value>(&body).unwrap(),
-    json!({"enabled": false, "ingest_url": null})
+    // The test config has no base image; a real one always does.
+    json!({"enabled": false, "ingest_url": null, "base_image": ""})
   );
 
   let Some(w) = registration_world().await else {
@@ -905,7 +906,11 @@ async fn registration_needs_endpoint_deployments_on() {
   let (_, body) = request(&w, "GET", "/endpoint-deployments/config", None).await;
   assert_eq!(
     serde_json::from_str::<Value>(&body).unwrap(),
-    json!({"enabled": true, "ingest_url": format!("ws://{}/ingest", w.addr)})
+    json!({
+      "enabled": true,
+      "ingest_url": format!("ws://{}/ingest", w.addr),
+      "base_image": "",
+    })
   );
 }
 

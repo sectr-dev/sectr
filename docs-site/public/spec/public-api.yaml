@@ -934,10 +934,11 @@ paths:
   /endpoint-deployments/config:
     get:
       operationId: getEndpointDeploymentConfig
-      summary: Whether endpoint deployments are on, and the ingest URL to use
+      summary: Whether endpoint deployments are on, and what the endpoint's image needs
       description: >-
         `ingest_url` is the value to set as `SECTR_INGEST_URL` in the endpoint's image: the only
-        server its sidecar dials. Auth: platform API key.
+        server its sidecar dials. `base_image` is the runner base image of this server's version,
+        which the image builds `FROM` (`sectr init --endpoint` writes both). Auth: platform API key.
       security:
         - platformApiKey: []
       responses:
@@ -950,6 +951,7 @@ paths:
                 required:
                   - enabled
                   - ingest_url
+                  - base_image
                 properties:
                   enabled:
                     type: boolean
@@ -957,6 +959,8 @@ paths:
                     type:
                       - string
                       - 'null'
+                  base_image:
+                    type: string
   /deployments/{deploymentId}/activate:
     post:
       operationId: activateDeployment

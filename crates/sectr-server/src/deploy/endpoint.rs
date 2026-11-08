@@ -16,7 +16,8 @@
 //!    row with an error the CLI and dashboard show.
 //!
 //! `GET /endpoint-deployments/config` tells the CLI whether endpoint
-//! deployments are on and which ingest URL the image must dial.
+//! deployments are on, which ingest URL the image must dial, and which base
+//! image it builds from.
 
 use std::time::Duration;
 
@@ -29,6 +30,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use sectr_common::endpoint::{DIAL_FAILED, DISABLED, WRONG_INGEST};
 use sectr_common::registry::{Deployment, NewDeployment};
 
 use super::{DeployManifest, compose_manifest, deployment_dto, parse_sectr_toml, prepare_deploy};
@@ -60,7 +62,13 @@ pub(super) async fn endpoint_config(
   _principal: PlatformPrincipal,
 ) -> Json<Value> {
   let ingest_url = state.endpoints().ingest_url();
-  Json(json!({"enabled": ingest_url.is_some(), "ingest_url": ingest_url}))
+  // Always set: the configured base image, or this version's published one.
+  let base_image = state.config().runner_base_image.clone().unwrap_or_default();
+  Json(json!({
+    "enabled": ingest_url.is_some(),
+    "ingest_url": ingest_url,
+    "base_image": base_image,
+  }))
 }
 
 /// `POST /endpoint-deployments`.
@@ -79,9 +87,9 @@ pub(super) async fn register_endpoint(
   };
   let endpoints = state.endpoints().clone();
   if !endpoints.config().enabled() {
-    return unprocessable(
-      "this server doesn't accept endpoint deployments (its SECTR_ENDPOINT_INGEST_URL is not set)",
-    );
+    return unprocessable(format!(
+      "this server {DISABLED} (its SECTR_ENDPOINT_INGEST_URL is not set)"
+    ));
   }
   let parsed = match parse_sectr_toml(&body.manifest) {
     Ok(parsed) => parsed,
@@ -206,13 +214,13 @@ async fn register_and_activate(
     }
     "token_rejected" => {
       return Err(format!(
-        "the endpoint's sidecar dialed a server that doesn't know this registration. Check that \
+        "the endpoint's sidecar {WRONG_INGEST} registration. Check that \
          its SECTR_INGEST_URL is {ingest_url}."
       ));
     }
     "dial_failed" => {
       return Err(format!(
-        "the endpoint's sidecar couldn't reach {ingest_url}: {}. Check that your platform allows \
+        "the endpoint's sidecar {DIAL_FAILED} {ingest_url}: {}. Check that your platform allows \
          outbound connections.",
         field("message")
       ));
