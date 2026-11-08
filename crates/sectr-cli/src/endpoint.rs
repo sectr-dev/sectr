@@ -7,7 +7,10 @@
 //! This module holds what `init` and `deploy` share: the platforms, the
 //! setup steps printed for each, and the hints added to the server's errors.
 
-use anyhow::bail;
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{Context, bail};
 use sectr_common::endpoint::{
   ANSWERED_HTTP, COULD_NOT_CONNECT, DIAL_FAILED, DISABLED, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS,
   Platform as Host, WRONG_INGEST, platform_of,
@@ -42,6 +45,24 @@ impl Platform {
       Platform::Lambda => "lambda",
       Platform::CloudRun => "cloud-run",
       Platform::Container => "container",
+    }
+  }
+
+  /// Where it runs, in a sentence ("deploy it on …").
+  pub fn name(&self) -> &'static str {
+    match self {
+      Platform::Lambda => "AWS Lambda",
+      Platform::CloudRun => "Google Cloud Run",
+      Platform::Container => "your container platform",
+    }
+  }
+
+  /// What the URL to put in sectr.toml is called on this platform.
+  pub fn url_name(&self) -> &'static str {
+    match self {
+      Platform::Lambda => "the function URL",
+      Platform::CloudRun => "the service URL",
+      Platform::Container => "its HTTPS URL",
     }
   }
 
@@ -136,6 +157,176 @@ pub fn warning_hint(url: &str) -> String {
   )
 }
 
+/// What an endpoint image pins from its server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pins {
+  /// The image to build `FROM`: the runner base image of the server's
+  /// version.
+  pub base_image: String,
+  /// The only server the image's sidecar dials (`SECTR_INGEST_URL`).
+  pub ingest_url: String,
+}
+
+/// Read the pins from the server (`GET /endpoint-deployments/config`),
+/// resolved like every cloud command. Fails when there's no server, or it
+/// doesn't take endpoint deployments.
+pub async fn fetch_pins(api: Option<&str>, key: Option<&str>) -> anyhow::Result<Pins> {
+  let target = crate::auth::resolve(api, key).map_err(|e| {
+    anyhow::anyhow!(
+      "the Dockerfile pins your server's base image and ingest URL, so this needs a server: \
+       {e:#}"
+    )
+  })?;
+  fetch_pins_from(&target).await
+}
+
+pub(crate) async fn fetch_pins_from(target: &crate::auth::Target) -> anyhow::Result<Pins> {
+  let client = reqwest::Client::builder()
+    .timeout(Duration::from_secs(15))
+    .build()
+    .context("build HTTP client")?;
+  let url = format!("{}/endpoint-deployments/config", target.api);
+  let response = client
+    .get(&url)
+    .bearer_auth(&target.key)
+    .send()
+    .await
+    .with_context(|| format!("GET {url}"))?;
+  let status = response.status();
+  if status == reqwest::StatusCode::NOT_FOUND {
+    bail!(
+      "{} doesn't support endpoint deployments (it's older than this CLI)",
+      target.api
+    );
+  }
+  let text = response.text().await.unwrap_or_default();
+  if !status.is_success() {
+    bail!("GET {url} returned {status}: {}", text.trim());
+  }
+  let config: serde_json::Value =
+    serde_json::from_str(&text).with_context(|| format!("GET {url} didn't answer JSON"))?;
+  let field = |name: &str| {
+    config
+      .get(name)
+      .and_then(|v| v.as_str())
+      .filter(|v| !v.is_empty())
+      .map(str::to_owned)
+  };
+  if config.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
+    bail!(
+      "{} {DISABLED} (its admin turns them on with SECTR_ENDPOINT_INGEST_URL)",
+      target.api
+    );
+  }
+  match (field("base_image"), field("ingest_url")) {
+    (Some(base_image), Some(ingest_url)) => Ok(Pins {
+      base_image,
+      ingest_url,
+    }),
+    _ => bail!(
+      "{} didn't name its base image and ingest URL (it's older than this CLI)",
+      target.api
+    ),
+  }
+}
+
+/// Never in an image: local tooling, and `.env`, so local secrets don't
+/// get baked in.
+pub const DOCKERIGNORE: &str = ".git\n.venv\nvenv\n__pycache__\n*.pyc\n.agent\nnode_modules\n\
+                                .mypy_cache\n.pytest_cache\n.ruff_cache\n.env\n";
+
+/// The comment above the `endpoint` key `init` adds.
+const ENDPOINT_COMMENT: &str =
+  "# Your endpoint's URL, once the image is deployed: `sectr deploy` registers it.\n";
+
+/// Write the endpoint files into the agent directory `dir`: `Dockerfile`
+/// and `.dockerignore` (refused if either exists, unless `force`), and
+/// `endpoint = ""` under `[deploy]` in its `sectr.toml` unless it has an
+/// `endpoint` already. Returns whether it added the key.
+pub fn write_files(
+  dir: &Path,
+  platform: Platform,
+  pins: &Pins,
+  force: bool,
+) -> anyhow::Result<bool> {
+  let sectr_toml = dir.join("sectr.toml");
+  let text = std::fs::read_to_string(&sectr_toml)
+    .with_context(|| format!("reading {}", sectr_toml.display()))?;
+  // Everything is checked before anything is written.
+  let edited = add_endpoint_key(&text)?;
+  if !force {
+    for name in ["Dockerfile", ".dockerignore"] {
+      if dir.join(name).exists() {
+        bail!(
+          "{} exists — refusing to overwrite it (pass --force to replace it)",
+          dir.join(name).display()
+        );
+      }
+    }
+  }
+  let dockerfile = sectr_common::dockerfile::endpoint_dockerfile(
+    &pins.base_image,
+    &pins.ingest_url,
+    platform == Platform::Lambda,
+  );
+  for (name, contents) in [
+    ("Dockerfile", dockerfile.as_str()),
+    (".dockerignore", DOCKERIGNORE),
+  ] {
+    let path = dir.join(name);
+    std::fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
+  }
+  if let Some(edited) = &edited {
+    std::fs::write(&sectr_toml, edited)
+      .with_context(|| format!("writing {}", sectr_toml.display()))?;
+  }
+  Ok(edited.is_some())
+}
+
+/// `sectr.toml` with `endpoint = ""` added under `[deploy]`, keeping its
+/// comments and layout; `None` when it has an `endpoint` already.
+fn add_endpoint_key(text: &str) -> anyhow::Result<Option<String>> {
+  let mut doc: toml_edit::DocumentMut = text
+    .parse()
+    .context("sectr.toml isn't valid TOML — fix it first")?;
+  let deploy = doc
+    .entry("deploy")
+    .or_insert_with(toml_edit::table)
+    .as_table_like_mut()
+    .context("`deploy` in sectr.toml isn't a table")?;
+  if deploy.contains_key("endpoint") {
+    return Ok(None);
+  }
+  deploy.insert("endpoint", toml_edit::value(""));
+  if let Some(mut key) = deploy.key_mut("endpoint") {
+    key.leaf_decor_mut().set_prefix(ENDPOINT_COMMENT);
+  }
+  Ok(Some(doc.to_string()))
+}
+
+/// The app's name in `sectr.toml` (`[app] name`), for the printed steps.
+pub fn app_name(dir: &Path) -> Option<String> {
+  let text = std::fs::read_to_string(dir.join("sectr.toml")).ok()?;
+  let table: toml::Table = text.parse().ok()?;
+  table.get("app")?.get("name")?.as_str().map(str::to_owned)
+}
+
+/// The lines `init` prints after writing the endpoint files: the platform's
+/// steps, then registering.
+pub fn print_next_steps(platform: Platform, app_name: &str) {
+  println!(
+    "Next: build the image and deploy it on {}:",
+    platform.name()
+  );
+  for step in platform.next_steps(app_name) {
+    println!("  {step}");
+  }
+  println!(
+    "Then put {} in sectr.toml ([deploy] endpoint) and run `sectr deploy`.",
+    platform.url_name()
+  );
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -143,6 +334,131 @@ mod tests {
   const LAMBDA: &str = "https://abc.lambda-url.us-east-1.on.aws/";
   const RUN: &str = "https://agent-xyz-uc.a.run.app";
   const OTHER: &str = "https://agent.example.com/";
+
+  fn pins() -> Pins {
+    Pins {
+      base_image: "ghcr.io/sectr-dev/sectr-runner-base:v1.2.3".into(),
+      ingest_url: "wss://ingest.sectr.dev/ingest".into(),
+    }
+  }
+
+  #[test]
+  fn the_key_is_added_keeping_the_files_comments() {
+    let text = "# My agent.\n[app]\nname = \"a\" # keep me\n\n[agent]\nentry = \"app:app\"\n";
+    let edited = add_endpoint_key(text).unwrap().unwrap();
+    assert!(edited.starts_with(text), "{edited}");
+    assert!(
+      edited.ends_with(&format!("\n[deploy]\n{ENDPOINT_COMMENT}endpoint = \"\"\n")),
+      "{edited}"
+    );
+    assert_eq!(
+      crate::deploy::deploy_mode(&edited).unwrap(),
+      crate::deploy::Mode::EndpointUnset
+    );
+
+    // An existing [deploy] table gains the key; its other keys stay.
+    let text = "[deploy]\napproval_tools = [\"refund\"]\n";
+    let edited = add_endpoint_key(text).unwrap().unwrap();
+    assert!(
+      edited.contains("approval_tools = [\"refund\"]\n"),
+      "{edited}"
+    );
+    assert!(edited.contains("endpoint = \"\""), "{edited}");
+
+    // A set value is kept.
+    assert_eq!(
+      add_endpoint_key("[deploy]\nendpoint = \"https://a.run.app\"\n").unwrap(),
+      None
+    );
+    assert!(add_endpoint_key("deploy = 1\n").is_err());
+    assert!(add_endpoint_key("not = [toml").is_err());
+  }
+
+  #[test]
+  fn files_are_written_once_unless_forced() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sectr.toml"), "[app]\nname = \"a\"\n").unwrap();
+    assert!(write_files(dir.path(), Platform::Lambda, &pins(), false).unwrap());
+    let dockerfile = std::fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
+    assert!(dockerfile.contains("FROM ghcr.io/sectr-dev/sectr-runner-base:v1.2.3\n"));
+    assert!(dockerfile.contains("ENV SECTR_INGEST_URL=wss://ingest.sectr.dev/ingest\n"));
+    assert!(dockerfile.contains("aws-lambda-adapter"));
+    let ignore = std::fs::read_to_string(dir.path().join(".dockerignore")).unwrap();
+    assert!(ignore.lines().any(|l| l == ".env") && ignore.lines().any(|l| l == ".venv"));
+
+    let err = write_files(dir.path(), Platform::CloudRun, &pins(), false)
+      .unwrap_err()
+      .to_string();
+    assert!(
+      err.contains("Dockerfile exists") && err.contains("--force"),
+      "{err}"
+    );
+    // Forced: replaced, and the key (already there) isn't added twice.
+    assert!(!write_files(dir.path(), Platform::CloudRun, &pins(), true).unwrap());
+    let dockerfile = std::fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
+    assert!(!dockerfile.contains("aws-lambda-adapter"));
+    let toml = std::fs::read_to_string(dir.path().join("sectr.toml")).unwrap();
+    assert_eq!(toml.matches("endpoint =").count(), 1, "{toml}");
+    assert_eq!(app_name(dir.path()).as_deref(), Some("a"));
+  }
+
+  #[test]
+  fn nothing_is_written_when_sectr_toml_is_broken() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sectr.toml"), "not = [toml").unwrap();
+    assert!(write_files(dir.path(), Platform::Lambda, &pins(), false).is_err());
+    assert!(!dir.path().join("Dockerfile").exists());
+  }
+
+  async fn config_stub(status: u16, body: serde_json::Value) -> crate::auth::Target {
+    use axum::http::StatusCode;
+    let app = axum::Router::new().route(
+      "/endpoint-deployments/config",
+      axum::routing::get(move || {
+        let body = body.clone();
+        async move { (StatusCode::from_u16(status).unwrap(), axum::Json(body)) }
+      }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    crate::auth::Target {
+      api: format!("http://{addr}"),
+      key: "skp_x".into(),
+    }
+  }
+
+  #[tokio::test]
+  async fn pins_come_from_the_servers_config() {
+    let target = config_stub(
+      200,
+      serde_json::json!({
+        "enabled": true,
+        "ingest_url": "wss://ingest.sectr.dev/ingest",
+        "base_image": "ghcr.io/sectr-dev/sectr-runner-base:v1.2.3",
+      }),
+    )
+    .await;
+    assert_eq!(fetch_pins_from(&target).await.unwrap(), pins());
+
+    let off = config_stub(
+      200,
+      serde_json::json!({"enabled": false, "ingest_url": null, "base_image": "x"}),
+    )
+    .await;
+    let err = fetch_pins_from(&off).await.unwrap_err().to_string();
+    assert!(err.contains(DISABLED), "{err}");
+
+    let old = config_stub(404, serde_json::json!({})).await;
+    let err = fetch_pins_from(&old).await.unwrap_err().to_string();
+    assert!(err.contains("older than this CLI"), "{err}");
+
+    let unreachable = crate::auth::Target {
+      api: "http://127.0.0.1:1".into(),
+      key: "skp_x".into(),
+    };
+    assert!(fetch_pins_from(&unreachable).await.is_err());
+  }
 
   #[test]
   fn urls_classify_by_host() {

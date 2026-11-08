@@ -12,6 +12,14 @@
 //! printed and the files KEPT — debuggable, not a black hole) → `npm
 //! install` when there's a frontend → next steps.
 //!
+//! Where it runs: a third picker (or `--endpoint lambda|cloud-run|container`)
+//! chooses Sectr's runners or the developer's own platform. Choosing a
+//! platform fetches the server's base image and ingest URL right after the
+//! pickers, before anything is written, and adds a `Dockerfile`, a
+//! `.dockerignore` and `[deploy] endpoint = ""` to the agent. In a directory
+//! that already holds a `sectr.toml`, `sectr init --endpoint <platform>`
+//! (no name) adds only those (see [`crate::endpoint`]).
+//!
 //! Layout: without a frontend the project directory IS the agent. With
 //! one, it's the `sectr-copilotkit-starter` layout: the Next.js app at the
 //! root and the agent in `agent/` (byte-for-byte what `--frontend none`
@@ -33,6 +41,8 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use crossterm::event::{Event, KeyCode, KeyModifiers, read};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+use crate::endpoint::Platform;
 
 /// Stamp tokens in the template files.
 const STAMP_APP_NAME: &str = "__SECTR_APP_NAME__";
@@ -59,7 +69,23 @@ pub struct InitArgs {
   /// Omitted → `none` with --template, else an interactive picker.
   #[arg(long)]
   pub frontend: Option<String>,
-  /// Scaffold into a non-empty directory anyway.
+  /// Run it on your own platform: `lambda`, `cloud-run` or `container`.
+  /// Adds a Dockerfile pinned to your server and `[deploy] endpoint` to
+  /// sectr.toml; in an existing project (a sectr.toml here, no name), adds
+  /// only those. Needs a server (`sectr auth login`, or --api).
+  /// Omitted → Sectr's runners with --template, else an interactive picker.
+  #[arg(long)]
+  pub endpoint: Option<String>,
+  /// The server whose base image and ingest URL an endpoint's Dockerfile
+  /// pins. Defaults through `sectr auth login` (or SECTR_API_URL).
+  #[arg(long)]
+  pub api: Option<String>,
+  /// Platform API key (`skp_…`). Defaults through `sectr auth login` (or
+  /// SECTR_PLATFORM_KEY).
+  #[arg(long)]
+  pub key: Option<String>,
+  /// Scaffold into a non-empty directory anyway (and, with --endpoint,
+  /// replace an existing Dockerfile and .dockerignore).
   #[arg(long)]
   pub force: bool,
 }
@@ -315,8 +341,63 @@ impl Frontend {
   }
 }
 
+/// Where the agent runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunsOn {
+  /// `sectr deploy` builds it and Sectr's runners run it.
+  Sectr,
+  /// The developer's own platform; `sectr deploy` registers its URL.
+  Endpoint(Platform),
+}
+
+impl RunsOn {
+  /// Picker entries in display order; the first is the default.
+  pub fn picker_items() -> &'static [PickerItem<RunsOn>] {
+    &[
+      (
+        Some(RunsOn::Sectr),
+        "Sectr runs it (sectr deploy builds and runs it)",
+      ),
+      (
+        Some(RunsOn::Endpoint(Platform::Lambda)),
+        "Your own AWS Lambda",
+      ),
+      (
+        Some(RunsOn::Endpoint(Platform::CloudRun)),
+        "Your own Google Cloud Run",
+      ),
+      (
+        Some(RunsOn::Endpoint(Platform::Container)),
+        "Your own container platform (Fly, Render, ECS, …)",
+      ),
+    ]
+  }
+
+  fn arg(&self) -> &'static str {
+    match self {
+      RunsOn::Sectr => "sectr",
+      RunsOn::Endpoint(platform) => platform.arg(),
+    }
+  }
+}
+
 /// Entry point.
 pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
+  // Validate a given --endpoint before anything else.
+  let endpoint_arg = args
+    .endpoint
+    .as_deref()
+    .map(Platform::from_arg)
+    .transpose()?;
+
+  // An existing project: add only the endpoint files.
+  if let Some(platform) = endpoint_arg
+    && args.name.is_none()
+    && Path::new("sectr.toml").is_file()
+  {
+    return add_endpoint_to_existing(&args, platform).await;
+  }
+
   // Fail BEFORE any interaction or file write: `sectr` requires `uv` —
   // every later step (`uv sync`, the inspector, `sectr dev`) drives it.
   require_uv().await?;
@@ -329,10 +410,11 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
     .transpose()?;
 
   // Template: --template skips the pickers entirely (docs/CI path).
-  let (template, frontend) = match &args.template {
+  let (template, frontend, runs_on) = match &args.template {
     Some(arg) => (
       Template::from_arg(arg)?,
       frontend_arg.unwrap_or(Frontend::None),
+      endpoint_arg.map_or(RunsOn::Sectr, RunsOn::Endpoint),
     ),
     None => {
       let template = pick(
@@ -356,7 +438,20 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
           frontend
         }
       };
-      (template, frontend)
+      let runs_on = match endpoint_arg {
+        Some(platform) => RunsOn::Endpoint(platform),
+        None => {
+          let runs_on = pick(
+            "Where will it run?",
+            "no terminal for the where-it-runs picker — pass --endpoint lambda, \
+             cloud-run or container to run it on your own platform",
+            RunsOn::picker_items(),
+          )?;
+          println!("→ runs on: {}", runs_on.arg());
+          runs_on
+        }
+      };
+      (template, frontend, runs_on)
     }
   };
 
@@ -364,6 +459,15 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
   if frontend == Frontend::CopilotKit {
     require_node().await?;
   }
+  // An endpoint's Dockerfile pins the server's values: also fetched before
+  // anything is written.
+  let endpoint = match runs_on {
+    RunsOn::Sectr => None,
+    RunsOn::Endpoint(platform) => Some((
+      platform,
+      crate::endpoint::fetch_pins(args.api.as_deref(), args.key.as_deref()).await?,
+    )),
+  };
 
   // Name: arg → prompt (default my-agent) → validate/normalize.
   let name = match &args.name {
@@ -375,7 +479,14 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
   let target = std::env::current_dir()?.join(&name);
   ensure_target_dir(&target, args.force)?;
 
-  let written = scaffold(&target, template, frontend, &name)?;
+  let mut written = scaffold(&target, template, frontend, &name)?;
+  if let Some((platform, pins)) = &endpoint {
+    let agent = agent_dir(&target, frontend);
+    crate::endpoint::write_files(&agent, *platform, pins, false)?;
+    let prefix = agent.strip_prefix(&target).unwrap_or(Path::new(""));
+    written.push(prefix.join("Dockerfile"));
+    written.push(prefix.join(".dockerignore"));
+  }
   println!("Scaffolded {name} ({} files):", written.len());
   for path in &written {
     println!("  {}", Path::new(&name).join(path).display());
@@ -445,6 +556,41 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
       println!("  See {name}/README.md to deploy both.");
     }
   }
+  if let Some((platform, _)) = endpoint {
+    println!();
+    println!(
+      "It runs on {}: `sectr deploy` registers it once it's deployed.",
+      platform.name()
+    );
+    println!("From {agent_cd}:");
+    crate::endpoint::print_next_steps(platform, &name);
+  }
+  Ok(())
+}
+
+/// `sectr init --endpoint <platform>` in a directory with a `sectr.toml`:
+/// add the Dockerfile, `.dockerignore` and `[deploy] endpoint`, nothing
+/// else.
+async fn add_endpoint_to_existing(args: &InitArgs, platform: Platform) -> anyhow::Result<()> {
+  let dir = std::env::current_dir()?;
+  let pins = crate::endpoint::fetch_pins(args.api.as_deref(), args.key.as_deref()).await?;
+  let added = crate::endpoint::write_files(&dir, platform, &pins, args.force)?;
+  println!(
+    "✓ wrote Dockerfile        ({}, dials {})",
+    pins.base_image, pins.ingest_url
+  );
+  println!("✓ wrote .dockerignore");
+  if added {
+    println!("✓ added [deploy] endpoint = \"\" to sectr.toml");
+  } else {
+    println!("✓ sectr.toml already has [deploy] endpoint (kept)");
+  }
+  println!();
+  let name = crate::endpoint::app_name(&dir)
+    .or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
+    .unwrap_or_else(|| DEFAULT_NAME.to_owned());
+  let name = normalize_name(&name).unwrap_or_else(|_| DEFAULT_NAME.to_owned());
+  crate::endpoint::print_next_steps(platform, &name);
   Ok(())
 }
 
@@ -708,9 +854,15 @@ fn ensure_target_dir(target: &Path, force: bool) -> anyhow::Result<()> {
       .next()
       .is_none();
     if !empty && !force {
+      let existing_project = if target.join("sectr.toml").is_file() {
+        "\nto run that project on your own platform, cd into it and use \
+         `sectr init --endpoint lambda|cloud-run|container`"
+      } else {
+        ""
+      };
       bail!(
         "{} exists and is not empty — refusing to scaffold over it \
-                 (pass --force to scaffold anyway)",
+                 (pass --force to scaffold anyway){existing_project}",
         target.display()
       );
     }
@@ -1009,6 +1161,74 @@ mod tests {
         .iter()
         .all(|(item, _)| item.is_some())
     );
+  }
+
+  #[test]
+  fn where_it_runs_defaults_to_sectr() {
+    let items = RunsOn::picker_items();
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0].0, Some(RunsOn::Sectr));
+    assert!(items.iter().all(|(item, _)| item.is_some()));
+    assert_eq!(
+      items[1..].iter().map(|(item, _)| *item).collect::<Vec<_>>(),
+      [
+        Some(RunsOn::Endpoint(Platform::Lambda)),
+        Some(RunsOn::Endpoint(Platform::CloudRun)),
+        Some(RunsOn::Endpoint(Platform::Container)),
+      ]
+    );
+  }
+
+  /// A new endpoint project: the scaffold, then the endpoint files in the
+  /// agent directory, as `run_init` writes them.
+  #[test]
+  fn an_endpoint_scaffold_adds_its_files_to_the_agent() {
+    let pins = crate::endpoint::Pins {
+      base_image: "ghcr.io/sectr-dev/sectr-runner-base:v1.2.3".into(),
+      ingest_url: "wss://ingest.sectr.dev/ingest".into(),
+    };
+    for frontend in [Frontend::None, Frontend::CopilotKit] {
+      let dir = tempfile::tempdir().unwrap();
+      let target = dir.path().join("my-agent");
+      ensure_target_dir(&target, false).unwrap();
+      scaffold(&target, Template::OpenAiAgents, frontend, "my-agent").unwrap();
+      let agent = agent_dir(&target, frontend);
+      assert!(crate::endpoint::write_files(&agent, Platform::CloudRun, &pins, false).unwrap());
+      let toml = std::fs::read_to_string(agent.join("sectr.toml")).unwrap();
+      assert_eq!(
+        crate::deploy::deploy_mode(&toml).unwrap(),
+        crate::deploy::Mode::EndpointUnset,
+        "{frontend:?}: {toml}"
+      );
+      assert!(toml.contains("entry = \"app:app\""), "{toml}");
+      let dockerfile = std::fs::read_to_string(agent.join("Dockerfile")).unwrap();
+      assert!(dockerfile.contains("CMD [\"/usr/local/bin/sectr-worker\", \"--serve\"]"));
+      assert!(!dockerfile.contains("aws-lambda-adapter"));
+      assert!(agent.join(".dockerignore").is_file());
+      // Never at the root of a frontend project.
+      if frontend == Frontend::CopilotKit {
+        assert!(!target.join("Dockerfile").exists());
+      }
+    }
+  }
+
+  #[test]
+  fn refusing_an_existing_project_points_to_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("proj");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("sectr.toml"), "[app]\nname = \"proj\"\n").unwrap();
+    let err = ensure_target_dir(&target, false).unwrap_err().to_string();
+    assert!(
+      err.contains("sectr init --endpoint lambda|cloud-run|container"),
+      "{err}"
+    );
+    // Not a project: no such line.
+    let other = dir.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(other.join("notes.txt"), "x").unwrap();
+    let err = ensure_target_dir(&other, false).unwrap_err().to_string();
+    assert!(!err.contains("--endpoint"), "{err}");
   }
 
   #[test]

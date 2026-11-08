@@ -23,6 +23,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 toml = "0.8"
+# `sectr init --endpoint` edits sectr.toml keeping its comments and layout.
+toml_edit = "0.22"
 tar = { workspace = true }
 flate2 = { workspace = true }
 reqwest = { workspace = true }
