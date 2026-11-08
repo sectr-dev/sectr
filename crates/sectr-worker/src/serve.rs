@@ -270,11 +270,17 @@ async fn wake(
     Ok(token) => token,
     Err(refusal) => return refusal.into_response(),
   };
-  let Ok(_permit) = state.permit.clone().try_acquire_owned() else {
+  let Ok(permit) = state.permit.clone().try_acquire_owned() else {
     tracing::info!("wake refused: a turn is already running");
     return busy();
   };
 
+  // The invocation runs in its own task, which owns the permit: if the
+  // caller drops the request (the server tore the turn down, or the
+  // platform cancelled it), the turn still ends only the way the protocol
+  // ends it (a boundary, or a 401 once its token is dead), with the agent
+  // stopped. Cancelling it with the request would leave the agent running,
+  // and free the permit while it was.
   let started = Instant::now();
   // Today's env-mode backoff values (main.rs).
   let client = SidecarClient::new(
@@ -287,16 +293,31 @@ async fn wake(
     },
     state.spawner.clone(),
   );
-  let outcome_name = match client.run().await {
-    RunExit::Boundary => "turn_ended",
-    RunExit::Unauthorized => "token_rejected",
-  };
-  tracing::info!(
-    outcome = outcome_name,
-    duration_ms = started.elapsed().as_millis() as u64,
-    "wake finished"
-  );
-  outcome(json!({"outcome": outcome_name}))
+  let run = tokio::spawn(async move {
+    let _permit = permit;
+    let outcome_name = match client.run().await {
+      RunExit::Boundary => "turn_ended",
+      RunExit::Unauthorized => "token_rejected",
+    };
+    tracing::info!(
+      outcome = outcome_name,
+      duration_ms = started.elapsed().as_millis() as u64,
+      "wake finished"
+    );
+    outcome_name
+  });
+  match run.await {
+    Ok(outcome_name) => outcome(json!({"outcome": outcome_name})),
+    // Only a panic in the turn's own code gets here.
+    Err(e) => {
+      tracing::error!(error = %e, "wake task failed");
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"error": "internal"})),
+      )
+        .into_response()
+    }
+  }
 }
 
 /// `POST /manifest`: dial ingest with the registration token, and only if

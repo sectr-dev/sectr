@@ -319,6 +319,54 @@ async fn a_wake_during_a_turn_is_refused_and_the_turn_completes() {
   );
 }
 
+/// The server dropping a held wake (or the platform cancelling it) doesn't
+/// cancel the turn: it runs to its end, the agent is stopped, and only then
+/// does the instance take another wake.
+#[tokio::test]
+async fn a_dropped_wake_request_still_finishes_its_turn() {
+  let Some(s) = serve_world(
+    1,
+    &[
+      sectr_worker::testing::delta_frame("still here"),
+      sectr_worker::testing::final_frame(),
+    ],
+  )
+  .await
+  else {
+    return;
+  };
+  let token = ingest_token(&s.w).await;
+  let wake = {
+    let (http, url, body) = (
+      s.http.clone(),
+      format!("{}/wake", s.base),
+      json!({"ingest_token": token}).to_string(),
+    );
+    tokio::spawn(async move { post_raw(&http, url, body).await })
+  };
+  for _ in 0..200 {
+    if s.runner.starts.load(Ordering::SeqCst) == 1 {
+      break;
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
+  wake.abort();
+  wait_for_tail(&s.w, &[EventType::MessageDelta, EventType::NoMoreActions]).await;
+  for _ in 0..200 {
+    if s.runner.stops.load(Ordering::SeqCst) == 1 {
+      break;
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
+  assert_eq!(
+    s.runner.stops.load(Ordering::SeqCst),
+    1,
+    "the agent was stopped"
+  );
+  let (status, body) = s.wake(json!({"ingest_token": "sit_never_minted"})).await;
+  assert_eq!((status, body), (200, json!({"outcome": "token_rejected"})));
+}
+
 #[tokio::test]
 async fn malformed_wakes_are_bad_requests() {
   let base = start_router(

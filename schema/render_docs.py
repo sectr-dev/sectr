@@ -202,7 +202,7 @@ def serve_section(serve: dict) -> str:
         "wakeResponse": ("`POST /wake` → 200", "Sent when the invocation ends: `turn_ended`, or `token_rejected` (401 at the dial, nothing ran)."),
         "manifestRequest": ("`POST /manifest`", "A registration token and the app's entry point."),
         "manifestResponse": ("`POST /manifest` → 200", "`manifest` (+ `uses_uv`), or `token_rejected` / `dial_failed` (never imported) / `import_failed`."),
-        "error": ("400 / 409 / 413", "`bad_request`, `busy` (one turn per instance, never queued), `too_large` (bodies over 4 KiB)."),
+        "error": ("400 / 409 / 413 / 500", "`bad_request`, `busy` (one turn per instance, never queued), `too_large` (bodies over 4 KiB), `internal` (the sidecar itself failed)."),
     }
     lines = ["## Sidecar serve mode (HTTP)", "",
              "`sectr-worker --serve` on the customer's own serverless or "

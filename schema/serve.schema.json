@@ -105,11 +105,11 @@
       ]
     },
     "error": {
-      "description": "A refused request: 400 `bad_request`, 409 `busy` (a turn is running on this instance), 413 `too_large`.",
+      "description": "A refused request: 400 `bad_request`, 409 `busy` (a turn is running on this instance), 413 `too_large`; 500 `internal` only if the sidecar itself failed.",
       "type": "object",
       "required": ["error"],
       "properties": {
-        "error": { "enum": ["bad_request", "busy", "too_large"] },
+        "error": { "enum": ["bad_request", "busy", "too_large", "internal"] },
         "message": { "type": "string" }
       }
     }
