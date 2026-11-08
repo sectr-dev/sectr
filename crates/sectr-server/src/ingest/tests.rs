@@ -94,6 +94,20 @@ fn test_config(lease_ttl_secs: u64) -> crate::config::ServerConfig {
 }
 
 async fn world(lease_ttl_secs: u64) -> Option<World> {
+  world_with_manifest(
+    lease_ttl_secs,
+    json!({
+        "routes": [{"path": "/assist"}],
+        "runner": {"command": ["python3", "-m", "agent"]},
+        "approval_tools": ["refund"]
+    }),
+  )
+  .await
+}
+
+/// [`world`] with the deployment's manifest given (serve-mode tests run
+/// the assignment's runner command for real).
+async fn world_with_manifest(lease_ttl_secs: u64, manifest: Value) -> Option<World> {
   let store: PgStore = test_pg::fresh_store().await?;
   let registry: Arc<dyn Registry> = Arc::new(store.registry());
   let journal: Arc<dyn sectr_common::journal::Journal> = Arc::new(store.journal());
@@ -110,11 +124,7 @@ async fn world(lease_ttl_secs: u64) -> Option<World> {
     .create_deployment(NewDeployment {
       app_id: app.id,
       version: 1,
-      manifest: json!({
-          "routes": [{"path": "/assist"}],
-          "runner": {"command": ["python3", "-m", "agent"]},
-          "approval_tools": ["refund"]
-      }),
+      manifest,
     })
     .await
     .unwrap();
@@ -2212,3 +2222,4 @@ async fn two_concurrent_turns_on_one_deployment() {
 }
 
 mod docker;
+mod serve;

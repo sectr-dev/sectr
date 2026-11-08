@@ -1,0 +1,4 @@
+{
+  "ingest_token": "sit_example_turn_token",
+  "ingest_url": "wss://ingest.sectr.dev/ingest"
+}

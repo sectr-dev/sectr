@@ -1,0 +1,11 @@
+{
+  "outcome": "manifest",
+  "manifest": {
+    "name": "support-agent",
+    "entry": "agent:app",
+    "python": "3.12",
+    "routes": [{ "path": "/chat", "framework": "pydantic-ai" }],
+    "env": ["OPENROUTER_API_KEY"]
+  },
+  "uses_uv": true
+}

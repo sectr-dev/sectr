@@ -1,0 +1,5 @@
+{
+  "outcome": "import_failed",
+  "exit_code": 1,
+  "stderr_tail": "sectr inspect failed: No module named 'agent'"
+}

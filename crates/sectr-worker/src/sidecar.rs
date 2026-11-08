@@ -29,6 +29,7 @@ use futures::{SinkExt, StreamExt};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -103,6 +104,18 @@ enum PostTurnPolicy {
 
 const POST_TURN_POLICY: PostTurnPolicy = PostTurnPolicy::Exit;
 
+/// How [`SidecarClient::run`] returned. Env mode exits either way; serve
+/// mode reports it as the wake's outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunExit {
+  /// A turn boundary: the invocation ended (sentinel, approval
+  /// suspension or failure; the journal holds which). The turn task has
+  /// finished, so the runner has been stopped.
+  Boundary,
+  /// The server rejected the token at the dial (401).
+  Unauthorized,
+}
+
 /// How one `serve_once` connection ended (besides errors).
 /// `Unauthorized` = the server rejected the token at the upgrade (401) —
 /// terminal for the container.
@@ -136,6 +149,11 @@ struct Conn {
   /// a reader blocked on the socket.
   turn_boundary: Arc<AtomicBool>,
   boundary_notify: Arc<Notify>,
+  /// The running turn task, if one was started. [`SidecarClient::run`]
+  /// awaits it before returning, and aborts it if `run` is dropped, so a
+  /// process that lives across runs (serve mode) never has a turn from an
+  /// earlier run still touching the runner.
+  turn_task: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl Conn {
@@ -145,7 +163,16 @@ impl Conn {
       pending: Arc::new(Mutex::new(HashMap::new())),
       turn_boundary: Arc::new(AtomicBool::new(false)),
       boundary_notify: Arc::new(Notify::new()),
+      turn_task: Arc::new(std::sync::Mutex::new(None)),
     }
+  }
+
+  fn take_turn_task(&self) -> Option<JoinHandle<()>> {
+    self
+      .turn_task
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .take()
   }
 
   fn signal_boundary(&self) {
@@ -202,28 +229,51 @@ impl SidecarClient {
   /// boundary, server restart, or revocation). Everything else
   /// reconnects forever (mid-turn connection losses reconnect and replay;
   /// the turn task survives reconnects via the shared `Conn`).
-  pub async fn run(&self) {
+  ///
+  /// Before returning, the turn task has finished: at a boundary it is
+  /// awaited (its `complete` frame is queued and the runner stopped); on
+  /// a 401 mid-turn it is aborted and the runner stopped. Dropping the
+  /// future aborts the turn task too.
+  pub async fn run(&self) -> RunExit {
     let conn = Conn::new();
+    let _abort_on_drop = AbortTurnOnDrop(conn.clone());
+    let exit = self.run_loop(&conn).await;
+    if let Some(task) = conn.take_turn_task() {
+      match exit {
+        RunExit::Boundary => {
+          let _ = task.await;
+        }
+        RunExit::Unauthorized => {
+          task.abort();
+          let _ = task.await;
+          self.spawner.stop().await;
+        }
+      }
+    }
+    exit
+  }
+
+  async fn run_loop(&self, conn: &Conn) -> RunExit {
     let mut backoff = self.config.reconnect_backoff;
     loop {
       // A boundary that fired while we were between connections
       // (e.g. the turn ended with IngestFailed during a reconnect
       // gap) — the policy still applies.
       if conn.boundary_reached() {
-        match self.on_boundary(&conn).await {
-          ServeFlow::Exit => return,
+        match self.on_boundary(conn).await {
+          ServeFlow::Exit => return RunExit::Boundary,
           ServeFlow::Reconnect => {}
         }
       }
-      match self.serve_once(&conn).await {
-        Ok(ServeFlow::Exit) => return,
+      match self.serve_once(conn).await {
+        Ok(ServeFlow::Exit) => return RunExit::Boundary,
         Ok(ServeFlow::Reconnect) => {
           // Clean close: dial again immediately.
           backoff = self.config.reconnect_backoff;
         }
         Err(ServeError::Unauthorized) => {
           tracing::warn!("ingest token rejected (401): container no longer wanted; exiting");
-          return;
+          return RunExit::Unauthorized;
         }
         Err(ServeError::Other(e)) => {
           tracing::warn!(error = %e, "ingest connection lost; reconnecting");
@@ -324,13 +374,14 @@ impl SidecarClient {
               // processing acks while the turn runs (the sink
               // awaits them). The lease guarantees one live
               // turn per session.
-              let conn = conn.clone();
               let engine = TurnEngine::new();
               let spawner = self.spawner.clone();
               let runner_base = self.config.runner_base.clone();
-              tokio::spawn(async move {
-                run_turn(&engine, &spawner, conn, assignment, runner_base).await;
+              let task_conn = conn.clone();
+              let task = tokio::spawn(async move {
+                run_turn(&engine, &spawner, task_conn, assignment, runner_base).await;
               });
+              *conn.turn_task.lock().unwrap_or_else(|e| e.into_inner()) = Some(task);
             }
             Err(e) => tracing::warn!(error = %e, "invalid assignment frame (ignored)"),
           }
@@ -363,6 +414,18 @@ impl SidecarClient {
     conn.send.lock().await.take();
     conn.fail_pending("connection lost").await;
     Ok(ServeFlow::Reconnect)
+  }
+}
+
+/// Aborts the run's turn task when [`SidecarClient::run`]'s future is
+/// dropped mid-turn (a no-op once `run` has taken the task).
+struct AbortTurnOnDrop(Conn);
+
+impl Drop for AbortTurnOnDrop {
+  fn drop(&mut self) {
+    if let Some(task) = self.0.take_turn_task() {
+      task.abort();
+    }
   }
 }
 

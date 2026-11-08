@@ -167,6 +167,20 @@ One WebSocket per sidecar container, dialed by the sidecar (`sidecar.schema.json
 | `abort` | server→sidecar | Turn is no longer this sidecar's (reconciler reclaim / fatal ingest error); the sink fails and the turn task exits. |
 
 
+## Sidecar serve mode (HTTP)
+
+`sectr-worker --serve` on the customer's own serverless or container platform (`serve.schema.json`). A wake is held open for the whole turn, which then runs over Contract 4 as above. The sidecar never answers 429 or 503 itself.
+
+| message | route | carries |
+|---|---|---|
+| `identity` | `GET /` → 200 | `sectr_sidecar.version` and `mode: serve`; the platform's readiness check. |
+| `wakeRequest` | `POST /wake` | The turn's ingest token. The sidecar dials its OWN `SECTR_INGEST_URL`, never a URL from the request. |
+| `wakeResponse` | `POST /wake` → 200 | Sent when the invocation ends: `turn_ended`, or `token_rejected` (401 at the dial, nothing ran). |
+| `manifestRequest` | `POST /manifest` | A registration token and the app's entry point. |
+| `manifestResponse` | `POST /manifest` → 200 | `manifest` (+ `uses_uv`), or `token_rejected` / `dial_failed` (never imported) / `import_failed`. |
+| `error` | 400 / 409 / 413 | `bad_request`, `busy` (one turn per instance, never queued), `too_large` (bodies over 4 KiB). |
+
+
 ## Worked example — approval pause
 
 The turn below is SUSPENDED by `TOOL_APPROVAL_REQUIRED` (no NO_MORE_ACTIONS — the gated tool is a pending action); the platform journals the decision, then re-invokes with `reason: approval_decision` (fresh runner, full transcript).
@@ -195,6 +209,6 @@ The turn below is SUSPENDED by `TOOL_APPROVAL_REQUIRED` (no NO_MORE_ACTIONS — 
 
 Golden files under `fixtures/` feed conformance checks and the Rust/Python typed-model tests:
 
-- `fixtures/valid/{event,runner-event,invocation,sidecar}/` — must validate
-- `fixtures/invalid/{event,runner-event,invocation,sidecar}/` — must be rejected
+- `fixtures/valid/{event,runner-event,invocation,sidecar,serve}/` — must validate
+- `fixtures/invalid/{event,runner-event,invocation,sidecar,serve}/` — must be rejected
 - Check everything: `uv run pytest` (from `schema/`)

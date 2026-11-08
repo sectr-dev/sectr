@@ -10,6 +10,7 @@ from the schemas, see [`REFERENCE.md`](REFERENCE.md).
 | `event.schema.json` | Event envelope and per-type payloads | `sectr-common`, `sdk-python`, dashboard |
 | `invocation.schema.json` | Runner invoke request and stream | `sectr-worker`, `sdk-python` |
 | `sidecar.schema.json` | Sidecar to server WebSocket frames | `sectr-server`, `sectr-worker` |
+| `serve.schema.json` | Sidecar serve mode: the HTTP wake and manifest requests | `sectr-server`, `sectr-worker` |
 | `sessions-api.yaml` | Session API, without auth | Composed into the two below |
 | `public-api.yaml` | Full server API: sessions plus control plane | `sectr-server`, dashboard, `sectr-cli` |
 | `dev-api.yaml` | Local `sectr dev` gateway: sessions plus `/dev/*`, no auth | `sectr-cli` |
@@ -201,6 +202,19 @@ types (`sidecar.schema.json`):
 - **Lifetime:** one connection per sidecar process, for one turn. Whether a runner tears
   down at a turn boundary is one policy choice in shared code, and today it always does.
 - **Dev:** `sectr dev` hosts the same engine in-process and bypasses this protocol.
+- **Serve mode:** `sectr-worker --serve` runs the sidecar as an HTTP server on the
+  customer's own serverless or container platform (`serve.schema.json`).
+  - `POST /wake` carries only the turn's ingest token. The sidecar dials the image's own
+    `SECTR_INGEST_URL`, never a URL from the request, because endpoint URLs are public.
+    The turn then runs over this protocol unchanged.
+  - The request is held open until the turn ends, then answered `turn_ended`, or
+    `token_rejected` when ingest refused the token and nothing ran.
+  - `POST /manifest` dials ingest with a registration token first. Only if the upgrade
+    is accepted does it import the app, the same way managed builds do, and return the
+    manifest.
+  - One turn at a time per instance: a request while another runs gets `409` at once.
+  - The sidecar never answers `429` or `503` itself, so a caller can treat those as the
+    platform saying the request never reached a container.
 
 ## API contract layering
 
