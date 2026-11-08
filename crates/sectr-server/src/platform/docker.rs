@@ -94,12 +94,14 @@ pub(crate) fn image_tag(deployment_id: Uuid, version: i64) -> String {
 /// Shared with the GcpPlatform, which must produce the
 /// same image content.
 pub(crate) fn generate_dockerfile(base_image: &str) -> String {
-  format!(
-    "FROM {base_image}\nCOPY app /app\nWORKDIR /app\n\
-         RUN ln -s /opt/sdk-python /sdk-python\n\
-         RUN if [ -f pyproject.toml ]; then sed -i 's#\\.\\./\\.\\./sdk-python#/sdk-python#g' pyproject.toml uv.lock; uv sync --frozen; fi\n\
-         RUN chmod -R a+rX /app\n"
-  )
+  // The app's lines are shared with endpoint images; only the SDK path
+  // rewrite is this server's own.
+  let steps = sectr_common::dockerfile::app_build_steps(
+    "app",
+    "RUN ln -s /opt/sdk-python /sdk-python\n",
+    "sed -i 's#\\.\\./\\.\\./sdk-python#/sdk-python#g' pyproject.toml uv.lock; ",
+  );
+  format!("FROM {base_image}\n{steps}")
 }
 
 /// One name per turn: a new turn can't collide with, or remove, another
@@ -578,6 +580,19 @@ mod tests {
       manifest,
       config,
     )
+  }
+
+  /// Sharing the app's lines with endpoint images must not change a managed
+  /// build's Dockerfile by one byte.
+  #[test]
+  fn the_managed_dockerfile_is_unchanged() {
+    assert_eq!(
+      generate_dockerfile("sectr/runner:latest"),
+      "FROM sectr/runner:latest\nCOPY app /app\nWORKDIR /app\n\
+       RUN ln -s /opt/sdk-python /sdk-python\n\
+       RUN if [ -f pyproject.toml ]; then sed -i 's#\\.\\./\\.\\./sdk-python#/sdk-python#g' pyproject.toml uv.lock; uv sync --frozen; fi\n\
+       RUN chmod -R a+rX /app\n"
+    );
   }
 
   #[test]
