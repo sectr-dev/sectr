@@ -214,6 +214,7 @@ mod tests {
     // One active + one retired deployment (history order matters).
     let d1 = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: serde_json::json!({
@@ -227,6 +228,7 @@ mod tests {
       .unwrap();
     let _d2 = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 2,
         manifest: serde_json::json!({
@@ -265,6 +267,7 @@ mod tests {
       chrono::Duration::seconds(30),
     );
     let config = ServerConfig {
+      endpoints: Default::default(),
       secrets_master_key: None,
       ..test_config()
     };
@@ -288,6 +291,7 @@ mod tests {
 
   fn test_config() -> ServerConfig {
     ServerConfig {
+      endpoints: Default::default(),
       pg_url: "postgres://unused".into(),
       bind_addr: "127.0.0.1:0".parse().unwrap(),
       secrets_master_key: None,

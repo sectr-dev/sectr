@@ -28,6 +28,7 @@ pub(crate) async fn app_with_deployment(
     .unwrap();
   let deployment = registry
     .create_deployment(NewDeployment {
+      endpoint_url: None,
       app_id: app.id,
       version: 1,
       manifest: json!({"routes": [{"path": "/test"}]}),

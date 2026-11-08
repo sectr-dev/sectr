@@ -622,6 +622,7 @@ mod tests {
     let deployment = s
       .registry()
       .create_deployment(sectr_common::registry::NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: serde_json::json!({ "routes": [{ "path": "/test" }] }),

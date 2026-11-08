@@ -415,6 +415,7 @@ async fn sleeping_runners(
   let deployment = w
     .registry
     .create_deployment(NewDeployment {
+      endpoint_url: None,
       app_id: app.id,
       version: 1,
       manifest: json!({"routes": [{"path": "/assist"}], "runner": {"image": image}}),
@@ -608,6 +609,7 @@ async fn a_pruned_image_gives_the_redeploy_error() {
   let pruned = w
     .registry
     .create_deployment(NewDeployment {
+      endpoint_url: None,
       app_id: row.app_id,
       version: 2,
       manifest: json!({"runner": {"image": "sectr-app-pruned:v1"}}),

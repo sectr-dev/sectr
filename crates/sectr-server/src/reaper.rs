@@ -305,6 +305,7 @@ mod tests {
       .unwrap();
     let deployment = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: serde_json::json!({"routes": [{"path": "/test"}]}),

@@ -525,6 +525,7 @@ mod tests {
 
   fn config(image: Option<&str>) -> ServerConfig {
     ServerConfig {
+      endpoints: Default::default(),
       pg_url: "postgres://x".into(),
       bind_addr: "0.0.0.0:8080".parse().unwrap(),
       secrets_master_key: None,

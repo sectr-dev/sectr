@@ -16,6 +16,11 @@ pub enum DispatchError {
   Spawn(String),
   #[error("dispatch unavailable: {0}")]
   Unavailable(String),
+  /// An endpoint deployment's wake failed. The message is the whole
+  /// `SESSION_ERROR` text and starts with `endpoint wake failed:`, so the
+  /// dashboard can recognize it.
+  #[error("{0}")]
+  Wake(String),
 }
 
 #[async_trait::async_trait]

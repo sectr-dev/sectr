@@ -213,6 +213,7 @@ async fn world_inner(
       .unwrap();
     let deployment = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: json!({"routes": [{"path": "/test"}]}),
@@ -321,6 +322,7 @@ async fn world_inner(
 
 fn test_config() -> ServerConfig {
   ServerConfig {
+    endpoints: Default::default(),
     pg_url: "postgres://unused".into(),
     bind_addr: "127.0.0.1:0".parse().unwrap(),
     secrets_master_key: None,

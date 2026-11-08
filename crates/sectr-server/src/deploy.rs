@@ -79,7 +79,7 @@ use sectr_common::registry::{Deployment, DeploymentStatus, Registry};
 use sectr_common::sidecar::{APPROVAL_POLICY_ENV, APPROVAL_POLICY_ENV_IS_RESERVED};
 
 use crate::auth::PlatformPrincipal;
-use crate::platform::{BuildOutput, BuildRequest};
+use crate::platform::BuildRequest;
 use crate::state::AppState;
 
 /// Multipart cap: tarballs are small (source code), but a 2 MB default
@@ -94,8 +94,18 @@ pub fn deploy_router() -> Router<AppState> {
       post(activate_deployment),
     )
     .route("/apps/{appId}/deployments", get(list_deployments))
+    .route(
+      "/endpoint-deployments",
+      post(endpoint::register_endpoint).layer(DefaultBodyLimit::max(endpoint::REGISTER_BODY_LIMIT)),
+    )
+    .route(
+      "/endpoint-deployments/config",
+      get(endpoint::endpoint_config),
+    )
     .layer(DefaultBodyLimit::max(DEPLOY_BODY_LIMIT))
 }
+
+mod endpoint;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -105,6 +115,7 @@ pub fn deploy_router() -> Router<AppState> {
 /// computed `active` flag (is this the app's routing target right now).
 /// `error` is absent (not null) unless the build failed — the yaml schema
 /// keeps it optional to match.
+/// `endpoint_url` is always present: `null` for a managed deployment.
 #[derive(Serialize)]
 struct DeploymentDto {
   id: Uuid,
@@ -115,6 +126,7 @@ struct DeploymentDto {
   #[serde(skip_serializing_if = "Option::is_none")]
   error: Option<String>,
   active: bool,
+  endpoint_url: Option<String>,
 }
 
 async fn deployment_dto(row: Deployment, registry: &dyn Registry) -> Result<DeploymentDto, String> {
@@ -131,6 +143,7 @@ async fn deployment_dto(row: Deployment, registry: &dyn Registry) -> Result<Depl
     created_at: row.created_at.to_rfc3339(),
     error: row.error,
     active,
+    endpoint_url: row.endpoint_url,
   })
 }
 
@@ -320,12 +333,14 @@ fn slugify(name: &str) -> String {
 // The deploy pipeline
 // ---------------------------------------------------------------------------
 
-async fn deploy(
+/// The start every deploy shares, managed or endpoint: the app on first
+/// use (CLI-first creation), the reserved-secret check, and the next
+/// version number.
+async fn prepare_deploy(
   state: &AppState,
   org_id: Uuid,
   parsed: &DeployManifest,
-  tarball: Vec<u8>,
-) -> Result<DeploymentDto, String> {
+) -> Result<(sectr_common::registry::App, i64), String> {
   let registry = state.registry();
   let slug = slugify(&parsed.app_name);
   let reg_err = |e: sectr_common::registry::RegistryError| e.to_string();
@@ -366,6 +381,18 @@ async fn deploy(
     .max()
     .unwrap_or(0)
     + 1;
+  Ok((app, version))
+}
+
+async fn deploy(
+  state: &AppState,
+  org_id: Uuid,
+  parsed: &DeployManifest,
+  tarball: Vec<u8>,
+) -> Result<DeploymentDto, String> {
+  let registry = state.registry();
+  let reg_err = |e: sectr_common::registry::RegistryError| e.to_string();
+  let (app, version) = prepare_deploy(state, org_id, parsed).await?;
 
   // Tarball → artifact store (the URI rides the row).
   let key = format!("{}/{}/{}.tar.gz", org_id, app.id, version);
@@ -377,6 +404,7 @@ async fn deploy(
 
   let deployment = registry
     .create_deployment(sectr_common::registry::NewDeployment {
+      endpoint_url: None,
       app_id: app.id,
       version,
       // Placeholder until the authoritative import lands.
@@ -438,6 +466,27 @@ async fn run_build(state: AppState, deployment: Deployment, parsed: DeployManife
       outcome = tracing::field::Empty,
   );
   let _guard = span.enter();
+  let result = build_and_activate(&state, &deployment, &parsed).await;
+  let outcome = record_deploy_outcome(&state, &deployment, result, json!({})).await;
+  span.record("outcome", outcome);
+  let registry = state.registry();
+  // The build has resolved (either way) — clear the in-flight ref.
+  if let Err(e) = registry.set_deployment_build_ref(deployment.id, None).await {
+    tracing::error!(deployment = %deployment.id, error = %e, "failed to clear build_ref");
+  }
+}
+
+/// Resolve a deploy's background outcome on its `building` row: on
+/// failure store the error tail and mark it `failed`; on success clear any
+/// stale error (the row was activated already). Both count in the deploy
+/// metric and analytics; `extra_props` adds analytics properties (an
+/// endpoint registration's `kind`).
+async fn record_deploy_outcome(
+  state: &AppState,
+  deployment: &Deployment,
+  result: Result<(), String>,
+  extra_props: Value,
+) -> &'static str {
   let registry = state.registry();
   // Product analytics need the org (deployment rows don't carry
   // org_id; apps do). One lookup per build — a failed lookup just skips
@@ -449,10 +498,13 @@ async fn run_build(state: AppState, deployment: Deployment, parsed: DeployManife
       None
     }
   };
-  let deploy_props =
-    || serde_json::json!({ crate::analytics::PROP_APP_ID: deployment.app_id.to_string() });
-  if let Err(e) = build_and_activate(&state, &deployment, &parsed).await {
-    span.record("outcome", "failed");
+  let deploy_props = || {
+    let mut props = extra_props.clone();
+    props[crate::analytics::PROP_APP_ID] = json!(deployment.app_id.to_string());
+    props
+  };
+  let outcome = if result.is_err() { "failed" } else { "success" };
+  if let Err(e) = result {
     crate::metrics::DEPLOYS.add(1, &[KeyValue::new("outcome", "failed")]);
     if let Some(org_id) = org_id {
       state.analytics().track(
@@ -476,7 +528,6 @@ async fn run_build(state: AppState, deployment: Deployment, parsed: DeployManife
       tracing::error!(deployment = %deployment.id, error = %e, "failed to mark deployment failed");
     }
   } else {
-    span.record("outcome", "success");
     crate::metrics::DEPLOYS.add(1, &[KeyValue::new("outcome", "success")]);
     if let Some(org_id) = org_id {
       state.analytics().track(
@@ -493,10 +544,7 @@ async fn run_build(state: AppState, deployment: Deployment, parsed: DeployManife
       tracing::error!(deployment = %deployment.id, error = %e, "failed to clear build error");
     }
   }
-  // The build has resolved (either way) — clear the in-flight ref.
-  if let Err(e) = registry.set_deployment_build_ref(deployment.id, None).await {
-    tracing::error!(deployment = %deployment.id, error = %e, "failed to clear build_ref");
-  }
+  outcome
 }
 
 /// Cap on the stored build-failure tail (bytes).
@@ -565,7 +613,12 @@ async fn build_and_activate(
         format!("{}\n--- build log tail ---\n{}", e.message, e.logs_tail)
       }
     })?;
-  let manifest = compose_manifest(&output, parsed);
+  let manifest = compose_manifest(
+    Some(&output.image_ref),
+    &output.imported_manifest,
+    output.uses_uv,
+    parsed,
+  );
   state
     .registry()
     .set_deployment_manifest(deployment.id, &manifest)
@@ -578,9 +631,15 @@ async fn build_and_activate(
 /// consumes (routes for `deployment_serves_route`, env declarations for WS
 /// G, runner.* for the spawner + dispatcher). Cloud-neutral — the
 /// builder returns the raw import; this composition stays server-side.
-fn compose_manifest(output: &BuildOutput, parsed: &DeployManifest) -> Value {
-  let imported = &output.imported_manifest;
-  let mut runner_command = if output.uses_uv {
+/// `image_ref` is `None` for an endpoint deployment (no image Sectr built;
+/// the dispatcher never reads `runner.image`).
+fn compose_manifest(
+  image_ref: Option<&str>,
+  imported: &Value,
+  uses_uv: bool,
+  parsed: &DeployManifest,
+) -> Value {
+  let mut runner_command = if uses_uv {
     vec![
       "uv".into(),
       "run".into(),
@@ -600,7 +659,7 @@ fn compose_manifest(output: &BuildOutput, parsed: &DeployManifest) -> Value {
       "routes": imported.get("routes").cloned().unwrap_or(json!([])),
       "env": imported.get("env").cloned().unwrap_or(json!([])),
       "runner": {
-          "image": output.image_ref,
+          "image": image_ref,
           "command": runner_command,
           "workdir": "/app",
       },
@@ -790,6 +849,7 @@ mod tests {
 
   fn test_config() -> ServerConfig {
     ServerConfig {
+      endpoints: Default::default(),
       pg_url: "postgres://unused".into(),
       bind_addr: "127.0.0.1:0".parse().unwrap(),
       secrets_master_key: None,
@@ -977,6 +1037,7 @@ mod tests {
       .unwrap();
     let deployment = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: json!({"routes": [{"path": "/test"}]}),
@@ -1051,6 +1112,7 @@ mod tests {
       .unwrap();
     let deployment_b = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app_b.id,
         version: 1,
         manifest: json!({"routes": [{"path": "/test"}]}),
@@ -1142,6 +1204,7 @@ mod tests {
     // with a build_ref, and nothing will ever resolve it.
     let stuck = registry
       .create_deployment(sectr_common::registry::NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: json!({"routes": []}),
@@ -1220,6 +1283,7 @@ mod tests {
       .await
       .unwrap();
     let new_row = |version: i64| sectr_common::registry::NewDeployment {
+      endpoint_url: None,
       app_id: app.id,
       version,
       manifest: json!({"routes": []}),

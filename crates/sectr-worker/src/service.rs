@@ -595,6 +595,7 @@ mod tests {
     let deployment = store
       .registry()
       .create_deployment(sectr_common::registry::NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: manifest.clone(),

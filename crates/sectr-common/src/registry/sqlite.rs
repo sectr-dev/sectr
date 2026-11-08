@@ -63,7 +63,7 @@ impl SqliteRegistry {
   /// source of the returned value.
   async fn fetch_deployment(&self, id: DeploymentId) -> Result<Deployment> {
     sqlx::query_as::<_, Deployment>(
-      "SELECT id, app_id, version, status, manifest, artifact_uri, build_ref, error, created_at \
+      "SELECT id, app_id, version, status, manifest, artifact_uri, build_ref, error, endpoint_url, created_at \
              FROM deployments WHERE id = ?",
     )
     .bind(id)
@@ -276,13 +276,14 @@ impl Registry for SqliteRegistry {
   async fn create_deployment(&self, new: NewDeployment) -> Result<Deployment> {
     let id = Uuid::now_v7();
     sqlx::query(
-      "INSERT INTO deployments (id, app_id, version, status, manifest, created_at) \
-             VALUES (?, ?, ?, 'building', ?, ?)",
+      "INSERT INTO deployments (id, app_id, version, status, manifest, endpoint_url, created_at) \
+             VALUES (?, ?, ?, 'building', ?, ?, ?)",
     )
     .bind(id)
     .bind(new.app_id)
     .bind(new.version)
     .bind(new.manifest.to_string())
+    .bind(new.endpoint_url.as_deref())
     .bind(Utc::now())
     .execute(&self.pool)
     .await?;
@@ -349,7 +350,7 @@ impl Registry for SqliteRegistry {
   async fn list_deployments(&self, app_id: AppId) -> Result<Vec<Deployment>> {
     Ok(
       sqlx::query_as::<_, Deployment>(
-        "SELECT id, app_id, version, status, manifest, artifact_uri, build_ref, error, created_at \
+        "SELECT id, app_id, version, status, manifest, artifact_uri, build_ref, error, endpoint_url, created_at \
              FROM deployments WHERE app_id = ? ORDER BY version DESC, created_at DESC",
       )
       .bind(app_id)
@@ -361,7 +362,7 @@ impl Registry for SqliteRegistry {
   async fn active_deployment(&self, app_id: AppId) -> Result<Option<Deployment>> {
     Ok(
       sqlx::query_as::<_, Deployment>(
-        "SELECT id, app_id, version, status, manifest, artifact_uri, build_ref, error, created_at \
+        "SELECT id, app_id, version, status, manifest, artifact_uri, build_ref, error, endpoint_url, created_at \
              FROM deployments WHERE app_id = ? AND status = 'active' \
              ORDER BY created_at DESC, version DESC LIMIT 1",
       )
@@ -1080,6 +1081,7 @@ mod tests {
       .unwrap();
     let deployment = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: json!({"routes": [{"path": "/test"}]}),
@@ -1139,6 +1141,7 @@ mod tests {
     let (registry, _org, app, _deployment, _path) = registry().await;
     let created = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 7,
         manifest: json!({"routes": [{"path": "/roundtrip"}]}),
@@ -1169,6 +1172,7 @@ mod tests {
       .unwrap();
     let v2 = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 2,
         manifest: json!({"routes": [{"path": "/test"}]}),

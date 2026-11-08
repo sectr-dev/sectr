@@ -137,6 +137,7 @@ CREATE TABLE deployments (
     artifact_uri  text,                 -- tarball location (set once built)
     build_ref     text,                 -- opaque builder-specific in-flight-build id (e.g. a build op id); set while `building`, NULL otherwise
     error         text,                 -- failure reason of a `failed` build (truncated build-output tail, or the stale-sweep message); NULL otherwise
+    endpoint_url  text,                 -- endpoint deployments: the customer's serve-mode sidecar, woken over HTTP per turn; NULL = managed (built and run by the server's platform)
     created_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (app_id, version)
 );

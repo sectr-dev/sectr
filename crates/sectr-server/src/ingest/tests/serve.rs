@@ -15,10 +15,10 @@ use sectr_worker::serve::{ServeConfig, router};
 use sectr_worker::sidecar::RunnerSpawner;
 
 /// A `SubprocessRunner` that counts its starts and stops.
-struct CountingRunner {
-  inner: SubprocessRunner,
-  starts: AtomicUsize,
-  stops: AtomicUsize,
+pub(super) struct CountingRunner {
+  pub(super) inner: SubprocessRunner,
+  pub(super) starts: AtomicUsize,
+  pub(super) stops: AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -44,7 +44,7 @@ struct Serve {
   http: reqwest::Client,
 }
 
-fn temp_path(what: &str) -> std::path::PathBuf {
+pub(super) fn temp_path(what: &str) -> std::path::PathBuf {
   std::env::temp_dir().join(format!("sectr-serve-{what}-{}", uuid::Uuid::now_v7()))
 }
 
@@ -53,7 +53,7 @@ fn temp_path(what: &str) -> std::path::PathBuf {
 /// only the direct child would leave the agent running. The shell logs
 /// the agent's pid and, with `delay_secs`, waits before starting it (so a
 /// turn is still running while a test sends a second request).
-fn fake_runner_manifest(
+pub(super) fn fake_runner_manifest(
   frames: &std::path::Path,
   pids: &std::path::Path,
   delay_secs: u32,
@@ -75,7 +75,7 @@ fn fake_runner_manifest(
   })
 }
 
-fn serve_config(ingest_url: String, runner_port: u16) -> ServeConfig {
+pub(super) fn serve_config(ingest_url: String, runner_port: u16) -> ServeConfig {
   ServeConfig {
     port: 0,
     ingest_url,
@@ -88,7 +88,7 @@ fn serve_config(ingest_url: String, runner_port: u16) -> ServeConfig {
 }
 
 /// Bind the serve router on a free port; returns its base URL.
-async fn start_router(config: ServeConfig, spawner: Arc<dyn RunnerSpawner>) -> String {
+pub(super) async fn start_router(config: ServeConfig, spawner: Arc<dyn RunnerSpawner>) -> String {
   let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
   let app = router(config, spawner);
@@ -634,7 +634,7 @@ async fn an_approval_suspension_ends_the_wake_and_the_resume_is_a_second_wake() 
 // POST /manifest
 // ---------------------------------------------------------------------------
 
-const AGENT_SRC: &str = r#"
+pub(super) const AGENT_SRC: &str = r#"
 import os
 from sectr import AgentApp
 
@@ -647,7 +647,7 @@ async def chat(ctx):
 
 /// The SDK's interpreter (the repo's `sdk-python/.venv`), or `None` to
 /// skip: the import needs `sectr` installed.
-fn sdk_python() -> Option<String> {
+pub(super) fn sdk_python() -> Option<String> {
   // Not canonicalized: the venv's python3 is a symlink to the base
   // interpreter, and only the venv path finds the venv's packages.
   let python = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -661,7 +661,7 @@ fn sdk_python() -> Option<String> {
 
 /// An app directory holding `agent.py` (and `pyproject.toml` if asked),
 /// plus a marker file the module creates when it's imported.
-fn app_dir(source: &str, pyproject: bool) -> (std::path::PathBuf, std::path::PathBuf) {
+pub(super) fn app_dir(source: &str, pyproject: bool) -> (std::path::PathBuf, std::path::PathBuf) {
   let dir = temp_path("app");
   std::fs::create_dir_all(&dir).unwrap();
   let marker = dir.join("imported");

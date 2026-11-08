@@ -781,6 +781,7 @@ async fn bootstrap_deployment(
       let version = existing.map(|d| d.version).unwrap_or(0) + 1;
       let deployment = registry
         .create_deployment(sectr_common::registry::NewDeployment {
+          endpoint_url: None,
           app_id,
           version,
           manifest: manifest.clone(),

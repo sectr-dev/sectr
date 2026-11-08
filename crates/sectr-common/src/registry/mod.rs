@@ -321,6 +321,11 @@ pub struct Deployment {
   /// by a server restart). `None` while `building` and for successful
   /// builds; surfaced through the public API's Deployment DTO.
   pub error: Option<String>,
+  /// The customer's endpoint for an endpoint deployment (the sidecar in
+  /// serve mode, woken over HTTP for each turn). `None` = a managed
+  /// deployment, built and run by the server's platform. Set once at
+  /// creation.
+  pub endpoint_url: Option<String>,
   pub created_at: DateTime<Utc>,
 }
 
@@ -380,6 +385,8 @@ pub struct NewDeployment {
   pub version: i64,
   /// Starts in `building`; `artifact_uri` set once built.
   pub manifest: Value,
+  /// `Some` for an endpoint deployment ([`Deployment::endpoint_url`]).
+  pub endpoint_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

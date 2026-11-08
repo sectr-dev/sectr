@@ -111,6 +111,10 @@ These go in `.env`. Apply changes with `docker compose up -d`.
 | `SECTR_SERVER_PORT` | `8080` | The server's published port, optionally with an address |
 | `SECTR_DASHBOARD_PORT` | `3000` | The dashboard's published port, optionally with an address |
 | `SECTR_DOCKER_SOCKET_PATH` | `/var/run/docker.sock` | The Docker socket, for rootless Docker |
+| `SECTR_ENDPOINT_INGEST_URL` | Unset | Turns on endpoint deployments: agents on your own serverless or containers. Set it to the server's ingest as those platforms reach it, for example `wss://api.sectr.example.com/ingest` |
+| `SECTR_ENDPOINT_ALLOW_PRIVATE` | `false` | Allows endpoints on private addresses and plain `http`, for endpoints on your own network |
+| `SECTR_ENDPOINT_WAKE_DEADLINE_SECS` | `60` | How long an endpoint has to start a turn, cold start included. 5 to 90 |
+| `SECTR_ENDPOINT_TURN_TIMEOUT_SECS` | `3600` | The longest the server holds a turn's request to an endpoint open |
 
 The defaults for `SECTR_MAX_CONCURRENT_TURNS` and the runner limits allow up to 10 CPUs and 10 GB at once, so lower them on a smaller machine. A turn that would go over the limit is refused, and a client can retry it.
 

@@ -241,12 +241,25 @@ tail of the output. Rows orphaned by a server restart are marked failed at start
 Validation problems are still synchronous `4xx` errors. A `building` deployment never takes
 routing.
 
+**Endpoint deployments** run on the customer's own serverless or containers, with the sidecar
+in serve mode (`serve.schema.json`), and nothing is built. `POST /endpoint-deployments` takes
+`sectr.toml` and the endpoint's URL, probes the endpoint, and answers `202` with the row in
+`building`, like a build. In the background the server asks the endpoint for its manifest
+(`POST /manifest`). The endpoint's sidecar first dials this server's ingest with a single-use
+registration token, then imports the app inside the deployed image. The server activates the
+row only if the endpoint answered with a manifest and its own ingest saw the dial. The row
+stores `endpoint_url`, which is `null` for every other deployment. For each turn the server
+wakes the endpoint instead of starting a runner. A wake that isn't delivered ends the turn
+with a `SESSION_ERROR` starting `endpoint wake failed:`. The feature is off unless
+`SECTR_ENDPOINT_INGEST_URL` is set.
+
 Two artifacts are called "manifest":
 
 1. **`sectr.toml`** is the developer's project file, uploaded as-is.
 2. **The registry manifest** is stored in `deployments.manifest` and composed by the server's
    build step. It combines a real import inside the built image (`routes[]`, `env[]`, ...)
-   with platform fields (`runner.*`, `approval_tools`). Its shape lives in
+   with platform fields (`runner.*`, `approval_tools`). For an endpoint deployment the
+   import ran inside the deployed image, and `runner.image` is `null`. Its shape lives in
    `crates/sectr-server/src/deploy.rs`.
 
 Tarball members are relative to the project root, with no wrapper directory.

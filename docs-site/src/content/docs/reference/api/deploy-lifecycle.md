@@ -29,7 +29,8 @@ curl -X POST https://api.sectr.dev/deployments \
 ```json
 {
   "id": "0198c7a2-…", "app_id": "…", "version": 3,
-  "status": "building", "created_at": "…", "active": false
+  "status": "building", "created_at": "…", "active": false,
+  "endpoint_url": null
 }
 ```
 

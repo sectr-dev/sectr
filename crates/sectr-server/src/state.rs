@@ -12,7 +12,7 @@ use crate::analytics::Analytics;
 use crate::config::{ArtifactBackend, ServerConfig};
 use crate::http::tokens::MintLimiter;
 use crate::ingest::IngestHub;
-use crate::platform::RunnerPlatform;
+use crate::platform::{EndpointPlatform, RunnerPlatform};
 use crate::signup::SignupNotifier;
 
 /// Build the deploy-path artifact store from config:
@@ -84,6 +84,10 @@ pub struct AppState {
   mint_limiter: Arc<MintLimiter>,
   /// `POST /auth/cli` token bucket.
   cli_login_limiter: Arc<crate::cli_login::StartLimiter>,
+  /// The endpoint-deployment backend, for registration's probe and
+  /// manifest fetch. The composition root passes the instance it wrapped
+  /// in the routing platform.
+  endpoints: Arc<EndpointPlatform>,
 }
 
 impl AppState {
@@ -99,6 +103,11 @@ impl AppState {
     secrets_enabled: bool,
   ) -> Self {
     let mint_limiter = Arc::new(MintLimiter::new(config.mint_rate_limit_per_hour));
+    let endpoints = Arc::new(EndpointPlatform::new(
+      config.endpoints.clone(),
+      registry.clone(),
+    ));
+    endpoints.attach_hub(Arc::downgrade(&hub));
     AppState {
       registry,
       journal,
@@ -113,7 +122,18 @@ impl AppState {
       pg: None,
       mint_limiter,
       cli_login_limiter: Arc::new(crate::cli_login::StartLimiter::standard()),
+      endpoints,
     }
+  }
+
+  /// Use this endpoint platform (the one the routing platform wraps).
+  pub fn with_endpoints(mut self, endpoints: Arc<EndpointPlatform>) -> Self {
+    self.endpoints = endpoints;
+    self
+  }
+
+  pub fn endpoints(&self) -> &Arc<EndpointPlatform> {
+    &self.endpoints
   }
 
   /// Attach the live analytics client (composition root; tests that
