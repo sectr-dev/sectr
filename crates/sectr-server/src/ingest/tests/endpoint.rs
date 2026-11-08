@@ -363,6 +363,8 @@ async fn a_wake_is_retried_until_the_endpoint_comes_up() {
 async fn platform_refusals_and_a_busy_sidecar_are_retried_one_at_a_time() {
   let Some(e) = endpoint_world(Options::new(
     vec![
+      Step::Status(429, "no available instance"),
+      Step::Status(500, "no available instance"),
       Step::Status(503, "no instance"),
       Step::Status(409, r#"{"error":"busy"}"#),
     ],
@@ -373,7 +375,7 @@ async fn platform_refusals_and_a_busy_sidecar_are_retried_one_at_a_time() {
     return;
   };
   wait_for_tail(&e.w, &[EventType::MessageDelta, EventType::NoMoreActions]).await;
-  assert_eq!(e.fake.requests(), 3);
+  assert_eq!(e.fake.requests(), 5);
   assert_eq!(e.fake.max_in_flight.load(Ordering::SeqCst), 1);
   assert_eq!(e.runner.starts.load(Ordering::SeqCst), 1);
   e.wait_stopped().await;
@@ -387,8 +389,8 @@ async fn other_answers_fail_the_turn_at_once() {
       "answered HTTP 404: Not Found",
     ),
     (
-      Step::Status(500, "boom\nwith\x07controls"),
-      "answered HTTP 500: boomwithcontrols",
+      Step::Status(502, "boom\nwith\x07controls"),
+      "answered HTTP 502: boomwithcontrols",
     ),
     (Step::Redirect, "answered HTTP 307"),
   ] {

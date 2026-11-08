@@ -9,9 +9,14 @@
 //! The wake: [`EndpointPlatform::spawn`] starts a task that POSTs
 //! `{"ingest_token"}` to `<endpoint>/wake` and holds the request open for
 //! the turn, then waits until the hub says the sidecar has taken its
-//! assignment ("delivered"). Before delivery, and only when nothing reached
-//! a sidecar (a connect error, a platform `429`/`503`, a busy sidecar's
-//! `409`), the task retries. It never sends a second wake while one is in
+//! assignment ("delivered"). Before delivery, and only when nothing ran (a
+//! connect error, the platform's "no instance available" `429`, `500` or
+//! `503`, a busy sidecar's `409`), the task retries. Cloud Run answers
+//! `429` when max-instances is reached and `500` when scaling can't keep
+//! up. A `500` from the sidecar itself (a panic) is safe to retry too: it
+//! answers only once its run has ended, and a run that took the assignment
+//! has already flipped the delivery watch, which stops every retry. It
+//! never sends a second wake while one is in
 //! flight or after delivery: the hub hands the assignment out once, and a
 //! second dial on the same token would replace the first connection. A
 //! wake that isn't delivered within the deadline, or that fails before
@@ -431,7 +436,7 @@ async fn wake_task(task: WakeTask) {
           break_done(&inflight, &handle);
           return;
         }
-        if matches!(status, 409 | 429 | 503) {
+        if matches!(status, 409 | 429 | 500 | 503) {
           WakeFailure {
             outcome: "http_error",
             message: format!(
