@@ -17,6 +17,14 @@
 //! `active` or `failed` (`--timeout` bounds the wait, default 10min).
 //! Cloudflare's ~100s proxy limit no longer applies — nothing but the
 //! upload rides a single request.
+//!
+//! Endpoint mode: when `sectr.toml` has `[deploy] endpoint`, nothing is
+//! packaged. The agent runs on the developer's own platform from the image
+//! `sectr init --endpoint` set up, and this registers its URL
+//! (`POST /endpoint-deployments`): the server checks the endpoint, gets the
+//! manifest from the deployed image and activates, and the same poll
+//! reports the outcome. An empty `endpoint` means the image isn't deployed
+//! yet, so this prints what's left to do and exits non-zero.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -25,6 +33,9 @@ use anyhow::Context;
 
 use clap::Parser;
 
+/// Deploy to a server. Sectr builds and runs the project by default; with
+/// `[deploy] endpoint = "https://…"` in sectr.toml, it registers your own
+/// endpoint instead (set it up with `sectr init --endpoint <platform>`).
 #[derive(Parser, Debug)]
 pub struct DeployArgs {
   /// Project directory (must contain sectr.toml).
@@ -41,7 +52,8 @@ pub struct DeployArgs {
   /// (or SECTR_PLATFORM_KEY).
   #[arg(long)]
   pub key: Option<String>,
-  /// How long to wait for the server-side build to resolve, in seconds.
+  /// How long to wait for the server-side build (or the endpoint's
+  /// registration) to resolve, in seconds.
   #[arg(long, default_value_t = 600)]
   pub timeout_secs: u64,
 }
@@ -64,6 +76,9 @@ const SKIP_DIRS: &[&str] = &[
 /// tarball on a slow link, but a hung connection must eventually error
 /// instead of blocking forever.
 const UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+/// Per-request cap on the endpoint registration POST: the server probes
+/// the endpoint before answering, allowing 30 s for a cold start.
+const REGISTER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Per-request cap on each poll GET: a hung connection must not outlive
 /// the overall `--timeout`; the poll loop retries transport errors anyway.
 const POLL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -152,12 +167,81 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
       config_path.display()
     )
   })?;
+  let mode = deploy_mode(&manifest_toml)?;
+  if mode == Mode::EndpointUnset {
+    anyhow::bail!("{}", unset_endpoint_message());
+  }
 
   let target = crate::auth::resolve(args.api.as_deref(), args.key.as_deref())?;
-  let key = target.key;
+  let timeout = Duration::from_secs(args.timeout_secs);
+  match mode {
+    Mode::Endpoint(url) => deploy_endpoint(&target, manifest_toml, &url, timeout).await,
+    Mode::Managed | Mode::EndpointUnset => {
+      deploy_managed(&target, &project, manifest_toml, timeout).await
+    }
+  }
+}
+
+/// How `sectr deploy` deploys this project, from `[deploy] endpoint` in
+/// `sectr.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Mode {
+  /// No `endpoint` key: Sectr builds and runs it.
+  Managed,
+  /// `endpoint = ""`: endpoint mode, but the image isn't deployed yet.
+  EndpointUnset,
+  /// The endpoint to register.
+  Endpoint(String),
+}
+
+pub(crate) fn deploy_mode(sectr_toml: &str) -> anyhow::Result<Mode> {
+  // A sectr.toml that doesn't parse goes to the server as today, which
+  // says what's wrong with it.
+  let Ok(table) = sectr_toml.parse::<toml::Table>() else {
+    return Ok(Mode::Managed);
+  };
+  match table
+    .get("deploy")
+    .and_then(|deploy| deploy.get("endpoint"))
+  {
+    None => Ok(Mode::Managed),
+    Some(toml::Value::String(url)) if url.trim().is_empty() => Ok(Mode::EndpointUnset),
+    Some(toml::Value::String(url)) => Ok(Mode::Endpoint(url.trim().to_owned())),
+    Some(other) => anyhow::bail!(
+      "[deploy] endpoint in sectr.toml must be your endpoint's URL as a string, not {other}"
+    ),
+  }
+}
+
+fn unset_endpoint_message() -> String {
+  format!(
+    "deploying as an endpoint ([deploy] endpoint in sectr.toml), but it's empty.\n  \
+     1. build the image from the Dockerfile and deploy it on your platform (guide: {})\n  \
+     2. put its URL in sectr.toml: [deploy] endpoint = \"https://…\"\n  \
+     3. run `sectr deploy` again",
+    crate::endpoint::GUIDE
+  )
+}
+
+/// A message, then its hint on the next line when there is one.
+fn with_hint(message: String, hint: Option<String>) -> String {
+  match hint {
+    Some(hint) => format!("{message}\n  hint: {hint}"),
+    None => message,
+  }
+}
+
+/// The managed deploy: package, upload, and track the server's build.
+async fn deploy_managed(
+  target: &crate::auth::Target,
+  project: &Path,
+  manifest_toml: String,
+  timeout: Duration,
+) -> anyhow::Result<()> {
+  let key = &target.key;
 
   eprintln!("packaging {} …", project.display());
-  let tarball = package_project(&project)?;
+  let tarball = package_project(project)?;
 
   let url = format!("{}/deployments", target.api);
   eprintln!("uploading to {url} …");
@@ -177,7 +261,7 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
     .context("build upload HTTP client")?;
   let response = client
     .post(url)
-    .bearer_auth(&key)
+    .bearer_auth(key)
     .multipart(form)
     .send()
     .await?;
@@ -190,7 +274,73 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
       serde_json::to_string_pretty(&body)?
     );
   }
+  track(target, &body, None, timeout).await
+}
 
+/// Endpoint mode: register the endpoint's URL and track its registration.
+pub(crate) async fn deploy_endpoint(
+  target: &crate::auth::Target,
+  manifest_toml: String,
+  endpoint_url: &str,
+  timeout: Duration,
+) -> anyhow::Result<()> {
+  eprintln!("deploying as an endpoint ([deploy] endpoint in sectr.toml): {endpoint_url}");
+  let client = reqwest::Client::builder()
+    .timeout(REGISTER_REQUEST_TIMEOUT)
+    .build()
+    .context("build registration HTTP client")?;
+  let response = client
+    .post(format!("{}/endpoint-deployments", target.api))
+    .bearer_auth(&target.key)
+    .json(&serde_json::json!({"manifest": manifest_toml, "endpoint_url": endpoint_url}))
+    .send()
+    .await?;
+  let status = response.status();
+  let text = response.text().await.unwrap_or_default();
+  if !status.is_success() {
+    // Refusals are plain text; anything else is shown as it came.
+    let message = match serde_json::from_str::<serde_json::Value>(&text) {
+      Ok(value) => serde_json::to_string_pretty(&value)?,
+      Err(_) if status == reqwest::StatusCode::NOT_FOUND && text.trim().is_empty() => {
+        "this server doesn't support endpoint deployments (it's older than this CLI)".to_owned()
+      }
+      Err(_) => text.trim().to_owned(),
+    };
+    let hint = crate::endpoint::hint(&message, endpoint_url);
+    anyhow::bail!(
+      "{}",
+      with_hint(format!("deploy failed ({status}): {message}"), hint)
+    );
+  }
+  let body: serde_json::Value =
+    serde_json::from_str(&text).context("the server's registration answer isn't JSON")?;
+  for warning in body
+    .get("warnings")
+    .and_then(|w| w.as_array())
+    .into_iter()
+    .flatten()
+    .filter_map(|w| w.as_str())
+  {
+    eprintln!(
+      "{}",
+      with_hint(
+        format!("⚠ {warning}"),
+        Some(crate::endpoint::warning_hint(endpoint_url))
+      )
+    );
+  }
+  track(target, &body, Some(endpoint_url), timeout).await
+}
+
+/// Poll a `202` deployment until it resolves, then report it. `endpoint`
+/// is the endpoint URL in endpoint mode.
+async fn track(
+  target: &crate::auth::Target,
+  body: &serde_json::Value,
+  endpoint: Option<&str>,
+  timeout: Duration,
+) -> anyhow::Result<()> {
+  let key = &target.key;
   // 202 + {id, app_id, version, status: "building"}: the build resolves
   // in the background — poll the list endpoint until it lands.
   let deployment_id = body
@@ -205,8 +355,12 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
     .to_owned();
   let version = body.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
 
-  eprintln!("deployment {deployment_id}: version {version} — building…");
-
+  let doing = if endpoint.is_some() {
+    "registering"
+  } else {
+    "building"
+  };
+  eprintln!("deployment {deployment_id}: version {version} — {doing}…");
   let list_url = format!("{}/apps/{app_id}/deployments", target.api);
   let client = reqwest::Client::builder()
     .timeout(POLL_REQUEST_TIMEOUT)
@@ -215,7 +369,7 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
   let fetch = || async {
     let resp = client
       .get(&list_url)
-      .bearer_auth(&key)
+      .bearer_auth(key)
       .send()
       .await
       .map_err(|e| anyhow::anyhow!("poll request failed: {e}"))?;
@@ -251,24 +405,18 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
     )
   };
 
-  match poll_until_resolved(
-    fetch,
-    Duration::from_secs(2),
-    Duration::from_secs(args.timeout_secs),
-  )
-  .await?
-  {
+  match poll_until_resolved(fetch, Duration::from_secs(2), timeout).await? {
     Resolved::Active => {
-      eprintln!("✓ deployed: version {version} ({deployment_id}) is active");
+      eprintln!("{}", active_line(version, &deployment_id, endpoint));
       // Best effort too: the deploy already succeeded.
-      match view_live_link(&target.api, &key, &app_id).await {
+      match view_live_link(&target.api, key, &app_id).await {
         Ok(link) => eprintln!("🚀 view live at: {link}"),
         Err(e) => eprintln!("(could not look up the dashboard link: {e:#})"),
       }
       // Every deployed route is also an AG-UI endpoint (CopilotKit / any
       // AG-UI client): print the full URL so the frontend needs no config.
       // Best effort — the deploy already succeeded.
-      match fetch_agui_endpoints(&client, &target.api, &key, &app_id).await {
+      match fetch_agui_endpoints(&client, &target.api, key, &app_id).await {
         Ok(endpoints) => {
           for endpoint in endpoints {
             eprintln!("🔌 connect via AG-UI at: {endpoint}");
@@ -276,11 +424,36 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
         }
         Err(e) => eprintln!("(could not look up the AG-UI endpoints: {e})"),
       }
+      if endpoint.is_some() {
+        eprintln!("After you redeploy your image or change sectr.toml, run `sectr deploy` again.");
+      }
       Ok(())
     }
-    Resolved::Failed(error) => anyhow::bail!(
+    Resolved::Failed(error) => anyhow::bail!("{}", failed_line(&deployment_id, &error, endpoint)),
+  }
+}
+
+fn active_line(version: i64, deployment_id: &str, endpoint: Option<&str>) -> String {
+  match endpoint {
+    Some(url) => {
+      format!("✓ deployed: version {version} ({deployment_id}) is active. Turns wake {url}")
+    }
+    None => format!("✓ deployed: version {version} ({deployment_id}) is active"),
+  }
+}
+
+fn failed_line(deployment_id: &str, error: &Option<String>, endpoint: Option<&str>) -> String {
+  match endpoint {
+    Some(url) => with_hint(
+      format!(
+        "deployment {deployment_id}: registration failed — {}",
+        failure_detail(error)
+      ),
+      error.as_deref().and_then(|e| crate::endpoint::hint(e, url)),
+    ),
+    None => format!(
       "deployment {deployment_id}: build failed — {}",
-      failure_detail(&error)
+      failure_detail(error)
     ),
   }
 }
@@ -427,6 +600,219 @@ mod tests {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     format!("http://{addr}")
+  }
+
+  #[test]
+  fn the_mode_comes_from_deploy_endpoint() {
+    assert_eq!(
+      deploy_mode("name = \"a\"\n[deploy]\napproval_tools = []\n").unwrap(),
+      Mode::Managed
+    );
+    assert_eq!(deploy_mode("name = \"a\"\n").unwrap(), Mode::Managed);
+    // Unparsable: the server reports it, as before.
+    assert_eq!(deploy_mode("not = [toml").unwrap(), Mode::Managed);
+    assert_eq!(
+      deploy_mode("[deploy]\nendpoint = \"  \"\n").unwrap(),
+      Mode::EndpointUnset
+    );
+    assert_eq!(
+      deploy_mode("[deploy]\nendpoint = \" https://a.run.app \"\n").unwrap(),
+      Mode::Endpoint("https://a.run.app".into())
+    );
+    let err = deploy_mode("[deploy]\nendpoint = 1\n")
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("must be your endpoint's URL"), "{err}");
+  }
+
+  #[test]
+  fn an_empty_endpoint_says_whats_left() {
+    let message = unset_endpoint_message();
+    assert!(message.starts_with("deploying as an endpoint"), "{message}");
+    assert!(message.contains("1. build the image"));
+    assert!(message.contains(crate::endpoint::GUIDE));
+    assert!(message.contains("3. run `sectr deploy` again"));
+  }
+
+  const LAMBDA_URL: &str = "https://abc.lambda-url.us-east-1.on.aws/";
+
+  /// A stub server for endpoint mode, with the real response shapes: the
+  /// registration answers `register` (a status and a body, text for
+  /// refusals as the server sends them), and the deployment then lists as
+  /// `row`.
+  async fn endpoint_stub(register: (u16, String), row: serde_json::Value) -> crate::auth::Target {
+    use axum::http::StatusCode;
+    use axum::routing::{get, post};
+    let app = axum::Router::new()
+      .route(
+        "/endpoint-deployments",
+        post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+          let (status, text) = register.clone();
+          async move {
+            assert!(body["manifest"].as_str().unwrap().contains("[deploy]"));
+            assert_eq!(body["endpoint_url"], LAMBDA_URL);
+            (StatusCode::from_u16(status).unwrap(), text)
+          }
+        }),
+      )
+      .route(
+        "/apps/app-1/deployments",
+        get(move || {
+          let row = row.clone();
+          async move { axum::Json(serde_json::json!([row])) }
+        }),
+      )
+      .route(
+        "/me",
+        get(|| async {
+          axum::Json(serde_json::json!({
+            "org": {"id": "o", "name": "acme"},
+            "dashboard_url": "https://app.example.com",
+          }))
+        }),
+      )
+      .route(
+        "/apps/app-1",
+        get(|| async {
+          axum::Json(serde_json::json!({"slug": "support-agent", "routes": [{"path": "/chat"}]}))
+        }),
+      );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    crate::auth::Target {
+      api: format!("http://{addr}"),
+      key: "skp_x".into(),
+    }
+  }
+
+  const SECTR_TOML: &str = "name = \"support-agent\"\n[deploy]\nendpoint = \"x\"\n";
+
+  fn accepted(warnings: &[&str]) -> (u16, String) {
+    let mut body = serde_json::json!({
+      "id": "dep-1", "app_id": "app-1", "version": 4, "status": "building",
+      "endpoint_url": LAMBDA_URL,
+    });
+    if !warnings.is_empty() {
+      body["warnings"] = serde_json::json!(warnings);
+    }
+    (202, body.to_string())
+  }
+
+  #[tokio::test]
+  async fn an_endpoint_registers_and_goes_active() {
+    let target = endpoint_stub(
+      accepted(&["the endpoint runs sidecar 0.1.3; this server is 0.1.5."]),
+      serde_json::json!({"id": "dep-1", "status": "active"}),
+    )
+    .await;
+    deploy_endpoint(
+      &target,
+      SECTR_TOML.into(),
+      LAMBDA_URL,
+      Duration::from_secs(10),
+    )
+    .await
+    .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_refused_registration_shows_the_message_and_its_hint() {
+    let refused = format!(
+      "the endpoint at {LAMBDA_URL} {} 403, not a Sectr sidecar in serve mode. Check that the \
+       image's CMD is `sectr-worker --serve`.",
+      sectr_common::endpoint::ANSWERED_HTTP
+    );
+    let target = endpoint_stub(
+      (422, refused.clone()),
+      serde_json::json!({"id": "dep-1", "status": "active"}),
+    )
+    .await;
+    let err = deploy_endpoint(
+      &target,
+      SECTR_TOML.into(),
+      LAMBDA_URL,
+      Duration::from_secs(5),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.starts_with("deploy failed (422"), "{err}");
+    assert!(err.contains(&refused), "{err}");
+    assert!(
+      err.contains("\n  hint: a Lambda function URL needs auth type NONE"),
+      "{err}"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_failed_registration_names_registration_and_hints() {
+    let error = format!(
+      "the endpoint's sidecar {} wss://ingest.example.com/ingest: timed out. Check that your \
+       platform allows outbound connections.",
+      sectr_common::endpoint::DIAL_FAILED
+    );
+    let target = endpoint_stub(
+      accepted(&[]),
+      serde_json::json!({"id": "dep-1", "status": "failed", "error": error}),
+    )
+    .await;
+    let err = deploy_endpoint(
+      &target,
+      SECTR_TOML.into(),
+      LAMBDA_URL,
+      Duration::from_secs(10),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+      err.starts_with("deployment dep-1: registration failed — error: the endpoint's sidecar"),
+      "{err}"
+    );
+    assert!(
+      err.contains("hint: a Lambda function in a VPC needs a NAT gateway"),
+      "{err}"
+    );
+  }
+
+  #[tokio::test]
+  async fn an_older_server_without_endpoint_deployments_says_so() {
+    let target = endpoint_stub(
+      (404, String::new()),
+      serde_json::json!({"id": "dep-1", "status": "active"}),
+    )
+    .await;
+    let err = deploy_endpoint(
+      &target,
+      SECTR_TOML.into(),
+      LAMBDA_URL,
+      Duration::from_secs(5),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+      err.contains("doesn't support endpoint deployments"),
+      "{err}"
+    );
+  }
+
+  #[test]
+  fn result_lines_say_what_ran() {
+    assert_eq!(
+      active_line(4, "dep-1", Some(LAMBDA_URL)),
+      format!("✓ deployed: version 4 (dep-1) is active. Turns wake {LAMBDA_URL}")
+    );
+    assert_eq!(
+      active_line(4, "dep-1", None),
+      "✓ deployed: version 4 (dep-1) is active"
+    );
+    assert!(failed_line("d", &Some("boom".into()), None).contains("build failed — error: boom"));
+    assert_eq!(
+      failed_line("d", &Some("boom".into()), Some(LAMBDA_URL)),
+      "deployment d: registration failed — error: boom"
+    );
   }
 
   #[tokio::test]
