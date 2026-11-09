@@ -94,8 +94,9 @@ if [ "$tier" = release ]; then
   secret_ok PYPI_TOKEN UV_PUBLISH_TOKEN                # publish-sdk
   secret_ok NPM_TOKEN                                  # publish-npm: @sectr scope + the unscoped sectr
   secret_ok GHCR_TOKEN                                 # publish-images: a token with write:packages
-  secret_ok CLOUDFLARE_ACCOUNT_ID                      # publish-r2 (wrangler)
+  secret_ok CLOUDFLARE_ACCOUNT_ID                      # publish-r2, deploy-dashboard (wrangler)
   secret_ok CF_R2_TOKEN CLOUDFLARE_API_TOKEN           # publish-r2: R2 Edit on sectr-releases
+  secret_ok CF_WORKERS_TOKEN                           # deploy-dashboard: Workers Scripts Edit
 
   # The hosted deploy's own needs live with it, in the private ops repo.
   ops="${SECTR_OPS_DIR:-../sectr-ops}"

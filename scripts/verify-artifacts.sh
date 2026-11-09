@@ -13,6 +13,7 @@
 #     architecture. Base: SDK imports at the right version, sidecar links
 #     cleanly. Server: `--help`. Dashboard: starts and serves its runtime
 #     config, and holds no sharp
+#   - the dashboard's Cloudflare Worker bundles (wrangler deploy --dry-run)
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -161,5 +162,11 @@ if [ -f "$out/image.txt" ]; then
     docker rm -f "$id" >/dev/null
   done
 fi
+
+echo "dashboard Worker (app.sectr.dev)"
+# What deploy-dashboard uploads: wrangler bundles it as it would for the
+# deploy, with no credentials and no upload.
+DRY_RUN=1 scripts/deploy-dashboard.sh "$ver" >"$tmp/worker.log" 2>&1 \
+  && ok "bundles for Cloudflare" || bad "the dashboard Worker doesn't bundle: $(tail -5 "$tmp/worker.log")"
 
 [ $fail = 0 ] && echo "artifacts verified" || { echo "artifact verification FAILED" >&2; exit 1; }

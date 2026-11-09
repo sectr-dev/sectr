@@ -286,6 +286,11 @@ publish-skill version="":
 publish-images version="":
     scripts/publish-images.sh {{version}}
 
+# The dashboard Worker from `just build`, to app.sectr.dev (Cloudflare).
+[private]
+deploy-dashboard version="":
+    scripts/deploy-dashboard.sh {{version}}
+
 [private]
 deploy-server version="":
     #!/usr/bin/env bash

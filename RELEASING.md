@@ -82,7 +82,7 @@ inner tier must also pass under the outer ones.
    keychain/env, `wrangler` (optional; `npx` otherwise), and the private ops repo checked out next to this one (`../sectr-ops`, or set
    `SECTR_OPS_DIR`), which holds the hosted deploy and its ssh access. Credentials are never stored in the repo: scripts read
    them from the environment first, then Bitwarden Secrets Manager by secret
-   name (`PYPI_TOKEN`, `NPM_TOKEN`, `GHCR_TOKEN` (a token with `write:packages`), `CLOUDFLARE_ACCOUNT_ID`, `CF_R2_TOKEN`, plus
+   name (`PYPI_TOKEN`, `NPM_TOKEN`, `GHCR_TOKEN` (a token with `write:packages`), `CLOUDFLARE_ACCOUNT_ID`, `CF_R2_TOKEN`, `CF_WORKERS_TOKEN` (Workers Scripts: Edit, for the dashboard), plus
    the hosted deploy's, listed in the ops repo). `just doctor release` checks every
    one, running the ops repo's own check for the hosted deploy.
 4. `just doctor` (or `just doctor release`) — lists anything missing with a
@@ -94,13 +94,13 @@ inner tier must also pass under the outer ones.
 `dist/` (4 CLI tarballs + checksums, installer, `dist-manifest.json`),
 `server/sectr-server` (aarch64, glibc 2.34, `--features e2b`), `sdk/`
 (wheel + sdist), `npm/` (`sectr-copilotkit-X.Y.Z.tgz`, plus the
-`sectr-0.0.0.tgz` shell, which is outside the lockstep), `image.txt` (the local image tags: `sectr-runner-base`, `sectr-server` and `sectr-dashboard`, each as `:vX.Y.Z-amd64` and `:vX.Y.Z-arm64`), and
+`sectr-0.0.0.tgz` shell, which is outside the lockstep), `dashboard/` (the dashboard's Cloudflare Worker: the OpenNext build and its `wrangler.jsonc`), `image.txt` (the local image tags: `sectr-runner-base`, `sectr-server` and `sectr-dashboard`, each as `:vX.Y.Z-amd64` and `:vX.Y.Z-arm64`), and
 `BUILT_FROM_SHA`. `just verify` builds them and then runs
 `scripts/verify-artifacts.sh` (CLI `--version`, server runs under Oracle
 Linux 9, wheel installs and imports and carries its MIT license metadata,
 each npm tarball holds only `dist/` + README + LICENSE, is MIT at the right
 version, and installs with its peers and imports, and on both architectures: the images and their binaries are that architecture, the base image has the SDK and a
-linkable sidecar, the server runs `--help`, the dashboard starts and holds no `sharp`). The Linux CLI targets are cross-built from the Mac by `dist` via
+linkable sidecar, the server runs `--help`, the dashboard starts and holds no `sharp`; the dashboard's Worker bundles with `wrangler deploy --dry-run`). The Linux CLI targets are cross-built from the Mac by `dist` via
 `cargo-zigbuild`; building the images for the other architecture needs Docker Desktop's
 emulation (or `docker buildx` pointed at a builder for it). The six images take about 14
 minutes and 12 GB of Docker's disk on the dev Mac, so `just doctor release` wants 15 GB free,
@@ -114,7 +114,7 @@ version, skipping any already on npm; auth via `NPM_TOKEN`, no
 `--provenance` since that needs a CI identity), `publish-skill.sh` (the
 agent skill, generated from the docs, pushed to the public
 github.com/sectr-dev/skills repo with your `gh` login; a no-op when it's
-already current), `publish-images.sh` (pushes the verified images to GHCR with `GHCR_TOKEN`, and joins each into a multi-arch `:vX.Y.Z` and `:latest`; nothing is rebuilt), `smoke-docs.sh`, and `deploy-server.sh` in the ops repo. They are private recipes (`just publish-r2`
+already current), `publish-images.sh` (pushes the verified images to GHCR with `GHCR_TOKEN`, and joins each into a multi-arch `:vX.Y.Z` and `:latest`; nothing is rebuilt), `deploy-dashboard.sh` (uploads the verified Worker to app.sectr.dev with `CF_WORKERS_TOKEN`, tagged `vX.Y.Z`; nothing is rebuilt), `smoke-docs.sh`, and `deploy-server.sh` in the ops repo. They are private recipes (`just publish-r2`
 …), which `just release` sequences and which you can also run one at a time
 from the dev machine (see "Deploying one component").
 
@@ -145,7 +145,8 @@ from the dev machine (see "Deploying one component").
    `push` → `merge-back` (main gets the bump; branch deleted) →
    `publish-r2` (+ `curl | sh` smoke check) → `publish-sdk` →
    `publish-npm` → `publish-skill` → `publish-images` → `deploy-server` (health-checked, on-VM rollback) →
-   `smoke-docs` (≤ 5 min wait for Cloudflare). Progress is logged in
+   `deploy-dashboard` (after the server, so the dashboard never runs ahead of the API it calls) →
+   `smoke-docs` (≤ 5 min wait for Cloudflare). The dashboard goes live only here: pushes to `main` don't deploy it. Progress is logged in
    `.release/vX.Y.Z.log`.
 4. Optional second opinion: `--require-gh` pushes the branch before tagging
    and waits for a green `release-check.yml` run on the same SHA.
@@ -158,7 +159,8 @@ from the dev machine (see "Deploying one component").
   new version; `pip index versions sectr` lists it; `npm view
   @sectr/copilotkit version` shows it (and `npm view sectr version` shows
   the shell's `0.0.0`); `curl
-  https://api.sectr.dev/healthz` reports it; docs.sectr.dev footer shows it.
+  https://api.sectr.dev/healthz` reports it; docs.sectr.dev footer shows it;
+  the app.sectr.dev sidebar shows it.
 - `git log origin/main` contains `release: vX.Y.Z` and `release/vX.Y.Z` is
   gone from origin.
 
@@ -172,12 +174,12 @@ from the dev machine (see "Deploying one component").
 - **Changed your mind before the tag is pushed:** `just release-abort`
   deletes the release branch and local tag (and the remote branch if
   `--require-gh` pushed it).
-- **Failure after the tag push** (R2, PyPI, npm, image, server, docs): the output
+- **Failure after the tag push** (R2, PyPI, npm, image, server, dashboard, docs): the output
   names the stage. Fix the cause and run `just release-resume vX.Y.Z` (it
   skips stages already logged as done) or `just release-resume vX.Y.Z
   <stage>` to re-run a stage and everything after it. Stages are idempotent:
   R2 overwrites, PyPI and npm skip an existing version, image pushes overwrite, the
-  server deploy re-runs. A merge-back conflict stops at `merge-back`: resolve,
+  server and dashboard deploys re-run. A merge-back conflict stops at `merge-back`: resolve,
   `git commit`, then `just release-resume vX.Y.Z merge-back`. If your checkout
   no longer matches the tag, resume rebuilds the artifacts from a worktree at
   the tag.
@@ -185,6 +187,7 @@ from the dev machine (see "Deploying one component").
   the server is the problem, roll it back on the VM (see the ops repo); to re-point an image, join the previous version's
   `:vX.Y.Z-amd64` and `:vX.Y.Z-arm64` as `:latest` with `docker buildx imagetools create`. Hosted
   builds on the base image of its server's own version, so rolling the server back rolls the base back with it.
+  To roll the dashboard back, `cd dashboard && npx wrangler rollback` (each release's Worker version is tagged `vX.Y.Z`).
 - **Dev machine unavailable:** there is no GitHub fallback for building or
   deploying — by design there is one release path. Use another machine that
   has the setup above.
@@ -194,7 +197,7 @@ from the dev machine (see "Deploying one component").
 For an emergency fix to a single thing, run the stage from the dev machine
 at the version you want live (artifacts come from `just build`, or are built
 if missing): `just publish-images [vX.Y.Z]`, `just deploy-server
-[vX.Y.Z]`, `just publish-sdk [vX.Y.Z]`, `just publish-npm [vX.Y.Z]`, `just
+[vX.Y.Z]`, `just deploy-dashboard [vX.Y.Z]`, `just publish-sdk [vX.Y.Z]`, `just publish-npm [vX.Y.Z]`, `just
 publish-r2 [vX.Y.Z]`. The agent skill isn't tied to a release at all: `just
 publish-skill` brings github.com/sectr-dev/skills up to date with the docs
 in your checkout whenever you want. Add

@@ -2,9 +2,10 @@
 // the OpenNext adapter (Cloudflare Pages is deprecated; Workers with Static
 // Assets is the supported path).
 //
-// Deploys: CF Workers Builds on push (root dir dashboard/):
-//   build:  npm ci && npm run build:worker   (inlines NEXT_PUBLIC_* env)
-//   deploy: npx wrangler deploy    (uploads .open-next/)
+// Deploys: only with a release. `just build` runs `npm run build:worker`
+// (inlining NEXT_PUBLIC_* env) and keeps .open-next/ with this file as a
+// release artifact; the release's deploy-dashboard stage uploads it with
+// `wrangler deploy`. Pushes to main don't deploy it.
 {
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "sectr-dashboard",

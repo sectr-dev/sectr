@@ -4,10 +4,12 @@
 #   server/  sectr-server (aarch64 glibc 2.34, --features e2b)
 #   sdk/     sectr wheel + sdist
 #   npm/     one tarball per js/ package (sectr-copilotkit-<ver>.tgz, sectr-0.0.0.tgz)
+#   dashboard/  the dashboard's Cloudflare Worker (OpenNext build + wrangler.jsonc),
+#              which deploy-dashboard uploads to app.sectr.dev
 #   image.txt  the local image tags, one per line: sectr-runner-base, sectr-server
 #              and sectr-dashboard, each as :vX.Y.Z-amd64 and :vX.Y.Z-arm64
 # Usage: scripts/release-build.sh [--no-image]
-# Built once; publish-* / deploy-server reuse these. BUILT_FROM_SHA records
+# Built once; publish-* / deploy-server / deploy-dashboard reuse these. BUILT_FROM_SHA records
 # the commit so the release gate can check they match the tag.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -54,6 +56,12 @@ log "npm packages"
 for d in js/*/; do
   (cd "$d" && npm ci --no-audit --no-fund && npm run build && npm pack --pack-destination "$out/npm") >&2
 done
+
+log "dashboard Worker (Cloudflare)"
+(cd dashboard && npm ci --no-audit --no-fund && npm run build:worker) >&2
+mkdir -p "$out/dashboard"
+cp dashboard/wrangler.jsonc "$out/dashboard/"
+cp -R dashboard/.open-next "$out/dashboard/.open-next"
 
 if [ "$build_image" = 1 ]; then
   log "images (${RELEASE_ARCHS[*]})"
