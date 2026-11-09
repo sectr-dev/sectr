@@ -211,10 +211,7 @@ async fn world_full(setup: WorldSetup) -> Option<World> {
           endpoints.ingest_url = Some(format!("ws://{addr}/ingest"));
         }
         config.endpoints = endpoints.clone();
-        let endpoint = Arc::new(crate::platform::EndpointPlatform::new(
-          endpoints,
-          registry.clone(),
-        ));
+        let endpoint = Arc::new(crate::platform::EndpointPlatform::new(endpoints));
         endpoint.attach_hub(Arc::downgrade(&hub));
         let routing = Arc::new(crate::platform::RoutingPlatform::new(
           spawner.clone(),

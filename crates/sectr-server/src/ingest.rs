@@ -466,6 +466,7 @@ impl IngestHub {
 
   /// Wait until the session's current turn is delivered. False at the
   /// deadline, or when there is no grant or it goes away first.
+  #[cfg(test)]
   pub async fn wait_delivered(&self, session: Uuid, deadline: std::time::Duration) -> bool {
     let Some(mut watch) = self.delivery_watch(session).await else {
       return false;

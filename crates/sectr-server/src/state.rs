@@ -103,10 +103,7 @@ impl AppState {
     secrets_enabled: bool,
   ) -> Self {
     let mint_limiter = Arc::new(MintLimiter::new(config.mint_rate_limit_per_hour));
-    let endpoints = Arc::new(EndpointPlatform::new(
-      config.endpoints.clone(),
-      registry.clone(),
-    ));
+    let endpoints = Arc::new(EndpointPlatform::new(config.endpoints.clone()));
     endpoints.attach_hub(Arc::downgrade(&hub));
     AppState {
       registry,

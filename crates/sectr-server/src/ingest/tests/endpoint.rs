@@ -705,10 +705,9 @@ async fn the_routing_platform_sends_each_kind_to_its_backend() {
     .await
     .unwrap();
   let managed = Arc::new(RecordingPlatform::default());
-  let endpoint = Arc::new(crate::platform::EndpointPlatform::new(
-    endpoint_config(Duration::from_secs(5)),
-    registry.clone(),
-  ));
+  let endpoint = Arc::new(crate::platform::EndpointPlatform::new(endpoint_config(
+    Duration::from_secs(5),
+  )));
   let routing = crate::platform::RoutingPlatform::new(managed.clone(), endpoint, registry);
 
   let session = uuid::Uuid::now_v7();

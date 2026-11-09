@@ -6,7 +6,8 @@
 //! Everything after the dial (leases, replay, checking, the reconciler) is
 //! unchanged.
 //!
-//! The wake: [`EndpointPlatform::spawn`] starts a task that POSTs
+//! The wake: [`EndpointPlatform::wake`], which the routing platform calls
+//! as an endpoint deployment's spawn, starts a task that POSTs
 //! `{"ingest_token"}` to `<endpoint>/wake` and holds the request open for
 //! the turn, then waits until the hub says the sidecar has taken its
 //! assignment ("delivered"). Before delivery, and only when nothing ran (a
@@ -34,7 +35,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use opentelemetry::KeyValue;
 use reqwest::Url;
 use serde_json::{Value, json};
@@ -44,12 +44,10 @@ use uuid::Uuid;
 use sectr_common::endpoint::{
   ANSWERED_HTTP, COULD_NOT_CONNECT, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, WAKE_TIMEOUT, WRONG_INGEST,
 };
-use sectr_common::registry::Registry;
 
 use crate::config::EndpointConfig;
 use crate::dispatch::DispatchError;
 use crate::ingest::IngestHub;
-use crate::platform::{BuildError, BuildOutput, BuildRequest, RunnerPlatform};
 
 /// Teardown handles of endpoint turns start with this.
 pub const HANDLE_PREFIX: &str = "endpoint:";
@@ -80,11 +78,13 @@ fn record(outcome: &'static str) {
 }
 
 /// The endpoint backend. Built once in `main.rs` and wrapped, with the
-/// managed platform, in [`super::routing::RoutingPlatform`].
+/// managed platform, in [`super::routing::RoutingPlatform`], which reads
+/// the deployment and calls [`Self::wake`] and [`Self::teardown`]. Not a
+/// [`super::RunnerPlatform`] itself: nothing builds for it or lists its
+/// runners.
 pub struct EndpointPlatform {
   client: reqwest::Client,
   config: EndpointConfig,
-  registry: Arc<dyn Registry>,
   /// The hub, attached after it's created (it holds the platform too, so
   /// a strong reference would be a cycle).
   hub: OnceLock<Weak<IngestHub>>,
@@ -106,11 +106,10 @@ struct WakeFailure {
 }
 
 impl EndpointPlatform {
-  pub fn new(config: EndpointConfig, registry: Arc<dyn Registry>) -> Self {
+  pub fn new(config: EndpointConfig) -> Self {
     EndpointPlatform {
       client: guard::client(config.allow_private),
       config,
-      registry,
       hub: OnceLock::new(),
       inflight: Arc::new(Mutex::new(HashMap::new())),
     }
@@ -548,38 +547,7 @@ async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, String>
   Ok(body)
 }
 
-#[async_trait]
-impl RunnerPlatform for EndpointPlatform {
-  /// Never reached: endpoint deployments have no build, and the routing
-  /// platform sends every build to the managed platform.
-  async fn build(&self, _req: BuildRequest) -> Result<BuildOutput, BuildError> {
-    Err(BuildError::bare("endpoint deployments are not built"))
-  }
-
-  fn provisional_build_ref(&self, _deployment_id: Uuid, _version: i64) -> String {
-    "endpoint".into()
-  }
-
-  async fn spawn(
-    &self,
-    session: Uuid,
-    deployment_id: Uuid,
-    invocation_id: Uuid,
-    ingest_token: &str,
-  ) -> Result<Option<String>, DispatchError> {
-    let deployment = self
-      .registry
-      .get_deployment(deployment_id)
-      .await
-      .map_err(|e| DispatchError::Unavailable(e.to_string()))?;
-    let endpoint_url = deployment.endpoint_url.ok_or_else(|| {
-      DispatchError::Spawn(format!("deployment {deployment_id} has no endpoint URL"))
-    })?;
-    self
-      .wake(session, invocation_id, ingest_token, &endpoint_url)
-      .await
-  }
-
+impl EndpointPlatform {
   /// Abort the server's half of the wake request, after a short grace.
   /// The customer's sidecar stops itself: its token is dead (the abort
   /// frame, a `Conflict` on its next append, or a 401 on re-dial), and it
@@ -587,7 +555,7 @@ impl RunnerPlatform for EndpointPlatform {
   /// teardown at a turn boundary (platforms whose own runners don't end
   /// themselves tear down at every boundary) still records how the wake
   /// ended. A wake task that ends first removes itself.
-  async fn teardown(&self, session: Uuid, handle: Option<&str>) {
+  pub async fn teardown(&self, session: Uuid, handle: Option<&str>) {
     let Some(handle) = handle.map(str::to_owned) else {
       return;
     };

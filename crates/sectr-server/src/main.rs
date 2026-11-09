@@ -150,7 +150,6 @@ async fn serve() -> anyhow::Result<()> {
   // object every consumer below shares.
   let endpoints = Arc::new(sectr_server::platform::EndpointPlatform::new(
     config.endpoints.clone(),
-    registry.clone(),
   ));
   let platform: Arc<dyn RunnerPlatform> = Arc::new(sectr_server::platform::RoutingPlatform::new(
     platform,
