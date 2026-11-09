@@ -174,6 +174,47 @@ pub trait JournalReader: Send + Sync {
   /// This is the SSE primitive: `Last-Event-ID` reconnect is
   /// `subscribe(session, Some(last_seq))`.
   async fn subscribe(&self, session: SessionId, after_seq: Option<i64>) -> Result<EventStream>;
+
+  /// A deployment's recent turns, for its wakes summary: its `limit` newest
+  /// `INVOCATION_STARTED` events, and every `INVOCATION_STARTED` and
+  /// `SESSION_ERROR` of that deployment since the oldest of them, newest
+  /// first. Empty when the deployment has no turns.
+  async fn deployment_turn_starts(
+    &self,
+    deployment: DeploymentId,
+    limit: i64,
+  ) -> Result<Vec<TurnRow>>;
+}
+
+/// One row of [`JournalReader::deployment_turn_starts`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnRow {
+  pub session_id: SessionId,
+  pub seq: i64,
+  /// `None` for an `INVOCATION_STARTED`; the message of a `SESSION_ERROR`.
+  pub error: Option<String>,
+  pub created_at: DateTime<Utc>,
+}
+
+/// The rows' shape in both stores: session, seq, type, payload, created_at.
+pub(crate) type TurnRowParts = (Uuid, i64, String, serde_json::Value, DateTime<Utc>);
+
+pub(crate) fn turn_row(
+  (session_id, seq, event_type, payload, created_at): TurnRowParts,
+) -> TurnRow {
+  let error = (event_type == "SESSION_ERROR").then(|| {
+    payload
+      .get("message")
+      .and_then(|m| m.as_str())
+      .unwrap_or_default()
+      .to_owned()
+  });
+  TurnRow {
+    session_id,
+    seq,
+    error,
+    created_at,
+  }
 }
 
 /// A physical journal store: both halves. Implemented by `PgJournal` (prod)
@@ -191,6 +232,76 @@ impl<T: ?Sized + EventSink + JournalReader> Journal for T {}
 pub(crate) fn now() -> DateTime<Utc> {
   use chrono::SubsecRound;
   Utc::now().trunc_subsecs(6)
+}
+
+/// What both stores' `deployment_turn_starts` must return for the same
+/// journal: `a` and `b` are two sessions the store has rows for.
+#[cfg(test)]
+pub(crate) async fn turn_starts_contract(journal: &dyn Journal, a: SessionId, b: SessionId) {
+  use crate::events::{Extra, InvocationReason, InvocationStarted, SessionError};
+  let deployment = Uuid::now_v7();
+  let other = Uuid::now_v7();
+  let mut stamped = Vec::new();
+  let mut append = async |session: SessionId, deployment_id: DeploymentId, error: Option<&str>| {
+    let payload = match error {
+      None => EventPayload::InvocationStarted(InvocationStarted {
+        invocation_id: Uuid::now_v7(),
+        route: "/test".into(),
+        deployment_id,
+        reason: InvocationReason::UserMessage {
+          input: "hi".to_string().try_into().unwrap(),
+          extra: Extra::default(),
+        },
+        extra: Extra::default(),
+      }),
+      Some(message) => EventPayload::SessionError(SessionError {
+        message: message.into(),
+        extra: Extra::default(),
+      }),
+    };
+    let event = journal
+      .append_platform_event(session, deployment_id, payload)
+      .await
+      .unwrap();
+    // Distinct timestamps, so the order below is the append order.
+    tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+    stamped.push(TurnRow {
+      session_id: session,
+      seq: event.seq,
+      error: error.map(str::to_owned),
+      created_at: event.created_at,
+    });
+  };
+  append(a, deployment, None).await; // 0: a's first turn
+  append(a, deployment, Some("boom")).await; // 1
+  append(b, deployment, None).await; // 2: b's turn
+  append(b, deployment, Some("endpoint wake failed: x")).await; // 3
+  append(a, other, None).await; // 4: another deployment
+  append(a, deployment, None).await; // 5: a's second turn
+
+  let rows = |idx: &[usize]| idx.iter().map(|&i| stamped[i].clone()).collect::<Vec<_>>();
+  assert_eq!(
+    journal.deployment_turn_starts(deployment, 2).await.unwrap(),
+    rows(&[5, 3, 2])
+  );
+  assert_eq!(
+    journal
+      .deployment_turn_starts(deployment, 10)
+      .await
+      .unwrap(),
+    rows(&[5, 3, 2, 1, 0])
+  );
+  assert_eq!(
+    journal.deployment_turn_starts(other, 10).await.unwrap(),
+    rows(&[4])
+  );
+  assert!(
+    journal
+      .deployment_turn_starts(Uuid::now_v7(), 10)
+      .await
+      .unwrap()
+      .is_empty()
+  );
 }
 
 #[cfg(test)]

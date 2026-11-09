@@ -208,6 +208,9 @@ CREATE TABLE events (
     created_at     timestamptz NOT NULL,
     UNIQUE (session_id, seq)
 );
+-- A deployment's recent turn starts and session errors (the wakes summary).
+CREATE INDEX idx_events_turn_starts ON events (deployment_id, created_at DESC)
+    WHERE type IN ('INVOCATION_STARTED', 'SESSION_ERROR');
 
 -- jsonb can't hold U+0000 in a string, so PgJournal stores every string and
 -- object key in `payload` and `extra` with NUL escaped as U+FDD0 '0' and
