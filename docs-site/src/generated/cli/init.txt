@@ -9,7 +9,7 @@ Options:
       --template <TEMPLATE>  Agent framework: `openai-agents`, `langgraph` or `pydantic-ai`. Given → fully non-interactive (docs/CI). Omitted → interactive picker (needs a terminal)
       --frontend <FRONTEND>  Chat frontend: `none` (agent only) or `copilotkit` (a Next.js + CopilotKit app at the root, the agent in `agent/`; needs Node 20+). Omitted → `none` with --template, else an interactive picker
       --endpoint <ENDPOINT>  Run it on your own platform: `lambda`, `cloud-run` or `container`. Adds a Dockerfile pinned to your server and `[deploy] endpoint` to sectr.toml; in an existing project (a sectr.toml here, no name), adds only those. Needs a server (`sectr auth login`, or --api). Omitted → Sectr's runners with --template, else an interactive picker
-      --api <API>            The server whose base image and ingest URL an endpoint's Dockerfile pins. Defaults through `sectr auth login` (or SECTR_API_URL)
-      --key <KEY>            Platform API key (`skp_…`). Defaults through `sectr auth login` (or SECTR_PLATFORM_KEY)
+      --api <API>            The server whose base image and ingest URL an endpoint's Dockerfile pins (so only for a project on your own platform). Defaults through `sectr auth login` (or SECTR_API_URL)
+      --key <KEY>            Platform API key (`skp_…`) for that server (so only for a project on your own platform). Defaults through `sectr auth login` (or SECTR_PLATFORM_KEY)
       --force                Scaffold into a non-empty directory anyway (and, with --endpoint, replace an existing Dockerfile and .dockerignore)
   -h, --help                 Print help

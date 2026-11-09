@@ -77,10 +77,12 @@ pub struct InitArgs {
   #[arg(long)]
   pub endpoint: Option<String>,
   /// The server whose base image and ingest URL an endpoint's Dockerfile
-  /// pins. Defaults through `sectr auth login` (or SECTR_API_URL).
+  /// pins (so only for a project on your own platform). Defaults through
+  /// `sectr auth login` (or SECTR_API_URL).
   #[arg(long)]
   pub api: Option<String>,
-  /// Platform API key (`skp_…`). Defaults through `sectr auth login` (or
+  /// Platform API key (`skp_…`) for that server (so only for a project on
+  /// your own platform). Defaults through `sectr auth login` (or
   /// SECTR_PLATFORM_KEY).
   #[arg(long)]
   pub key: Option<String>,
@@ -454,6 +456,7 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
       (template, frontend, runs_on)
     }
   };
+  server_flags_fit(&args, runs_on)?;
 
   // The frontend needs Node: checked before anything is written, like uv.
   if frontend == Frontend::CopilotKit {
@@ -564,6 +567,19 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
     );
     println!("From {agent_cd}:");
     crate::endpoint::print_next_steps(platform, &name);
+  }
+  Ok(())
+}
+
+/// `--api` and `--key` name the server an endpoint's Dockerfile pins, so
+/// they're refused for a project on Sectr's runners rather than ignored.
+fn server_flags_fit(args: &InitArgs, runs_on: RunsOn) -> anyhow::Result<()> {
+  if runs_on == RunsOn::Sectr && (args.api.is_some() || args.key.is_some()) {
+    bail!(
+      "--api and --key only apply to a project that runs on your own platform (--endpoint), \
+       whose Dockerfile pins that server; a project on Sectr's runners meets its server at \
+       `sectr deploy`, which takes them too"
+    );
   }
   Ok(())
 }
@@ -1228,6 +1244,27 @@ mod tests {
         assert!(!target.join("Dockerfile").exists());
       }
     }
+  }
+
+  #[test]
+  fn server_flags_need_a_project_on_your_own_platform() {
+    let args = |api: Option<&str>, key: Option<&str>| InitArgs {
+      name: None,
+      template: None,
+      frontend: None,
+      endpoint: None,
+      api: api.map(str::to_owned),
+      key: key.map(str::to_owned),
+      force: false,
+    };
+    let err = server_flags_fit(&args(Some("https://x"), None), RunsOn::Sectr)
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("--endpoint"), "{err}");
+    assert!(server_flags_fit(&args(None, Some("skp_x")), RunsOn::Sectr).is_err());
+    assert!(server_flags_fit(&args(None, None), RunsOn::Sectr).is_ok());
+    let lambda = RunsOn::Endpoint(Platform::Lambda);
+    assert!(server_flags_fit(&args(Some("https://x"), Some("skp_x")), lambda).is_ok());
   }
 
   #[test]
