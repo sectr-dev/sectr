@@ -74,6 +74,26 @@ pub(super) async fn endpoint_config(
   }))
 }
 
+/// The registration warning when the endpoint's sidecar isn't this
+/// server's version: it names the base image to rebuild on.
+fn version_warning(theirs: &str, ours: &str, base_image: Option<&str>) -> Option<String> {
+  if theirs == ours {
+    return None;
+  }
+  let theirs = if theirs.is_empty() {
+    "of an unknown version"
+  } else {
+    theirs
+  };
+  let rebuild = match base_image.filter(|image| !image.is_empty()) {
+    Some(image) => format!("Rebuild the image FROM {image}."),
+    None => "Rebuild the image on the matching base image.".to_owned(),
+  };
+  Some(format!(
+    "the endpoint runs sidecar {theirs}; this server is {ours}. {rebuild}"
+  ))
+}
+
 /// `POST /endpoint-deployments`.
 pub(super) async fn register_endpoint(
   State(state): State<AppState>,
@@ -115,19 +135,13 @@ pub(super) async fn register_endpoint(
       return unprocessable(e);
     }
   };
-  let mut warnings = Vec::new();
-  let ours = env!("CARGO_PKG_VERSION");
-  if probe.version != ours {
-    warnings.push(format!(
-      "the endpoint runs sidecar {}; this server is {ours}. Rebuild the image on the matching \
-       base image.",
-      if probe.version.is_empty() {
-        "of an unknown version"
-      } else {
-        &probe.version
-      }
-    ));
-  }
+  let warnings: Vec<String> = version_warning(
+    &probe.version,
+    env!("CARGO_PKG_VERSION"),
+    state.config().runner_base_image.as_deref(),
+  )
+  .into_iter()
+  .collect();
 
   let registry = state.registry();
   let deployment = match registry
@@ -254,4 +268,35 @@ async fn register_and_activate(
     .await
     .map_err(|e| e.to_string())?;
   super::activate(state, deployment.id).await
+}
+
+#[cfg(test)]
+mod tests {
+  use super::version_warning;
+
+  #[test]
+  fn a_version_warning_names_the_base_image() {
+    assert_eq!(version_warning("1.2.3", "1.2.3", Some("img:v1.2.3")), None);
+    assert_eq!(
+      version_warning(
+        "1.2.2",
+        "1.2.3",
+        Some("ghcr.io/sectr-dev/sectr-runner-base:v1.2.3")
+      )
+      .as_deref(),
+      Some(
+        "the endpoint runs sidecar 1.2.2; this server is 1.2.3. Rebuild the image FROM \
+         ghcr.io/sectr-dev/sectr-runner-base:v1.2.3."
+      )
+    );
+    let unknown = version_warning("", "1.2.3", None).unwrap();
+    assert!(
+      unknown.starts_with("the endpoint runs sidecar of an unknown version;"),
+      "{unknown}"
+    );
+    assert!(
+      unknown.ends_with("on the matching base image."),
+      "{unknown}"
+    );
+  }
 }

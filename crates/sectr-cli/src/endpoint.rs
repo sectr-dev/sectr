@@ -146,8 +146,8 @@ pub fn hint(message: &str, url: &str) -> Option<String> {
   }
   if message.contains(WRONG_INGEST) {
     return Some(format!(
-      "fix it in the Dockerfile (`sectr init --endpoint {} --force` rewrites it), then \
-       rebuild and redeploy the image",
+      "fix SECTR_INGEST_URL in the Dockerfile, or rerun `sectr init --endpoint {} --force` \
+       ({REWRITES}), then rebuild and redeploy the image",
       platform.arg()
     ));
   }
@@ -157,10 +157,15 @@ pub fn hint(message: &str, url: &str) -> Option<String> {
   None
 }
 
+/// What `init --force` does to the endpoint files: said wherever a hint
+/// suggests it, since it drops the developer's own changes.
+const REWRITES: &str = "it rewrites the Dockerfile and .dockerignore from scratch";
+
 /// The hint for a registration warning (today only the sidecar's version).
 pub fn warning_hint(url: &str) -> String {
   format!(
-    "`sectr init --endpoint {} --force` rewrites the Dockerfile with this server's base image",
+    "update the Dockerfile's FROM line, or rerun `sectr init --endpoint {} --force` \
+     ({REWRITES}), then rebuild and redeploy the image",
     Platform::of_url(url).arg()
   )
 }
@@ -560,6 +565,13 @@ mod tests {
         .unwrap()
         .contains("--endpoint container")
     );
+
+    // Every hint that suggests --force says what it replaces.
+    for hint in [hint(&wrong, RUN).unwrap(), warning_hint(LAMBDA)] {
+      assert!(hint.contains(REWRITES), "{hint}");
+    }
+    assert!(warning_hint(RUN).contains("FROM line"));
+    assert!(warning_hint(RUN).contains("--endpoint cloud-run --force"));
 
     let dial = format!("the endpoint's sidecar {DIAL_FAILED} wss://x/ingest: timed out.");
     assert!(hint(&dial, LAMBDA).unwrap().contains("NAT gateway"));
