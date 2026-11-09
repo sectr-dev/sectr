@@ -247,7 +247,8 @@ impl EndpointPlatform {
 
     let handle = format!("{HANDLE_PREFIX}{invocation_id}");
     let (failed_tx, failed_rx) = tokio::sync::oneshot::channel::<WakeFailure>();
-    // The latest retryable failure, so a deadline after retries says why.
+    // The failure a retry is waiting out, so a deadline that lands during
+    // the backoff says why. Cleared whenever a request goes out.
     let last_retryable = Arc::new(Mutex::new(None::<WakeFailure>));
     let task = tokio::spawn(wake_task(WakeTask {
       client: self.client.clone(),
@@ -351,6 +352,13 @@ async fn wake_task(task: WakeTask) {
     let _ = failed.send(failure);
   };
   let failure = loop {
+    // A deadline that lands while this request is out is this request's
+    // (a cold start, say), not the previous attempt's: the remembered
+    // failure only explains a deadline during the backoff sleep.
+    last_retryable
+      .lock()
+      .unwrap_or_else(|e| e.into_inner())
+      .take();
     let sent = client
       .post(target.clone())
       .timeout(turn_timeout)

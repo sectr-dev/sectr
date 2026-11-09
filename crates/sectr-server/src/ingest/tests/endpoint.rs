@@ -460,6 +460,24 @@ async fn an_endpoint_that_never_dials_fails_at_the_deadline() {
 }
 
 #[tokio::test]
+async fn a_deadline_after_a_retry_names_the_timeout_not_the_old_refusal() {
+  // A platform refusal, then a retry that reaches a cold start too slow
+  // for the deadline: the turn failed for lack of a start, not a 429.
+  let mut options = Options::new(vec![Step::Status(429, "no available instance")], Step::Hang);
+  options.wake_deadline = Duration::from_secs(1);
+  let Some(e) = endpoint_world(options).await else {
+    return;
+  };
+  let message = session_error(&e.w).await.expect("the turn failed");
+  assert!(
+    message.contains("the endpoint did not start the turn within 1s"),
+    "{message}"
+  );
+  assert!(!message.contains("429"), "{message}");
+  assert_eq!(e.fake.requests(), 2);
+}
+
+#[tokio::test]
 async fn a_slow_endpoint_gets_no_second_request() {
   let Some(e) = endpoint_world(Options::new(
     vec![Step::Slow(Duration::from_millis(1500))],
