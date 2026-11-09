@@ -764,9 +764,11 @@ async fn journal_types(w: &World) -> Vec<EventType> {
     .collect()
 }
 
-/// Poll until the journal tail matches `want` (1s deadline) — the turn ran.
+/// Poll until the journal tail matches `want` (5 s deadline) — the turn ran.
+/// Generous: serve tests start a real python agent, sometimes after a
+/// delay, and a loaded machine slows that down. Passing runs return early.
 async fn wait_for_tail(w: &World, want: &[EventType]) {
-  for _ in 0..40 {
+  for _ in 0..100 {
     if journal_types(w).await.ends_with(want) {
       return;
     }

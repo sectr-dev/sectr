@@ -19,6 +19,15 @@
 //!   it, and that turn runs in the previous turn's process, with its
 //!   environment and memory.
 //!
+//! Killed processes are also reaped. A killed group's members other than
+//! the leader (the python under `uv`) are orphans, and the system hands
+//! orphans to PID 1. In a customer's image with no init, PID 1 is
+//! `sectr-worker` itself, which only ever waited for its own children:
+//! each turn left a zombie behind, counting against the process limit. So
+//! after a kill, the rest of the group is collected with `waitpid(-pgid)`
+//! when it has become ours. Where something else is PID 1 (Lambda's init,
+//! a terminal), that answers ECHILD at once and the real init reaps them.
+//!
 //! A side effect: a terminal's Ctrl-C doesn't reach the group. Stopping
 //! user code is the caller's job.
 
@@ -27,12 +36,15 @@ use std::io;
 use tokio::process::{Child, Command};
 
 /// A running user-code process, leader of its own process group. Killing
-/// or dropping it kills the whole group.
+/// or dropping it kills, and reaps, the whole group.
 pub struct UserProcess {
-  child: Child,
+  /// `None` only once `Drop` has taken it.
+  child: Option<Child>,
   /// The group's id (the leader's pid), kept after the leader is reaped:
   /// its children can outlive it.
   pgid: Option<i32>,
+  /// Set once [`UserProcess::kill`] has killed and reaped the group.
+  reaped: bool,
 }
 
 impl UserProcess {
@@ -40,46 +52,94 @@ impl UserProcess {
   pub fn spawn(cmd: &mut Command) -> io::Result<UserProcess> {
     let child = cmd.process_group(0).kill_on_drop(true).spawn()?;
     let pgid = child.id().and_then(|pid| i32::try_from(pid).ok());
-    Ok(UserProcess { child, pgid })
+    Ok(UserProcess {
+      child: Some(child),
+      pgid,
+      reaped: false,
+    })
   }
 
   /// The direct child's pid, until it's reaped.
   pub fn id(&self) -> Option<u32> {
-    self.child.id()
+    self.child.as_ref().and_then(Child::id)
   }
 
   /// The direct child: its pipes, `wait` and `try_wait`.
   pub fn child(&mut self) -> &mut Child {
-    &mut self.child
+    self.child.as_mut().expect("only Drop takes the child")
   }
 
-  /// SIGKILL every process in the group, then reap the direct child. An
-  /// already-exited child is fine: its group may still have members.
+  /// SIGKILL every process in the group, reap the direct child, then reap
+  /// the rest of the group where it's ours to reap. An already-exited
+  /// child is fine: its group may still have members.
   pub async fn kill(&mut self) -> io::Result<()> {
-    self.kill_group();
-    match self.child.kill().await {
+    kill_group(self.pgid);
+    let killed = match self.child().kill().await {
       // InvalidInput: the child had already exited and been reaped.
       Err(e) if e.kind() != io::ErrorKind::InvalidInput => Err(e),
       _ => Ok(()),
-    }
-  }
-
-  fn kill_group(&self) {
-    #[cfg(unix)]
-    if let Some(pgid) = self.pgid {
-      // SAFETY: a plain syscall with no memory arguments. A group with no
-      // members left answers ESRCH, which is fine.
-      unsafe {
-        libc::kill(-pgid, libc::SIGKILL);
-      }
-    }
+    };
+    reap_group(self.pgid).await;
+    self.reaped = true;
+    killed
   }
 }
 
 impl Drop for UserProcess {
   fn drop(&mut self) {
-    // kill_on_drop covers the direct child; this covers the rest.
-    self.kill_group();
+    kill_group(self.pgid);
+    if self.reaped {
+      return;
+    }
+    // Drop can't wait, so a task does: the leader through its own handle
+    // first (the group loop must not take it from under tokio), then the
+    // rest. With no runtime, kill_on_drop still ends the leader.
+    let (Some(mut child), Ok(runtime)) = (self.child.take(), tokio::runtime::Handle::try_current())
+    else {
+      return;
+    };
+    let pgid = self.pgid;
+    runtime.spawn(async move {
+      let _ = child.kill().await;
+      reap_group(pgid).await;
+    });
+  }
+}
+
+fn kill_group(pgid: Option<i32>) {
+  #[cfg(unix)]
+  if let Some(pgid) = pgid {
+    // SAFETY: a plain syscall with no memory arguments. A group with no
+    // members left answers ESRCH, which is fine.
+    unsafe {
+      libc::kill(-pgid, libc::SIGKILL);
+    }
+  }
+}
+
+/// Wait for every member of the (already SIGKILLed) group that is this
+/// process's child: orphans adopted because this process is PID 1. Only
+/// called once the leader is reaped, so it never takes a child tokio
+/// tracks; every other user process has a group of its own. It ends:
+/// every member was sent SIGKILL, and ECHILD means none is ours.
+async fn reap_group(pgid: Option<i32>) {
+  #[cfg(unix)]
+  if let Some(pgid) = pgid {
+    let _ = tokio::task::spawn_blocking(move || {
+      loop {
+        // SAFETY: waitpid with a valid out-pointer to a local.
+        let mut status = 0;
+        let reaped = unsafe { libc::waitpid(-pgid, &mut status, 0) };
+        if reaped > 0 {
+          continue;
+        }
+        if reaped == -1 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+          continue;
+        }
+        break;
+      }
+    })
+    .await;
   }
 }
 
