@@ -8,9 +8,11 @@
 //! reach an address set aside for non-public use.
 //!
 //! The blocked ranges are the ones internet standards reserve (RFC 1122,
-//! 1918, 3927, 4193, 4291, 6598), not a list of our own infrastructure: no
-//! public service can live on them, so blocking them never blocks a real
-//! endpoint, and the list needs no upkeep.
+//! 1918, 3927, 4193, 4291, 6598, 8215), not a list of our own
+//! infrastructure: no public service can live on them, so blocking them
+//! never blocks a real endpoint, and the list needs no upkeep. An IPv6
+//! address that carries an IPv4 one (mapped, NAT64, 6to4, Teredo) is
+//! checked as that IPv4 address.
 //!
 //! The check runs at send time, in the client's DNS resolver, so a DNS
 //! change can't point an accepted hostname at an internal address later.
@@ -33,11 +35,31 @@ use sectr_common::endpoint::PRIVATE_ADDRESS;
 pub fn is_blocked(ip: IpAddr) -> bool {
   match ip {
     IpAddr::V4(v4) => is_blocked_v4(v4),
-    IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-      // An IPv4-mapped address reaches the IPv4 address it carries.
+    IpAddr::V6(v6) => match embedded_ipv4(v6) {
       Some(v4) => is_blocked_v4(v4),
       None => is_blocked_v6(v6),
     },
+  }
+}
+
+/// The IPv4 address an IPv6 address carries, for the forms a host or its
+/// network can turn back into IPv4 traffic to that address: on a network
+/// with NAT64, `64:ff9b::a9fe:a9fe` reaches `169.254.169.254`.
+fn embedded_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+  let v4 = |hi: u16, lo: u16| Some(Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo)));
+  // IPv4-mapped `::ffff:a.b.c.d` and the older IPv4-compatible
+  // `::a.b.c.d` (RFC 4291), which includes `::` and `::1` as 0.0.0.0/8.
+  if let Some(mapped) = ip.to_ipv4() {
+    return Some(mapped);
+  }
+  match ip.segments() {
+    // NAT64's well-known prefix, 64:ff9b::/96 (RFC 6052).
+    [0x64, 0xff9b, 0, 0, 0, 0, hi, lo] => v4(hi, lo),
+    // 6to4, 2002::/16 (RFC 3056): the IPv4 address follows the prefix.
+    [0x2002, hi, lo, ..] => v4(hi, lo),
+    // Teredo, 2001::/32 (RFC 4380): the client's address, bits inverted.
+    [0x2001, 0, _, _, _, _, hi, lo] => v4(!hi, !lo),
+    _ => None,
   }
 }
 
@@ -54,9 +76,10 @@ fn is_blocked_v4(ip: Ipv4Addr) -> bool {
 }
 
 fn is_blocked_v6(ip: Ipv6Addr) -> bool {
-  let first = ip.segments()[0];
+  let [first, second, third, ..] = ip.segments();
   ip.is_unspecified() // ::
     || ip.is_loopback() // ::1
+    || (first == 0x64 && second == 0xff9b && third == 1) // 64:ff9b:1::/48, local-use NAT64 (RFC 8215)
     || (first & 0xfe00) == 0xfc00 // fc00::/7, unique local (RFC 4193)
     || (first & 0xffc0) == 0xfe80 // fe80::/10, link local (RFC 4291)
     || (first & 0xff00) == 0xff00 // ff00::/8, multicast
@@ -249,11 +272,14 @@ mod tests {
       "febf:ffff::1",
       "ff00::",
       "ff02::1",
+      "64:ff9b:1::",
+      "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
     ] {
       assert!(v4(blocked), "{blocked} should be blocked");
     }
     for public in [
-      "::2",
+      "::1:0:0:0",
+      "64:ff9b:2::1",
       "fbff:ffff::1",
       "fe00::",
       "fe7f:ffff::1",
@@ -267,11 +293,30 @@ mod tests {
   }
 
   #[test]
-  fn ipv4_mapped_addresses_are_checked_as_ipv4() {
-    assert!(v4("::ffff:10.0.0.1"));
-    assert!(v4("::ffff:169.254.169.254"));
-    assert!(v4("::ffff:127.0.0.1"));
-    assert!(!v4("::ffff:8.8.8.8"));
+  fn ipv6_addresses_that_carry_ipv4_are_checked_as_ipv4() {
+    for (blocked, public) in [
+      // IPv4-mapped.
+      ("::ffff:169.254.169.254", "::ffff:8.8.8.8"),
+      ("::ffff:10.0.0.1", "::ffff:34.117.59.81"),
+      ("::ffff:127.0.0.1", "::ffff:1.1.1.1"),
+      // IPv4-compatible.
+      ("::169.254.169.254", "::8.8.8.8"),
+      ("::2", "::1.0.0.0"),
+      // NAT64.
+      ("64:ff9b::a9fe:a9fe", "64:ff9b::808:808"),
+      ("64:ff9b::10.0.0.1", "64:ff9b::34.117.59.81"),
+      // 6to4.
+      ("2002:a9fe:a9fe::", "2002:808:808::"),
+      ("2002:7f00:1::1", "2002:2275:3b51::1"),
+      // Teredo: the client address 169.254.169.254, bits inverted.
+      (
+        "2001:0:4136:e378:8000:63bf:5601:5601",
+        "2001:0:4136:e378:8000:63bf:f7f7:f7f7",
+      ),
+    ] {
+      assert!(v4(blocked), "{blocked} should be blocked");
+      assert!(!v4(public), "{public} should be allowed");
+    }
   }
 
   fn check(url: &str) -> Result<(), String> {
@@ -287,6 +332,7 @@ mod tests {
     for (url, reason) in [
       ("https://10.0.0.1/", "private address"),
       ("https://[::ffff:10.0.0.1]/", "private address"),
+      ("https://[64:ff9b::a9fe:a9fe]/", "private address"),
       ("https://[fd00::1]/", "private address"),
       ("https://169.254.169.254/", "private address"),
       ("https://localhost/", "private address"),
