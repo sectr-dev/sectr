@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use sectr_common::endpoint::{
-  ANSWERED_HTTP, COULD_NOT_CONNECT, DIAL_FAILED, DISABLED, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS,
-  Platform as Host, WRONG_INGEST, platform_of,
+  ANSWERED_HTTP, COULD_NOT_CONNECT, DIAL_FAILED, DISABLED, IMPORT_FAILED, NO_ANSWER_IN_TIME,
+  PRIVATE_ADDRESS, Platform as Host, WRONG_INGEST, platform_of,
 };
 
 /// The setup guide for each platform.
@@ -111,6 +111,11 @@ impl Platform {
 /// CLI knows: registration refusals, failed registrations and warnings.
 /// `url` is the endpoint URL from `sectr.toml`.
 pub fn hint(message: &str, url: &str) -> Option<String> {
+  // The rest of an import failure is the app's own stderr, which can say
+  // anything: what to fix is in it, not here.
+  if message.contains(IMPORT_FAILED) {
+    return None;
+  }
   let platform = Platform::of_url(url);
   if message.contains(DISABLED) {
     return Some(
@@ -525,14 +530,16 @@ mod tests {
     assert!(hint(&dial, LAMBDA).unwrap().contains("NAT gateway"));
     assert_eq!(hint(&dial, RUN), None);
 
-    // An import failure carries its own stderr: no hint.
-    assert_eq!(
-      hint(
-        "the manifest import failed in your image (exit 1): Traceback",
-        LAMBDA
-      ),
-      None
-    );
+    // An import failure carries the app's own stderr: no hint, even when
+    // that stderr holds a phrase another hint matches on.
+    for stderr in [
+      "Traceback",
+      "psycopg2.OperationalError: could not connect to server: Connection refused",
+      "httpx.ConnectError: couldn't reach api.example.com",
+    ] {
+      let message = format!("{IMPORT_FAILED} (exit 1): {stderr}");
+      assert_eq!(hint(&message, LAMBDA), None, "{message}");
+    }
   }
 
   #[test]

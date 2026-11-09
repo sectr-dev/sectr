@@ -33,7 +33,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use sectr_common::endpoint::{DIAL_FAILED, DISABLED, WRONG_INGEST};
+use sectr_common::endpoint::{DIAL_FAILED, DISABLED, IMPORT_FAILED, WRONG_INGEST};
 use sectr_common::registry::{Deployment, NewDeployment};
 
 use super::{DeployManifest, compose_manifest, deployment_dto, parse_sectr_toml, prepare_deploy};
@@ -236,7 +236,7 @@ async fn register_and_activate(
         None => field("message").to_owned(),
       };
       return Err(format!(
-        "the manifest import failed in your image ({exit}): {}",
+        "{IMPORT_FAILED} ({exit}): {}",
         field("stderr_tail")
       ));
     }
