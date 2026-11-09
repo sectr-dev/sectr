@@ -63,13 +63,23 @@ fn is_blocked_v6(ip: Ipv6Addr) -> bool {
 }
 
 /// The rules for an endpoint URL, checked at registration and before every
-/// request. With the guard off, only the scheme (http or https) and the
-/// host's presence are checked.
+/// request. With the guard off, only the scheme (http or https), the
+/// host's presence and the absence of a query are checked.
 pub fn check_url(url: &Url, allow_private: bool) -> Result<(), String> {
   let host = url
     .host_str()
     .filter(|host| !host.is_empty())
     .ok_or_else(|| "the endpoint URL has no host".to_owned())?;
+  // Not a guard rule: the wake and manifest requests go to paths under
+  // the URL and couldn't carry a query, so an endpoint that needs one
+  // would pass the probe and then fail every request.
+  if url.query().is_some() {
+    return Err(
+      "the endpoint URL must not have a ?query: the server sends requests to paths under it \
+       (/wake, /manifest) without one"
+        .into(),
+    );
+  }
   if allow_private {
     return match url.scheme() {
       "https" | "http" => Ok(()),
@@ -285,6 +295,8 @@ mod tests {
       ("https://user:pw@agent.example.com/", "username or password"),
       ("https://user@agent.example.com/", "username or password"),
       ("https://agent.example.com/#x", "fragment"),
+      ("https://agent.example.com/?code=abc", "?query"),
+      ("https://agent.example.com/?", "?query"),
       ("http://agent.example.com/", "must be https"),
       ("ftp://agent.example.com/", "must be https"),
     ] {
@@ -303,6 +315,7 @@ mod tests {
       assert!(check_url(&Url::parse(url).unwrap(), true).is_ok(), "{url}");
     }
     assert!(check_url(&Url::parse("ftp://x/").unwrap(), true).is_err());
+    assert!(check_url(&Url::parse("http://localhost:9000/?k=v").unwrap(), true).is_err());
   }
 
   #[test]

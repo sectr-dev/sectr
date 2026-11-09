@@ -834,9 +834,10 @@ paths:
                                     type: string
                                     description: >-
                                         The endpoint's base URL (a Lambda function URL,
-                                        a Cloud Run service URL, ...). `https` only,
-                                        with no username, password or fragment, unless
-                                        the server sets `SECTR_ENDPOINT_ALLOW_PRIVATE`.
+                                        a Cloud Run service URL, ...), with no query.
+                                        `https` only, with no username, password or
+                                        fragment, unless the server sets
+                                        `SECTR_ENDPOINT_ALLOW_PRIVATE`.
                                         The server sends `<endpoint_url>/wake` and
                                         `<endpoint_url>/manifest`.
             responses:

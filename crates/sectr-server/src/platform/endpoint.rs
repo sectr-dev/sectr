@@ -134,8 +134,8 @@ impl EndpointPlatform {
     self.inflight.lock().unwrap_or_else(|e| e.into_inner())
   }
 
-  /// Parse an endpoint URL and apply the URL rules (guard on: https, no
-  /// userinfo or fragment, not localhost or a private IP literal).
+  /// Parse an endpoint URL and apply the URL rules (no query; guard on:
+  /// https, no userinfo or fragment, not localhost or a private IP literal).
   pub fn check_url(&self, raw: &str) -> Result<Url, String> {
     let url = Url::parse(raw).map_err(|e| format!("the endpoint URL {raw:?} is not a URL: {e}"))?;
     guard::check_url(&url, self.config.allow_private)?;
