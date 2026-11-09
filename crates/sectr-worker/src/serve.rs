@@ -292,12 +292,15 @@ async fn wake(
   );
   let run = tokio::spawn(async move {
     let _permit = permit;
-    let outcome_name = match client.run().await {
-      RunExit::Boundary => "turn_ended",
+    let exit = client.run().await;
+    let outcome_name = match exit {
+      // A reclaimed turn ran: the journal holds how it ended.
+      RunExit::Boundary | RunExit::Reclaimed => "turn_ended",
       RunExit::Unauthorized => "token_rejected",
     };
     tracing::info!(
       outcome = outcome_name,
+      exit = ?exit,
       duration_ms = started.elapsed().as_millis() as u64,
       "wake finished"
     );

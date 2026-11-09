@@ -207,8 +207,9 @@ types (`sidecar.schema.json`):
   - `POST /wake` carries only the turn's ingest token. The sidecar dials the image's own
     `SECTR_INGEST_URL`, never a URL from the request, because endpoint URLs are public.
     The turn then runs over this protocol unchanged.
-  - The request is held open until the turn ends, then answered `turn_ended`, or
-    `token_rejected` when ingest refused the token and nothing ran.
+  - The request is held open until the turn ends, then answered `turn_ended` (also when
+    the server took the turn back mid-turn), or `token_rejected` when ingest refused the
+    token before any turn started, so nothing ran.
   - `POST /manifest` dials ingest with a registration token first. Only if the upgrade
     is accepted does it import the app, the same way managed builds do, and return the
     manifest.

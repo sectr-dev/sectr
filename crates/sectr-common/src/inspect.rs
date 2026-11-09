@@ -11,7 +11,7 @@
 //! banners, framework logs).
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -89,10 +89,21 @@ pub async fn run_import(
   timeout: Option<Duration>,
   forward: impl AsyncWrite + Unpin + Send + 'static,
 ) -> Result<Value, ImportFailure> {
-  let out = std::env::temp_dir().join(format!("sectr-manifest-{}.json", uuid::Uuid::now_v7()));
-  let result = import_to(command, dir, entry, timeout, forward, &out).await;
-  let _ = tokio::fs::remove_file(&out).await;
-  result
+  let out = RemovedOnDrop(
+    std::env::temp_dir().join(format!("sectr-manifest-{}.json", uuid::Uuid::now_v7())),
+  );
+  import_to(command, dir, entry, timeout, forward, &out.0).await
+}
+
+/// The manifest file, removed when the import is over, including when its
+/// future is dropped mid-import (the request was cancelled; `kill_on_drop`
+/// ends the child).
+struct RemovedOnDrop(PathBuf);
+
+impl Drop for RemovedOnDrop {
+  fn drop(&mut self) {
+    let _ = std::fs::remove_file(&self.0);
+  }
 }
 
 async fn import_to(
@@ -237,6 +248,20 @@ mod tests {
     let script = r#"echo banner; printf '{"entry":"%s"}' "$SECTR_ENTRY" > "$SECTR_MANIFEST_OUT""#;
     let manifest = run(&sh(script), None).await.unwrap();
     assert_eq!(manifest, serde_json::json!({"entry": "app:app"}));
+  }
+
+  #[tokio::test]
+  async fn a_cancelled_import_leaves_no_manifest_file() {
+    let seen = std::env::temp_dir().join(format!("sectr-seen-{}", uuid::Uuid::now_v7()));
+    let script = format!(
+      r#"echo "$SECTR_MANIFEST_OUT" > '{}'; echo '{{}}' > "$SECTR_MANIFEST_OUT"; sleep 5"#,
+      seen.display()
+    );
+    let cancelled = tokio::time::timeout(Duration::from_millis(500), run(&sh(&script), None)).await;
+    assert!(cancelled.is_err(), "the import was still running");
+    let out = std::fs::read_to_string(&seen).unwrap();
+    assert!(!Path::new(out.trim()).exists(), "{out} was left behind");
+    std::fs::remove_file(&seen).unwrap();
   }
 
   #[tokio::test]

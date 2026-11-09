@@ -92,6 +92,16 @@ async fn start_router(config: ServeConfig, spawner: Arc<dyn RunnerSpawner>) -> S
 }
 
 async fn serve_world(delay_secs: u32, frames: &[String]) -> Option<Serve> {
+  serve_world_via(delay_secs, frames, None).await
+}
+
+/// [`serve_world`], with the sidecar dialing ingest through `relay` when
+/// one is given.
+async fn serve_world_via(
+  delay_secs: u32,
+  frames: &[String],
+  relay: Option<&Relay>,
+) -> Option<Serve> {
   let frames_file = temp_path("frames.json");
   let pids = temp_path("pids");
   sectr_worker::testing::script_turn(&frames_file, frames);
@@ -106,8 +116,12 @@ async fn serve_world(delay_secs: u32, frames: &[String]) -> Option<Serve> {
     starts: AtomicUsize::new(0),
     stops: AtomicUsize::new(0),
   });
+  if let Some(relay) = relay {
+    relay.target.set(w.addr).expect("one world per relay");
+  }
+  let ingest = relay.map_or(w.addr, |r| r.addr);
   let base = start_router(
-    serve_config(format!("ws://{}/ingest", w.addr), runner_port),
+    serve_config(format!("ws://{ingest}/ingest"), runner_port),
     runner.clone(),
   )
   .await;
@@ -119,6 +133,47 @@ async fn serve_world(delay_secs: u32, frames: &[String]) -> Option<Serve> {
     pids,
     http: reqwest::Client::new(),
   })
+}
+
+/// A TCP relay in front of ingest whose open connections a test can cut,
+/// the way a server restart drops them.
+struct Relay {
+  addr: std::net::SocketAddr,
+  target: Arc<std::sync::OnceLock<std::net::SocketAddr>>,
+  conns: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
+}
+
+impl Relay {
+  async fn start() -> Relay {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let target = Arc::new(std::sync::OnceLock::<std::net::SocketAddr>::new());
+    let conns = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (to, open) = (target.clone(), conns.clone());
+    tokio::spawn(async move {
+      while let Ok((mut inbound, _)) = listener.accept().await {
+        let Some(&target) = to.get() else { continue };
+        let relay = tokio::spawn(async move {
+          if let Ok(mut outbound) = tokio::net::TcpStream::connect(target).await {
+            let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+          }
+        });
+        open.lock().unwrap().push(relay.abort_handle());
+      }
+    });
+    Relay {
+      addr,
+      target,
+      conns,
+    }
+  }
+
+  /// Drop every open connection (new ones still go through).
+  fn cut(&self) {
+    for conn in self.conns.lock().unwrap().drain(..) {
+      conn.abort();
+    }
+  }
 }
 
 async fn post_raw(
@@ -367,6 +422,63 @@ async fn a_dropped_wake_request_still_finishes_its_turn() {
   assert_eq!((status, body), (200, json!({"outcome": "token_rejected"})));
 }
 
+/// The server losing a turn while its wake is held (a restart: the
+/// connection drops and the grant is gone): the sidecar's redial gets a
+/// 401, but a turn had started, so the wake answers `turn_ended`, never
+/// `token_rejected` ("nothing ran"). The agent is stopped and the
+/// instance takes the next wake. (A reclaim can end the same way, when the
+/// connection closes before the turn task sees its failed append.)
+#[tokio::test]
+async fn a_turn_lost_mid_wake_answers_turn_ended() {
+  let relay = Relay::start().await;
+  // The runner waits 5 s before serving: the turn is still starting when
+  // the server loses it.
+  let Some(s) = serve_world_via(5, &[sectr_worker::testing::final_frame()], Some(&relay)).await
+  else {
+    return;
+  };
+  let token = ingest_token(&s.w).await;
+  let wake = {
+    let (http, url, body) = (
+      s.http.clone(),
+      format!("{}/wake", s.base),
+      json!({"ingest_token": token}).to_string(),
+    );
+    tokio::spawn(async move { post_raw(&http, url, body).await })
+  };
+  for _ in 0..200 {
+    if s.runner.starts.load(Ordering::SeqCst) == 1 {
+      break;
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
+  assert_eq!(
+    s.runner.starts.load(Ordering::SeqCst),
+    1,
+    "the turn started"
+  );
+
+  // The restart: the grant is gone and the connection drops.
+  s.w.hub.teardown_session(s.w.session).await;
+  relay.cut();
+
+  // Well before the runner would serve: this is the 401 on the redial.
+  let (status, body) = tokio::time::timeout(Duration::from_secs(3), wake)
+    .await
+    .expect("the wake answers once the redial is refused")
+    .unwrap();
+  assert_eq!((status, body), (200, json!({"outcome": "turn_ended"})));
+  assert_eq!(
+    s.runner.stops.load(Ordering::SeqCst),
+    1,
+    "the agent was stopped"
+  );
+
+  // The instance is free again.
+  let (status, body) = s.wake(json!({"ingest_token": "sit_never_minted"})).await;
+  assert_eq!((status, body), (200, json!({"outcome": "token_rejected"})));
+}
+
 #[tokio::test]
 async fn malformed_wakes_are_bad_requests() {
   let base = start_router(
@@ -599,9 +711,15 @@ async fn the_manifest_is_the_in_image_import_once_the_dial_is_accepted() {
 
 #[tokio::test]
 async fn an_unknown_registration_token_never_runs_the_import() {
+  // The SDK's interpreter, so the import WOULD reach the app (and touch
+  // the marker) if the dial check didn't stop it.
+  let Some(python) = sdk_python() else {
+    eprintln!("skipping: no sdk-python/.venv");
+    return;
+  };
   let Some(w) = world(30).await else { return };
   let (app, marker) = app_dir(AGENT_SRC, false);
-  let base = manifest_router(format!("ws://{}/ingest", w.addr), &app, "python3".into()).await;
+  let base = manifest_router(format!("ws://{}/ingest", w.addr), &app, python).await;
   let (status, body) = post_manifest(&base, "sit_never_minted").await;
   assert_eq!((status, body), (200, json!({"outcome": "token_rejected"})));
   assert!(!marker.exists(), "the app was imported");
@@ -609,10 +727,15 @@ async fn an_unknown_registration_token_never_runs_the_import() {
 
 #[tokio::test]
 async fn an_unreachable_ingest_is_a_dial_failure_without_an_import() {
+  // The SDK's interpreter, as above: the marker proves the dial check.
+  let Some(python) = sdk_python() else {
+    eprintln!("skipping: no sdk-python/.venv");
+    return;
+  };
   let (app, marker) = app_dir(AGENT_SRC, false);
   // Nothing listens on this port.
   let closed = format!("ws://127.0.0.1:{}/ingest", free_port());
-  let base = manifest_router(closed, &app, "python3".into()).await;
+  let base = manifest_router(closed, &app, python).await;
   let started = Instant::now();
   let (status, body) = post_manifest(&base, "sit_whatever").await;
   assert_eq!(status, 200);

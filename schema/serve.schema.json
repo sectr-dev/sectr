@@ -41,7 +41,7 @@
       }
     },
     "wakeResponse": {
-      "description": "`POST /wake` (200), sent when the invocation is over. `turn_ended`: a turn boundary (sentinel, approval suspension or failure; the journal holds which). `token_rejected`: ingest answered 401 at the dial, so nothing ran.",
+      "description": "`POST /wake` (200), sent when the invocation is over. `turn_ended`: a turn ran and is over: a turn boundary (sentinel, approval suspension or failure), or the server took the turn back mid-turn (a reclaim or a restart, after which its token is refused); the journal holds how it ended. `token_rejected`: ingest answered 401 before any turn started, so nothing ran.",
       "type": "object",
       "required": ["outcome"],
       "properties": {

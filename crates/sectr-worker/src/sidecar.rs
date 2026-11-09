@@ -112,8 +112,14 @@ pub enum RunExit {
   /// suspension or failure; the journal holds which). The turn task has
   /// finished, so the runner has been stopped.
   Boundary,
-  /// The server rejected the token at the dial (401).
+  /// The server rejected the token at the dial (401) before any turn
+  /// started: nothing ran.
   Unauthorized,
+  /// A turn started, then the server rejected the token on a redial: it
+  /// took the turn back (a reclaim, or a restart that lost the grant).
+  /// The turn task was aborted and the runner stopped; the server's
+  /// reconciler ends the turn in the journal.
+  Reclaimed,
 }
 
 /// How one `serve_once` connection ended (besides errors).
@@ -232,25 +238,28 @@ impl SidecarClient {
   ///
   /// Before returning, the turn task has finished: at a boundary it is
   /// awaited (its `complete` frame is queued and the runner stopped); on
-  /// a 401 mid-turn it is aborted and the runner stopped. Dropping the
-  /// future aborts the turn task too.
+  /// a 401 after a turn started it is aborted and the runner stopped, and
+  /// the result is [`RunExit::Reclaimed`]. Dropping the future aborts the
+  /// turn task too.
   pub async fn run(&self) -> RunExit {
     let conn = Conn::new();
     let _abort_on_drop = AbortTurnOnDrop(conn.clone());
     let exit = self.run_loop(&conn).await;
-    if let Some(task) = conn.take_turn_task() {
-      match exit {
-        RunExit::Boundary => {
-          let _ = task.await;
-        }
-        RunExit::Unauthorized => {
-          task.abort();
-          let _ = task.await;
-          self.spawner.stop().await;
-        }
+    let Some(task) = conn.take_turn_task() else {
+      return exit;
+    };
+    match exit {
+      RunExit::Boundary => {
+        let _ = task.await;
+        RunExit::Boundary
+      }
+      RunExit::Unauthorized | RunExit::Reclaimed => {
+        task.abort();
+        let _ = task.await;
+        self.spawner.stop().await;
+        RunExit::Reclaimed
       }
     }
-    exit
   }
 
   async fn run_loop(&self, conn: &Conn) -> RunExit {
