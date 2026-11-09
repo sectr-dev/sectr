@@ -294,19 +294,30 @@ fn add_endpoint_key(text: &str) -> anyhow::Result<Option<String>> {
   let mut doc: toml_edit::DocumentMut = text
     .parse()
     .context("sectr.toml isn't valid TOML — fix it first")?;
-  let deploy = doc
-    .entry("deploy")
-    .or_insert_with(toml_edit::table)
-    .as_table_like_mut()
-    .context("`deploy` in sectr.toml isn't a table")?;
-  if deploy.contains_key("endpoint") {
-    return Ok(None);
+  let deploy = doc.entry("deploy").or_insert_with(toml_edit::table);
+  if let Some(table) = deploy.as_table_mut() {
+    if table.contains_key("endpoint") {
+      return Ok(None);
+    }
+    table.insert("endpoint", toml_edit::value(""));
+    if let Some(mut key) = table.key_mut("endpoint") {
+      key.leaf_decor_mut().set_prefix(ENDPOINT_COMMENT);
+    }
+  } else if let Some(inline) = deploy.as_inline_table_mut() {
+    // `deploy = { … }` is one line: a comment can't go inside it.
+    if inline.contains_key("endpoint") {
+      return Ok(None);
+    }
+    inline.insert("endpoint", "".into());
+  } else {
+    bail!("`deploy` in sectr.toml isn't a table");
   }
-  deploy.insert("endpoint", toml_edit::value(""));
-  if let Some(mut key) = deploy.key_mut("endpoint") {
-    key.leaf_decor_mut().set_prefix(ENDPOINT_COMMENT);
-  }
-  Ok(Some(doc.to_string()))
+  let edited = doc.to_string();
+  // Refuse rather than write a sectr.toml that doesn't parse.
+  edited
+    .parse::<toml::Table>()
+    .context("adding `[deploy] endpoint` would break sectr.toml — add `endpoint = \"\"` under [deploy] yourself")?;
+  Ok(Some(edited))
 }
 
 /// The app's name in `sectr.toml` (`[app] name`), for the printed steps.
@@ -373,6 +384,27 @@ mod tests {
     // A set value is kept.
     assert_eq!(
       add_endpoint_key("[deploy]\nendpoint = \"https://a.run.app\"\n").unwrap(),
+      None
+    );
+    // An inline or dotted [deploy] gains the key too, and stays valid TOML.
+    for text in [
+      "deploy = { approval_tools = [\"x\"] }\n",
+      "deploy = {}\n",
+      "deploy.approval_tools = [\"x\"]\n",
+    ] {
+      let edited = add_endpoint_key(text).unwrap().unwrap();
+      assert_eq!(
+        crate::deploy::deploy_mode(&edited).unwrap(),
+        crate::deploy::Mode::EndpointUnset,
+        "{edited}"
+      );
+      let table: toml::Table = edited.parse().unwrap();
+      if text.contains("approval_tools") {
+        assert!(table["deploy"].get("approval_tools").is_some(), "{edited}");
+      }
+    }
+    assert_eq!(
+      add_endpoint_key("deploy = { endpoint = \"https://a.run.app\" }\n").unwrap(),
       None
     );
     assert!(add_endpoint_key("deploy = 1\n").is_err());
