@@ -343,6 +343,36 @@ impl JournalReader for PgJournal {
 
     Ok(Box::pin(ReceiverStream::new(rx)))
   }
+
+  async fn deployment_turn_starts(
+    &self,
+    deployment: DeploymentId,
+    limit: i64,
+  ) -> Result<Vec<super::TurnRow>> {
+    // Both queries use idx_events_turn_starts.
+    let since: Option<DateTime<Utc>> = sqlx::query_scalar(
+      "SELECT MIN(created_at) FROM (SELECT created_at FROM events \
+       WHERE deployment_id = $1 AND type = 'INVOCATION_STARTED' \
+       ORDER BY created_at DESC LIMIT $2) AS recent",
+    )
+    .bind(deployment)
+    .bind(limit)
+    .fetch_one(&self.pool)
+    .await?;
+    let Some(since) = since else {
+      return Ok(Vec::new());
+    };
+    let rows = sqlx::query_as::<_, super::TurnRowParts>(
+      "SELECT session_id, seq, type, payload, created_at FROM events \
+       WHERE deployment_id = $1 AND type IN ('INVOCATION_STARTED', 'SESSION_ERROR') \
+       AND created_at >= $2 ORDER BY created_at DESC, seq DESC",
+    )
+    .bind(deployment)
+    .bind(since)
+    .fetch_all(&self.pool)
+    .await?;
+    Ok(rows.into_iter().map(super::turn_row).collect())
+  }
 }
 
 type EventRow = (
@@ -483,6 +513,24 @@ mod tests {
   use crate::test_pg::fresh_store;
   use serde_json::json;
   use tokio_stream::StreamExt;
+
+  #[tokio::test]
+  async fn deployment_turn_starts_meets_the_contract() {
+    let Some((journal, a, _)) = journal().await else {
+      return;
+    };
+    let b = Uuid::now_v7();
+    sqlx::query(
+      "INSERT INTO sessions (id, app_id, deployment_id, route, created_at) \
+       SELECT $1, app_id, deployment_id, route, created_at FROM sessions WHERE id = $2",
+    )
+    .bind(b)
+    .bind(a)
+    .execute(&journal.pool)
+    .await
+    .unwrap();
+    crate::journal::turn_starts_contract(&journal, a, b).await;
+  }
 
   /// A fresh migrated store with org/app/deployment/session seeded via the
   /// Registry (the prod orchestration order). `None` = skip (no test PG).

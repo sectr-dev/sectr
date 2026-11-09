@@ -130,6 +130,36 @@ impl JournalReader for SqliteJournal {
 
     Ok(Box::pin(ReceiverStream::new(rx)))
   }
+
+  async fn deployment_turn_starts(
+    &self,
+    deployment: DeploymentId,
+    limit: i64,
+  ) -> Result<Vec<super::TurnRow>> {
+    // Both queries use idx_events_turn_starts.
+    let since: Option<DateTime<Utc>> = sqlx::query_scalar(
+      "SELECT MIN(created_at) FROM (SELECT created_at FROM events \
+       WHERE deployment_id = ? AND type = 'INVOCATION_STARTED' \
+       ORDER BY created_at DESC LIMIT ?) AS recent",
+    )
+    .bind(deployment)
+    .bind(limit)
+    .fetch_one(&self.pool)
+    .await?;
+    let Some(since) = since else {
+      return Ok(Vec::new());
+    };
+    let rows = sqlx::query_as::<_, super::TurnRowParts>(
+      "SELECT session_id, seq, type, payload, created_at FROM events \
+       WHERE deployment_id = ? AND type IN ('INVOCATION_STARTED', 'SESSION_ERROR') \
+       AND created_at >= ? ORDER BY created_at DESC, seq DESC",
+    )
+    .bind(deployment)
+    .bind(since)
+    .fetch_all(&self.pool)
+    .await?;
+    Ok(rows.into_iter().map(super::turn_row).collect())
+  }
 }
 
 type EventRow = (
@@ -291,6 +321,24 @@ mod tests {
 
   /// Minimal registry rows so `events.session_id` FK resolves. The Registry
   /// implementation (next milestone) will replace the raw SQL here.
+  #[tokio::test]
+  async fn deployment_turn_starts_meets_the_contract() {
+    let (journal, _path) = journal().await;
+    let a = Uuid::now_v7();
+    let b = Uuid::now_v7();
+    seed_session(&journal.pool, a).await;
+    sqlx::query(
+      "INSERT INTO sessions (id, app_id, deployment_id, route, created_at) \
+       SELECT ?, app_id, deployment_id, route, created_at FROM sessions WHERE id = ?",
+    )
+    .bind(b)
+    .bind(a)
+    .execute(&journal.pool)
+    .await
+    .unwrap();
+    crate::journal::turn_starts_contract(&journal, a, b).await;
+  }
+
   async fn seed_session(pool: &SqlitePool, session: SessionId) -> Uuid {
     let org = Uuid::now_v7();
     let app = Uuid::now_v7();

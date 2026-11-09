@@ -33,6 +33,8 @@
 //!      die with the process; a remote-builder re-check lands with the
 //!      RunnerPlatform-seam refactor).
 //! 3. `POST /deployments/{id}/activate` — dashboard rollback / promote.
+//! 4. `GET /deployments/{id}/wakes` — how its recent turns woke (see
+//!    [`wakes`]).
 //!    Sessions keep their pinned deployments.
 //!
 //! # MVP caveats
@@ -95,6 +97,10 @@ pub fn deploy_router() -> Router<AppState> {
     )
     .route("/apps/{appId}/deployments", get(list_deployments))
     .route(
+      "/deployments/{deploymentId}/wakes",
+      get(wakes::deployment_wakes),
+    )
+    .route(
       "/endpoint-deployments",
       post(endpoint::register_endpoint).layer(DefaultBodyLimit::max(endpoint::REGISTER_BODY_LIMIT)),
     )
@@ -106,6 +112,7 @@ pub fn deploy_router() -> Router<AppState> {
 }
 
 mod endpoint;
+mod wakes;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -1363,6 +1370,154 @@ mod tests {
       registry.get_deployment(live.id).await.unwrap().status,
       DeploymentStatus::Retired,
       "the previous active is retired by the successful rollback"
+    );
+  }
+
+  /// The wakes summary over a real journal, behind the org boundary and
+  /// the limit bounds.
+  #[tokio::test]
+  async fn wakes_summarize_a_deployments_turns_for_its_org_only() {
+    use sectr_common::api::Origin;
+    use sectr_common::events::{
+      EventPayload, Extra, InvocationReason, InvocationStarted, SessionError,
+    };
+    use sectr_common::registry::NewSession;
+    let Some(store) = test_pg::fresh_store().await else {
+      eprintln!("skipping: no test Postgres (initdb not on PATH)");
+      return;
+    };
+    let registry: Arc<dyn Registry> = Arc::new(store.registry());
+    let org = registry.create_org("test-org", "default").await.unwrap();
+    let other_org = registry.create_org("other-org", "other").await.unwrap();
+    let app = registry
+      .create_app(NewApp {
+        org_id: org.id,
+        name: "wakes-app".into(),
+        slug: "wakes-app".into(),
+      })
+      .await
+      .unwrap();
+    let deployment = registry
+      .create_deployment(NewDeployment {
+        endpoint_url: Some("https://abc.lambda-url.us-east-1.on.aws/".into()),
+        app_id: app.id,
+        version: 1,
+        manifest: json!({"routes": [{"path": "/chat"}]}),
+      })
+      .await
+      .unwrap();
+    let session = registry
+      .create_session(NewSession {
+        id: None,
+        app_id: app.id,
+        deployment_id: deployment.id,
+        route: "/chat".into(),
+        origin: Origin::Api,
+        external_user_id: None,
+      })
+      .await
+      .unwrap();
+    let journal = store.journal();
+    let started = || {
+      EventPayload::InvocationStarted(InvocationStarted {
+        invocation_id: Uuid::now_v7(),
+        route: "/chat".into(),
+        deployment_id: deployment.id,
+        reason: InvocationReason::UserMessage {
+          input: "hi".to_string().try_into().unwrap(),
+          extra: Extra::default(),
+        },
+        extra: Extra::default(),
+      })
+    };
+    use sectr_common::journal::EventSink as _;
+    let failure = format!(
+      "{} abc.lambda-url.us-east-1.on.aws answered HTTP 403: Forbidden",
+      crate::platform::endpoint::WAKE_FAILED
+    );
+    for payload in [
+      started(),
+      EventPayload::SessionError(SessionError {
+        message: failure.clone(),
+        extra: Extra::default(),
+      }),
+      started(),
+    ] {
+      journal
+        .append_platform_event(session.id, deployment.id, payload)
+        .await
+        .unwrap();
+    }
+
+    let state = test_state(&store).await;
+    let key = |org_id: Uuid, label: &'static str| {
+      let registry = registry.clone();
+      async move {
+        let platform = keys::mint(ApiKeyKind::Platform);
+        registry
+          .create_api_key(
+            org_id,
+            None,
+            ApiKeyKind::Platform,
+            label,
+            &keys::hash(&platform),
+          )
+          .await
+          .unwrap();
+        platform
+      }
+    };
+    let ours = key(org.id, "wakes test").await;
+    let theirs = key(other_org.id, "wakes test (other org)").await;
+    let router = http::router(state);
+    let get = |uri: String, key: String| {
+      let router = router.clone();
+      async move {
+        let request = axum::http::Request::builder()
+          .uri(uri)
+          .header("Authorization", format!("Bearer {key}"))
+          .body(Body::empty())
+          .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+          .await
+          .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+      }
+    };
+
+    let uri = format!("/deployments/{}/wakes", deployment.id);
+    let (status, body) = get(uri.clone(), ours.clone()).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let summary: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(summary["turns"], 2, "{summary}");
+    assert_eq!(summary["failed"], 1, "{summary}");
+    assert_eq!(summary["latest_failure"]["message"], failure.as_str());
+    assert_eq!(
+      summary["latest_failure"]["session_id"],
+      session.id.to_string()
+    );
+
+    // Another org's deployment doesn't exist for this key.
+    let (status, _) = get(uri.clone(), theirs).await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    let (status, _) = get(
+      format!("/deployments/{}/wakes", Uuid::now_v7()),
+      ours.clone(),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    for bad in ["0", "101", "-1"] {
+      let (status, _) = get(format!("{uri}?limit={bad}"), ours.clone()).await;
+      assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "limit={bad}");
+    }
+    let (status, body) = get(format!("{uri}?limit=1"), ours.clone()).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let summary: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+      (summary["turns"].clone(), summary["failed"].clone()),
+      (json!(1), json!(0))
     );
   }
 }

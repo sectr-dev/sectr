@@ -983,6 +983,68 @@ paths:
           description: >-
             Deployment not in a ready state — only `active` or `retired` rows (a resolved build) can
             be activated; `building` and `failed` targets are rejected.
+  /deployments/{deploymentId}/wakes:
+    get:
+      operationId: getDeploymentWakes
+      summary: How a deployment's recent turns woke (endpoint health)
+      description: >-
+        Over the deployment's last `limit` turns, how many failed to wake its endpoint: the turn's
+        first session error, before the session's next turn, starts with `endpoint wake failed:`.
+        Other session errors (an agent that raised, a reclaimed lease) don't count. For a managed
+        deployment `failed` is always 0. Auth: platform API key.
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - turns
+                  - failed
+                  - latest_failure
+                properties:
+                  turns:
+                    type: integer
+                    description: turns counted (at most `limit`)
+                  failed:
+                    type: integer
+                    description: of those, the ones whose wake failed
+                  latest_failure:
+                    description: the newest wake failure among them
+                    oneOf:
+                      - type: 'null'
+                      - type: object
+                        required:
+                          - message
+                          - session_id
+                          - created_at
+                        properties:
+                          message:
+                            type: string
+                          session_id:
+                            type: string
+                          created_at:
+                            type: string
+                            format: date-time
+        '400':
+          description: '`limit` outside 1–100'
+        '404':
+          description: unknown deployment
   /secrets:
     get:
       operationId: listSecrets
