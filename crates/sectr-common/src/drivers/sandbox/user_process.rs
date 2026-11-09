@@ -32,8 +32,13 @@
 //! user code is the caller's job.
 
 use std::io;
+use std::time::Duration;
 
 use tokio::process::{Child, Command};
+
+/// How long [`UserProcess::kill`] waits for each cleanup step before
+/// leaving it to the background.
+pub const CLEANUP_DEADLINE: Duration = Duration::from_secs(5);
 
 /// A running user-code process, leader of its own process group. Killing
 /// or dropping it kills, and reaps, the whole group.
@@ -72,14 +77,39 @@ impl UserProcess {
   /// SIGKILL every process in the group, reap the direct child, then reap
   /// the rest of the group where it's ours to reap. An already-exited
   /// child is fine: its group may still have members.
+  ///
+  /// Waits at most [`CLEANUP_DEADLINE`] for each step. A process stuck in
+  /// the kernel (uninterruptible sleep, say on a hung network filesystem)
+  /// can't die until it's unstuck, and a caller blocked on it would never
+  /// take the next turn. Past the deadline it logs a warning, and the
+  /// cleanup finishes in the background, reaping the process whenever it
+  /// does die.
   pub async fn kill(&mut self) -> io::Result<()> {
     kill_group(self.pgid);
-    let killed = match self.child().kill().await {
+    let killed = match tokio::time::timeout(CLEANUP_DEADLINE, self.child().kill()).await {
+      Err(_) => {
+        tracing::warn!(
+          pgid = self.pgid,
+          "user process didn't exit within {CLEANUP_DEADLINE:?} of SIGKILL; reaping it in the background"
+        );
+        // Not reaped: Drop's task waits for the leader, then the group.
+        return Ok(());
+      }
       // InvalidInput: the child had already exited and been reaped.
-      Err(e) if e.kind() != io::ErrorKind::InvalidInput => Err(e),
-      _ => Ok(()),
+      Ok(Err(e)) if e.kind() != io::ErrorKind::InvalidInput => Err(e),
+      Ok(_) => Ok(()),
     };
-    reap_group(self.pgid).await;
+    if let Some(reaping) = reap_group(self.pgid)
+      && tokio::time::timeout(CLEANUP_DEADLINE, reaping)
+        .await
+        .is_err()
+    {
+      // The blocking loop carries on by itself until the group is gone.
+      tracing::warn!(
+        pgid = self.pgid,
+        "a killed user process didn't exit within {CLEANUP_DEADLINE:?}; reaping it in the background"
+      );
+    }
     self.reaped = true;
     killed
   }
@@ -87,10 +117,12 @@ impl UserProcess {
 
 impl Drop for UserProcess {
   fn drop(&mut self) {
-    kill_group(self.pgid);
+    // After kill() the group is gone: signalling its id again could only
+    // reach a process that reused it.
     if self.reaped {
       return;
     }
+    kill_group(self.pgid);
     // Drop can't wait, so a task does: the leader through its own handle
     // first (the group loop must not take it from under tokio), then the
     // rest. With no runtime, kill_on_drop still ends the leader.
@@ -100,8 +132,11 @@ impl Drop for UserProcess {
     };
     let pgid = self.pgid;
     runtime.spawn(async move {
+      // No deadline here: nothing waits on this task.
       let _ = child.kill().await;
-      reap_group(pgid).await;
+      if let Some(reaping) = reap_group(pgid) {
+        let _ = reaping.await;
+      }
     });
   }
 }
@@ -121,11 +156,12 @@ fn kill_group(pgid: Option<i32>) {
 /// process's child: orphans adopted because this process is PID 1. Only
 /// called once the leader is reaped, so it never takes a child tokio
 /// tracks; every other user process has a group of its own. It ends:
-/// every member was sent SIGKILL, and ECHILD means none is ours.
-async fn reap_group(pgid: Option<i32>) {
+/// every member was sent SIGKILL, and ECHILD means none is ours. Runs on a
+/// blocking thread, which carries on if the returned handle is dropped.
+fn reap_group(pgid: Option<i32>) -> Option<tokio::task::JoinHandle<()>> {
   #[cfg(unix)]
   if let Some(pgid) = pgid {
-    let _ = tokio::task::spawn_blocking(move || {
+    return Some(tokio::task::spawn_blocking(move || {
       loop {
         // SAFETY: waitpid with a valid out-pointer to a local.
         let mut status = 0;
@@ -138,9 +174,9 @@ async fn reap_group(pgid: Option<i32>) {
         }
         break;
       }
-    })
-    .await;
+    }));
   }
+  None
 }
 
 #[cfg(test)]
