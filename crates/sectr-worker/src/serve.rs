@@ -27,7 +27,7 @@
 //! saying the request never reached a container, which is what makes its
 //! retry safe.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,7 +43,7 @@ use tokio::sync::Semaphore;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
-use sectr_common::drivers::StderrTail;
+use sectr_common::inspect;
 use sectr_common::sidecar::INGEST_TOKEN_PREFIX;
 
 use crate::runner::SubprocessRunnerConfig;
@@ -55,9 +55,6 @@ pub const DEFAULT_PORT: u16 = 8080;
 
 /// Request bodies are small JSON objects: anything bigger is refused (413).
 pub const BODY_LIMIT: usize = 4 * 1024;
-
-/// The manifest file the import writes is refused above this size.
-pub const MANIFEST_CAP: u64 = 16 * 1024 * 1024;
 
 /// Serve-mode configuration. [`ServeConfig::from_env`] fills it for the
 /// binary; tests build it directly.
@@ -410,28 +407,19 @@ async fn dial_check(config: &ServeConfig, token: &str) -> DialCheck {
   }
 }
 
-/// The import managed builds run inside the built image: `uv run
-/// --no-sync python3 -m sectr.inspect` when the app ships a
-/// `pyproject.toml` (its dependencies live in the app's own environment),
-/// otherwise `python3 -m sectr.inspect`. Returns the command and whether
-/// it uses uv.
-pub fn import_command(app_dir: &Path, python: &str) -> (Vec<String>, bool) {
-  let uses_uv = app_dir.join("pyproject.toml").is_file();
-  let mut command: Vec<String> = if uses_uv {
-    vec!["uv".into(), "run".into(), "--no-sync".into(), python.into()]
-  } else {
-    vec![python.into()]
-  };
-  command.extend(["-m".into(), "sectr.inspect".into()]);
-  (command, uses_uv)
-}
-
-/// Run the import and shape its result as a `/manifest` outcome.
+/// Import the app the way managed builds do and shape the result as a
+/// `/manifest` outcome.
 async fn import_manifest(config: &ServeConfig, entry: &str) -> Value {
-  let (command, uses_uv) = import_command(&config.app_dir, &config.python);
-  let out = std::env::temp_dir().join(format!("sectr-manifest-{}.json", uuid::Uuid::now_v7()));
-  let result = run_import(config, &command, entry, &out).await;
-  let _ = tokio::fs::remove_file(&out).await;
+  let uses_uv = inspect::uses_uv(&config.app_dir);
+  let command = inspect::import_command(uses_uv, &config.python);
+  let result = inspect::run_import(
+    &command,
+    &config.app_dir,
+    entry,
+    Some(config.import_timeout),
+    tokio::io::stderr(),
+  )
+  .await;
   match result {
     Ok(manifest) => json!({"outcome": "manifest", "manifest": manifest, "uses_uv": uses_uv}),
     Err(failure) => {
@@ -451,116 +439,6 @@ async fn import_manifest(config: &ServeConfig, entry: &str) -> Value {
       body
     }
   }
-}
-
-struct ImportFailure {
-  /// The import's exit code; `None` when it never exited on its own
-  /// (couldn't start, timed out, killed by a signal).
-  exit_code: Option<i32>,
-  stderr_tail: String,
-  /// Why, when the exit code alone doesn't say.
-  message: Option<String>,
-}
-
-async fn run_import(
-  config: &ServeConfig,
-  command: &[String],
-  entry: &str,
-  out: &Path,
-) -> Result<Value, ImportFailure> {
-  let failure = |exit_code, stderr_tail, message: String| ImportFailure {
-    exit_code,
-    stderr_tail,
-    message: Some(message),
-  };
-  let mut cmd = tokio::process::Command::new(&command[0]);
-  cmd.args(&command[1..]).current_dir(&config.app_dir);
-  // Like the agent's process, the import inherits none of the sidecar's
-  // own SECTR_* settings; the three it needs are set explicitly.
-  for key in std::env::vars_os().map(|(key, _)| key) {
-    if key.as_encoded_bytes().starts_with(b"SECTR_") {
-      cmd.env_remove(key);
-    }
-  }
-  cmd
-    .env("SECTR_MANIFEST", "1")
-    .env("SECTR_ENTRY", entry)
-    .env("SECTR_MANIFEST_OUT", out)
-    // The import may print (route banners, framework logs): the manifest
-    // comes back in the file, never on stdout.
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::piped())
-    .kill_on_drop(true);
-  let mut child = cmd
-    .spawn()
-    .map_err(|e| failure(None, String::new(), format!("start {:?}: {e}", command)))?;
-  let stderr = StderrTail::tee(
-    child.stderr.take().expect("stderr is piped"),
-    tokio::io::stderr(),
-  );
-
-  let status = match tokio::time::timeout(config.import_timeout, child.wait()).await {
-    Ok(Ok(status)) => status,
-    Ok(Err(e)) => {
-      let _ = child.kill().await;
-      return Err(failure(
-        None,
-        stderr.text().await,
-        format!("wait for the import: {e}"),
-      ));
-    }
-    Err(_) => {
-      let _ = child.kill().await;
-      return Err(failure(
-        None,
-        stderr.text().await,
-        format!(
-          "the import didn't finish within {:?}",
-          config.import_timeout
-        ),
-      ));
-    }
-  };
-  let stderr_tail = stderr.text().await;
-  if !status.success() {
-    return Err(ImportFailure {
-      exit_code: status.code(),
-      message: status
-        .code()
-        .is_none()
-        .then(|| format!("the import ended without an exit code ({status})")),
-      stderr_tail,
-    });
-  }
-
-  let size = match tokio::fs::metadata(out).await {
-    Ok(meta) => meta.len(),
-    Err(_) => {
-      return Err(failure(
-        Some(0),
-        stderr_tail,
-        "the import exited 0 but wrote no manifest".into(),
-      ));
-    }
-  };
-  if size > MANIFEST_CAP {
-    return Err(failure(
-      Some(0),
-      stderr_tail,
-      format!("the manifest is {size} bytes, over the {MANIFEST_CAP}-byte limit"),
-    ));
-  }
-  let bytes = tokio::fs::read(out)
-    .await
-    .map_err(|e| failure(Some(0), String::new(), format!("read the manifest: {e}")))?;
-  serde_json::from_slice::<Value>(&bytes).map_err(|e| {
-    failure(
-      Some(0),
-      stderr_tail,
-      format!("the manifest is not JSON: {e}"),
-    )
-  })
 }
 
 #[cfg(test)]
@@ -624,34 +502,5 @@ mod tests {
     .unwrap();
     assert_eq!(config.port, 9000);
     assert_eq!(config.runner_base, "http://127.0.0.1:7000");
-  }
-
-  #[test]
-  fn import_command_follows_the_managed_build() {
-    let dir = std::env::temp_dir().join(format!("sectr-serve-cmd-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&dir).unwrap();
-    assert_eq!(
-      import_command(&dir, "python3"),
-      (
-        vec!["python3".into(), "-m".into(), "sectr.inspect".into()],
-        false
-      )
-    );
-    std::fs::write(dir.join("pyproject.toml"), "[project]\nname = \"x\"\n").unwrap();
-    assert_eq!(
-      import_command(&dir, "python3"),
-      (
-        vec![
-          "uv".into(),
-          "run".into(),
-          "--no-sync".into(),
-          "python3".into(),
-          "-m".into(),
-          "sectr.inspect".into()
-        ],
-        true
-      )
-    );
-    std::fs::remove_dir_all(&dir).unwrap();
   }
 }

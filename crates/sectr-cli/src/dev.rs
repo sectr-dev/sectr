@@ -30,6 +30,7 @@ use clap::Args;
 use sectr_common::api::agui::{agui_cors_layer, agui_router};
 use sectr_common::api::{DevStatus, sessions_router};
 use sectr_common::drivers::{EnvFileSecretSource, InMemorySecretSource, SubprocessDriver};
+use sectr_common::inspect;
 use sectr_common::journal::{Journal, SqliteJournal};
 use sectr_common::reconcile::Reconciler;
 use sectr_common::registry::{DeploymentStatus, Registry, SqliteRegistry};
@@ -688,24 +689,17 @@ fn check_approval_policy_env(in_environment: bool, env_path: &Path) -> anyhow::R
   Ok(())
 }
 
-/// Run the SDK inspector in the project: `uv run python -m sectr.inspect
-/// <entry>` → manifest JSON. Failure = the user's code doesn't import; stop
-/// with the inspector's stderr. Shared with `sectr init`'s post-scaffold
-/// smoke check (same machinery as deploy-time inspection).
+/// Run the SDK inspector in the project: `uv run python -m sectr.inspect`
+/// (syncing the project's dependencies first, as `uv run` does) → manifest
+/// JSON. Failure = the user's code doesn't import; stop with the end of
+/// the inspector's stderr. Shared with `sectr init`'s post-scaffold smoke
+/// check, and the same launcher the sidecar's serve mode uses.
 pub(crate) async fn run_inspect(project: &Path, entry: &str) -> anyhow::Result<serde_json::Value> {
-  let out = tokio::process::Command::new("uv")
-    .args(["run", "python", "-m", "sectr.inspect", entry])
-    .current_dir(project)
-    .output()
+  let command = ["uv", "run", "python", "-m", "sectr.inspect"].map(String::from);
+  // No timeout: the first `uv run` may sync dependencies for minutes.
+  inspect::run_import(&command, project, entry, None, tokio::io::sink())
     .await
-    .context("running `uv run python -m sectr.inspect` (is uv installed?)")?;
-  if !out.status.success() {
-    bail!(
-      "manifest inspection failed:\n{}",
-      String::from_utf8_lossy(&out.stderr)
-    );
-  }
-  Ok(serde_json::from_slice(&out.stdout)?)
+    .context("manifest inspection failed")
 }
 
 // ---- bootstrap ---------------------------------------------------------
