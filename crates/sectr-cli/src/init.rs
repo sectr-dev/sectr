@@ -385,6 +385,11 @@ impl RunsOn {
 
 /// Entry point.
 pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
+  run_init_in(&std::env::current_dir()?, args).await
+}
+
+/// `sectr init` run in `cwd`.
+async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
   // Validate a given --endpoint before anything else.
   let endpoint_arg = args
     .endpoint
@@ -395,9 +400,9 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
   // An existing project: add only the endpoint files.
   if let Some(platform) = endpoint_arg
     && args.name.is_none()
-    && is_agent_dir(Path::new("."), platform)?
+    && is_agent_dir(cwd, platform)?
   {
-    return add_endpoint_to_existing(&args, platform).await;
+    return add_endpoint_to_existing(cwd, &args, platform).await;
   }
 
   // Fail BEFORE any interaction or file write: `sectr` requires `uv` —
@@ -479,7 +484,7 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
   };
   let name = normalize_name(&name).context("project name")?;
 
-  let target = std::env::current_dir()?.join(&name);
+  let target = cwd.join(&name);
   ensure_target_dir(&target, args.force)?;
 
   let mut written = scaffold(&target, template, frontend, &name)?;
@@ -605,10 +610,13 @@ fn is_agent_dir(dir: &Path, platform: Platform) -> anyhow::Result<bool> {
 /// `sectr init --endpoint <platform>` in a directory with a `sectr.toml`:
 /// add the Dockerfile, `.dockerignore` and `[deploy] endpoint`, nothing
 /// else.
-async fn add_endpoint_to_existing(args: &InitArgs, platform: Platform) -> anyhow::Result<()> {
-  let dir = std::env::current_dir()?;
+async fn add_endpoint_to_existing(
+  dir: &Path,
+  args: &InitArgs,
+  platform: Platform,
+) -> anyhow::Result<()> {
   let pins = crate::endpoint::fetch_pins(args.api.as_deref(), args.key.as_deref()).await?;
-  let added = crate::endpoint::write_files(&dir, platform, &pins, args.force)?;
+  let added = crate::endpoint::write_files(dir, platform, &pins, args.force)?;
   println!(
     "✓ wrote Dockerfile        ({}, dials {})",
     pins.base_image, pins.ingest_url
@@ -620,7 +628,7 @@ async fn add_endpoint_to_existing(args: &InitArgs, platform: Platform) -> anyhow
     println!("✓ sectr.toml already has [deploy] endpoint (kept)");
   }
   println!();
-  let name = crate::endpoint::app_name(&dir)
+  let name = crate::endpoint::app_name(dir)
     .or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
     .unwrap_or_else(|| DEFAULT_NAME.to_owned());
   let name = normalize_name(&name).unwrap_or_else(|_| DEFAULT_NAME.to_owned());
@@ -1244,6 +1252,85 @@ mod tests {
         assert!(!target.join("Dockerfile").exists());
       }
     }
+  }
+
+  fn endpoint_args(name: Option<&str>, template: Option<&str>, api: &str) -> InitArgs {
+    InitArgs {
+      name: name.map(str::to_owned),
+      template: template.map(str::to_owned),
+      frontend: None,
+      endpoint: Some("lambda".into()),
+      api: Some(api.to_owned()),
+      key: Some("skp_x".into()),
+      force: false,
+    }
+  }
+
+  fn files_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+      .unwrap()
+      .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+      .collect();
+    names.sort();
+    names
+  }
+
+  #[tokio::test]
+  async fn an_existing_project_gains_only_the_endpoint_files() {
+    let server = crate::endpoint::tests::enabled_stub().await;
+    let dir = tempfile::tempdir().unwrap();
+    let toml = "[app]\nname = \"support\"\n";
+    std::fs::write(dir.path().join("sectr.toml"), toml).unwrap();
+    run_init_in(dir.path(), endpoint_args(None, None, &server.api))
+      .await
+      .unwrap();
+    assert_eq!(
+      files_in(dir.path()),
+      [".dockerignore", "Dockerfile", "sectr.toml"]
+    );
+    let dockerfile = std::fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
+    assert!(dockerfile.contains("aws-lambda-adapter"), "{dockerfile}");
+    let edited = std::fs::read_to_string(dir.path().join("sectr.toml")).unwrap();
+    assert!(edited.starts_with(toml), "{edited}");
+    assert_eq!(
+      crate::deploy::deploy_mode(&edited).unwrap(),
+      crate::deploy::Mode::EndpointUnset
+    );
+  }
+
+  #[tokio::test]
+  async fn without_a_server_init_writes_nothing() {
+    let server = crate::endpoint::tests::disabled_stub().await;
+    // An existing project keeps its files as they were.
+    let dir = tempfile::tempdir().unwrap();
+    let toml = "[app]\nname = \"support\"\n";
+    std::fs::write(dir.path().join("sectr.toml"), toml).unwrap();
+    let err = run_init_in(dir.path(), endpoint_args(None, None, &server.api))
+      .await
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains(sectr_common::endpoint::DISABLED), "{err}");
+    assert_eq!(files_in(dir.path()), ["sectr.toml"]);
+    assert_eq!(
+      std::fs::read_to_string(dir.path().join("sectr.toml")).unwrap(),
+      toml
+    );
+
+    // A new project isn't started. (Needs uv, which init checks first.)
+    let dir = tempfile::tempdir().unwrap();
+    let err = run_init_in(
+      dir.path(),
+      endpoint_args(Some("proj"), Some("langgraph"), &server.api),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains(sectr_common::endpoint::DISABLED), "{err}");
+    assert!(
+      files_in(dir.path()).is_empty(),
+      "{:?}",
+      files_in(dir.path())
+    );
   }
 
   #[test]

@@ -352,7 +352,7 @@ pub fn print_next_steps(platform: Platform, app_name: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
 
   const LAMBDA: &str = "https://abc.lambda-url.us-east-1.on.aws/";
@@ -473,9 +473,9 @@ mod tests {
     }
   }
 
-  #[tokio::test]
-  async fn pins_come_from_the_servers_config() {
-    let target = config_stub(
+  /// A server that takes endpoint deployments, pinning [`pins`].
+  pub(crate) async fn enabled_stub() -> crate::auth::Target {
+    config_stub(
       200,
       serde_json::json!({
         "enabled": true,
@@ -483,14 +483,24 @@ mod tests {
         "base_image": "ghcr.io/sectr-dev/sectr-runner-base:v1.2.3",
       }),
     )
-    .await;
-    assert_eq!(fetch_pins_from(&target).await.unwrap(), pins());
+    .await
+  }
 
-    let off = config_stub(
+  /// A server with endpoint deployments off.
+  pub(crate) async fn disabled_stub() -> crate::auth::Target {
+    config_stub(
       200,
       serde_json::json!({"enabled": false, "ingest_url": null, "base_image": "x"}),
     )
-    .await;
+    .await
+  }
+
+  #[tokio::test]
+  async fn pins_come_from_the_servers_config() {
+    let target = enabled_stub().await;
+    assert_eq!(fetch_pins_from(&target).await.unwrap(), pins());
+
+    let off = disabled_stub().await;
     let err = fetch_pins_from(&off).await.unwrap_err().to_string();
     assert!(err.contains(DISABLED), "{err}");
 
