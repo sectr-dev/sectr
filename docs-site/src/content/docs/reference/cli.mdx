@@ -32,7 +32,7 @@ sectr auth login --api http://localhost:8080
 ```
 
 - **`sectr auth login`** picks its server from `--api`, then `SECTR_API_URL`, then the server you last logged in to, then Sectr's hosted server.
-- **`sectr deploy`, `sectr secrets`, `sectr send --cloud` and `sectr tail --cloud`** pick theirs from `--api`, then `SECTR_API_URL`, then your login, and print `server: <url>` when they start.
+- **`sectr deploy`, `sectr init --endpoint`, `sectr secrets`, `sectr send --cloud` and `sectr tail --cloud`** pick theirs from `--api`, then `SECTR_API_URL`, then your login, and print `server: <url>` when they start.
 - **Your saved key only goes to the server you logged in to.** If a command resolves to a different server, it stops and tells you to log in there. A key you pass with `--key` or `SECTR_PLATFORM_KEY` is always used as given.
 
 ### `sectr auth login`
@@ -86,5 +86,7 @@ sectr auth login --api http://localhost:8080
 ## Deploy to Sectr Cloud
 
 ### `sectr deploy`
+
+With `[deploy] endpoint` in `sectr.toml`, `sectr deploy` uploads nothing: your agent runs on your own Lambda, Cloud Run or container platform, and this registers its URL. `sectr init --endpoint <platform>` sets a project up for it. See [Run it on your own compute](/guides/your-own-compute/).
 
 <Code code={deploy} lang="text" />

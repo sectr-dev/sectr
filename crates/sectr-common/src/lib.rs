@@ -4,6 +4,8 @@
 //!
 //! Modules:
 //! - [`agui`] — the pure journal → AG-UI projection.
+//! - [`dockerfile`] — the app's Dockerfile lines, shared by managed builds
+//!   and endpoint images.
 //! - [`endpoint`] — endpoint deployments' shared error phrases and the
 //!   platform-by-host rule (server, CLI and dashboard).
 //! - [`events`] — event envelope, payloads, runner stream frames, invoke
@@ -16,6 +18,7 @@
 
 pub mod agui;
 pub mod api;
+pub mod dockerfile;
 pub mod drivers;
 pub mod endpoint;
 pub mod events;

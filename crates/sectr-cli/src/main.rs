@@ -8,6 +8,7 @@ mod browser;
 mod client;
 mod deploy;
 mod dev;
+mod endpoint;
 mod init;
 mod secrets;
 mod send;
@@ -26,9 +27,10 @@ struct Cli {
 enum Commands {
   /// Store the platform key for cloud commands (login/whoami/logout).
   Auth(auth_cmd::AuthArgs),
-  /// Scaffold a new agent project: framework and frontend pickers (or
-  /// --template / --frontend), file emission, `uv sync`, and a smoke
-  /// inspect. See `init --help`.
+  /// Scaffold a new agent project: framework, frontend and where-it-runs
+  /// pickers (or --template / --frontend / --endpoint), file emission, `uv
+  /// sync`, and a smoke inspect. `--endpoint` in an existing project adds
+  /// the files to run it on your own platform. See `init --help`.
   Init(init::InitArgs),
   /// Run the app locally end-to-end: SQLite journal, subprocess runner,
   /// gateway for clients. See `dev --help`.
@@ -39,7 +41,8 @@ enum Commands {
   /// Follow a session's journal (never stops until ctrl-c).
   Tail(tail::TailArgs),
   /// Ship the project to a server: package → upload → the server builds
-  /// and activates. See `deploy --help`.
+  /// and activates. With `[deploy] endpoint` in sectr.toml, register your
+  /// own endpoint instead. See `deploy --help`.
   Deploy(deploy::DeployArgs),
   /// Manage the app's server-side secrets (write-only: set/list/rm).
   Secrets(secrets::SecretsArgs),

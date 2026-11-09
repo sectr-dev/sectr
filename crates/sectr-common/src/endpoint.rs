@@ -23,6 +23,10 @@ pub const ANSWERED_HTTP: &str = "answered HTTP";
 pub const WRONG_INGEST: &str = "dialed a server that doesn't know this";
 /// The sidecar couldn't reach ingest at all.
 pub const DIAL_FAILED: &str = "couldn't reach";
+/// The app's manifest import failed in the endpoint's image. The message
+/// goes on with the app's own stderr, which may hold any of the phrases
+/// above, so readers give no hint for it.
+pub const IMPORT_FAILED: &str = "the manifest import failed in your image";
 /// A wake whose sidecar never took the turn in time.
 pub const WAKE_TIMEOUT: &str = "did not start the turn within";
 
