@@ -6,6 +6,7 @@ import {
   PHRASES,
   deriveConnections,
   endpointUrlIn,
+  healthFor,
   healthLine,
   platformOf,
   runsOnFor,
@@ -159,4 +160,10 @@ test("the health line reads the summary", () => {
   assert.equal(line.tone, "warn");
   assert.equal(line.text, "3 of the last 20 wakes failed");
   assert.deepEqual(line.failure, failure);
+});
+
+test("a failed wakes fetch says so instead of loading forever", () => {
+  assert.equal(healthFor(null), null);
+  assert.deepEqual(healthFor("error"), { tone: "muted", text: "Couldn't load recent wakes", failure: null });
+  assert.equal(healthFor({ turns: 2, failed: 0, latest_failure: null })?.text, "Last 2 turns woke");
 });

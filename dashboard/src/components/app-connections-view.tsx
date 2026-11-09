@@ -4,7 +4,7 @@ import { AppTabs } from "@/components/app-tabs";
 import { ConnectionsDiagram } from "@/components/connections-diagram";
 import { Card, CardContent } from "@/components/ui/card";
 import * as api from "@/lib/api";
-import { healthLine, runsOnFor, type ConsoleMode } from "@/lib/connections";
+import { healthFor, runsOnFor, type ConsoleMode } from "@/lib/connections";
 import { useDeploymentWakes, useSessionList } from "@/lib/hooks";
 import type { App } from "@/lib/types";
 
@@ -38,7 +38,7 @@ export function AppConnectionsView({ app }: { app: App }) {
               app={app}
               mode={MODE}
               sessionsByRoute={sessionsByRoute}
-              health={wakes ? healthLine(wakes) : null}
+              health={healthFor(wakes)}
             />
           </CardContent>
         </Card>

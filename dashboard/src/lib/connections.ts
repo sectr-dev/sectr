@@ -240,6 +240,17 @@ export interface HealthLine {
   failure: WakeSummary["latest_failure"];
 }
 
+/** A deployment's wakes as the dashboard has them: the summary, null while
+ *  loading (or with nothing to ask), or "error" when the fetch failed. */
+export type Wakes = WakeSummary | null | "error";
+
+/** The Runs on node's health line, or null while it loads. A failed fetch
+ *  says so instead of loading forever. */
+export function healthFor(wakes: Wakes): HealthLine | null {
+  if (wakes === "error") return { tone: "muted", text: "Couldn't load recent wakes", failure: null };
+  return wakes ? healthLine(wakes) : null;
+}
+
 /** The Runs on node's health line from a wakes summary. */
 export function healthLine(summary: WakeSummary): HealthLine {
   if (summary.turns === 0) return { tone: "muted", text: "No turns yet", failure: null };
