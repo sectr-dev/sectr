@@ -44,7 +44,8 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 PostHog powers the console's in-app analytics + frontend exception capture
 (no Sentry). Gated on build-time env: set `NEXT_PUBLIC_POSTHOG_KEY` (and
 optionally `NEXT_PUBLIC_POSTHOG_HOST`, default `https://us.i.posthog.com`)
-in the Cloudflare Workers Builds environment — unset means nothing loads
+in the environment of the build that deploys it (`just build` for a release,
+or `just redeploy dashboard`; see RELEASING.md) — unset means nothing loads
 and nothing reports. The browser identifies by the org id from `/me`, the
 same distinct_id the server's `track()` calls use, so server and client
 events correlate in PostHog.

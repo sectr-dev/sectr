@@ -4,10 +4,12 @@
 #   server/  sectr-server (aarch64 glibc 2.34, --features e2b)
 #   sdk/     sectr wheel + sdist
 #   npm/     one tarball per js/ package (sectr-copilotkit-<ver>.tgz, sectr-0.0.0.tgz)
+#   sites/   the Cloudflare Workers deploy-site uploads, each with its wrangler.jsonc:
+#            dashboard/ (app.sectr.dev, OpenNext) and docs/ (docs.sectr.dev, static)
 #   image.txt  the local image tags, one per line: sectr-runner-base, sectr-server
 #              and sectr-dashboard, each as :vX.Y.Z-amd64 and :vX.Y.Z-arm64
 # Usage: scripts/release-build.sh [--no-image]
-# Built once; publish-* / deploy-server reuse these. BUILT_FROM_SHA records
+# Built once; publish-* / deploy-server / deploy-site reuse these. BUILT_FROM_SHA records
 # the commit so the release gate can check they match the tag.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -53,6 +55,11 @@ log "SDK wheel + sdist"
 log "npm packages"
 for d in js/*/; do
   (cd "$d" && npm ci --no-audit --no-fund && npm run build && npm pack --pack-destination "$out/npm") >&2
+done
+
+for site in "${RELEASE_SITES[@]}"; do
+  log "$site site (Cloudflare Worker)"
+  build_site "$site" "$out/sites/$site"
 done
 
 if [ "$build_image" = 1 ]; then

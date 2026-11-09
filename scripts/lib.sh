@@ -77,6 +77,40 @@ secret() {
 # SECTR_ARTIFACTS_DIR lets a build from a tag worktree land in the main checkout.
 artifacts_dir() { echo "${SECTR_ARTIFACTS_DIR:-$root/target/release-artifacts}/v$1"; }
 
+# The sites a release deploys to Cloudflare, each a Worker: the dashboard
+# (app.sectr.dev) and the docs (docs.sectr.dev). site_dir SITE is its
+# source folder, site_url SITE its address.
+RELEASE_SITES=(dashboard docs)
+site_dir() {
+  case "$1" in
+    dashboard) echo dashboard ;;
+    docs) echo docs-site ;;
+    *) die "unknown site '$1' (dashboard or docs)" ;;
+  esac
+}
+site_url() {
+  case "$1" in
+    dashboard) echo https://app.sectr.dev/ ;;
+    docs) echo https://docs.sectr.dev/ ;;
+    *) die "unknown site '$1' (dashboard or docs)" ;;
+  esac
+}
+
+# build_site SITE DEST — build SITE from this checkout and copy what wrangler
+# uploads into DEST: its wrangler.jsonc and the build output that config
+# points at (the dashboard's OpenNext Worker, the docs' static pages).
+build_site() {
+  local site=$1 dest=$2 dir output
+  dir=$(site_dir "$site")
+  case "$site" in
+    dashboard) (cd "$dir" && npm ci --no-audit --no-fund && npm run build:worker) >&2; output=.open-next ;;
+    docs) (cd "$dir" && npm ci --no-audit --no-fund && npm run build) >&2; output=dist ;;
+  esac
+  rm -rf "$dest"; mkdir -p "$dest"
+  cp "$dir/wrangler.jsonc" "$dest/"
+  cp -R "$dir/$output" "$dest/$output"
+}
+
 # need_artifacts VERSION — fail unless a build for VERSION exists.
 need_artifacts() {
   [ -f "$(artifacts_dir "$1")/BUILT_FROM_SHA" ] \

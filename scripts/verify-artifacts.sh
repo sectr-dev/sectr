@@ -13,6 +13,7 @@
 #     architecture. Base: SDK imports at the right version, sidecar links
 #     cleanly. Server: `--help`. Dashboard: starts and serves its runtime
 #     config, and holds no sharp
+#   - the dashboard's and docs' Cloudflare Workers bundle (wrangler deploy --dry-run)
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -161,5 +162,13 @@ if [ -f "$out/image.txt" ]; then
     docker rm -f "$id" >/dev/null
   done
 fi
+
+# What deploy-site uploads: wrangler bundles each as it would for the deploy,
+# with no credentials and no upload.
+for site in "${RELEASE_SITES[@]}"; do
+  echo "$site site ($(site_url "$site"))"
+  DRY_RUN=1 scripts/deploy-site.sh "$site" "$ver" >"$tmp/$site.log" 2>&1 \
+    && ok "bundles for Cloudflare" || bad "the $site Worker doesn't bundle: $(tail -5 "$tmp/$site.log")"
+done
 
 [ $fail = 0 ] && echo "artifacts verified" || { echo "artifact verification FAILED" >&2; exit 1; }
