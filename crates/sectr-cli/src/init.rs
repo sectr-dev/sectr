@@ -393,7 +393,7 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
   // An existing project: add only the endpoint files.
   if let Some(platform) = endpoint_arg
     && args.name.is_none()
-    && Path::new("sectr.toml").is_file()
+    && is_agent_dir(Path::new("."), platform)?
   {
     return add_endpoint_to_existing(&args, platform).await;
   }
@@ -566,6 +566,24 @@ pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
     crate::endpoint::print_next_steps(platform, &name);
   }
   Ok(())
+}
+
+/// Whether `dir` is an existing project's agent directory (it has a
+/// `sectr.toml`). At the root of a project with a frontend, where the
+/// agent is in `agent/`, it refuses: going on would scaffold a new project
+/// inside that one.
+fn is_agent_dir(dir: &Path, platform: Platform) -> anyhow::Result<bool> {
+  if dir.join("sectr.toml").is_file() {
+    return Ok(true);
+  }
+  if dir.join(AGENT_DIR).join("sectr.toml").is_file() {
+    bail!(
+      "this project's agent is in {AGENT_DIR}/, where its sectr.toml is: run \
+       `cd {AGENT_DIR} && sectr init --endpoint {}` instead",
+      platform.arg()
+    );
+  }
+  Ok(false)
 }
 
 /// `sectr init --endpoint <platform>` in a directory with a `sectr.toml`:
@@ -1210,6 +1228,22 @@ mod tests {
         assert!(!target.join("Dockerfile").exists());
       }
     }
+  }
+
+  #[test]
+  fn a_frontend_projects_root_points_to_its_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!is_agent_dir(dir.path(), Platform::Lambda).unwrap());
+    std::fs::create_dir(dir.path().join(AGENT_DIR)).unwrap();
+    std::fs::write(dir.path().join(AGENT_DIR).join("sectr.toml"), "").unwrap();
+    let err = is_agent_dir(dir.path(), Platform::Lambda)
+      .unwrap_err()
+      .to_string();
+    assert!(
+      err.contains("cd agent && sectr init --endpoint lambda"),
+      "{err}"
+    );
+    assert!(is_agent_dir(&dir.path().join(AGENT_DIR), Platform::Lambda).unwrap());
   }
 
   #[test]
