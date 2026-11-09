@@ -85,6 +85,12 @@ impl UserProcess {
   /// cleanup finishes in the background, reaping the process whenever it
   /// does die.
   pub async fn kill(&mut self) -> io::Result<()> {
+    // Already killed and reaped (the runner kills at its readiness
+    // deadline, then again at stop): signalling the id again could only
+    // reach a process that reused it.
+    if self.reaped {
+      return Ok(());
+    }
     kill_group(self.pgid);
     let killed = match tokio::time::timeout(CLEANUP_DEADLINE, self.child().kill()).await {
       Err(_) => {
@@ -231,6 +237,15 @@ mod tests {
     assert!(running("sleep 59.1231"), "the grandchild started");
     process.kill().await.unwrap();
     assert!(gone("sleep 59.1231").await, "the grandchild survived kill");
+  }
+
+  #[tokio::test]
+  async fn a_second_kill_is_a_no_op() {
+    let mut process = UserProcess::spawn(&mut wrapper("59.1234")).unwrap();
+    process.kill().await.unwrap();
+    assert!(gone("sleep 59.1234").await);
+    process.kill().await.unwrap();
+    assert!(process.reaped, "still marked reaped");
   }
 
   #[tokio::test]
