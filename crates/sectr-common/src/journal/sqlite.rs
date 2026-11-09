@@ -136,31 +136,37 @@ impl JournalReader for SqliteJournal {
     deployment: DeploymentId,
     limit: i64,
   ) -> Result<Vec<super::TurnRow>> {
-    // Both queries use idx_events_turn_starts.
-    let since: Option<DateTime<Utc>> = sqlx::query_scalar(
-      "SELECT MIN(created_at) FROM (SELECT created_at FROM events \
-       WHERE deployment_id = ? AND type = 'INVOCATION_STARTED' \
-       ORDER BY created_at DESC LIMIT ?) AS recent",
-    )
-    .bind(deployment)
-    .bind(limit)
-    .fetch_one(&self.pool)
-    .await?;
+    let since: Option<DateTime<Utc>> = sqlx::query_scalar(TURNS_SINCE_SQL)
+      .bind(deployment)
+      .bind(limit)
+      .fetch_one(&self.pool)
+      .await?;
     let Some(since) = since else {
       return Ok(Vec::new());
     };
-    let rows = sqlx::query_as::<_, super::TurnRowParts>(
-      "SELECT session_id, seq, type, payload, created_at FROM events \
-       WHERE deployment_id = ? AND type IN ('INVOCATION_STARTED', 'SESSION_ERROR') \
-       AND created_at >= ? ORDER BY created_at DESC, seq DESC",
-    )
-    .bind(deployment)
-    .bind(since)
-    .fetch_all(&self.pool)
-    .await?;
+    let rows = sqlx::query_as::<_, super::TurnRowParts>(TURN_ROWS_SQL)
+      .bind(deployment)
+      .bind(since)
+      .fetch_all(&self.pool)
+      .await?;
     Ok(rows.into_iter().map(super::turn_row).collect())
   }
 }
+
+// Both queries use idx_events_turn_starts (a test checks their plans).
+// SQLite uses a partial index only when the query repeats the index's
+// WHERE term, so the first one carries the `type IN (…)` as well.
+
+/// When the deployment's `limit` most recent turns began: the oldest of
+/// their starts.
+const TURNS_SINCE_SQL: &str = "SELECT MIN(created_at) FROM (SELECT created_at FROM events \
+   WHERE deployment_id = ? AND type IN ('INVOCATION_STARTED', 'SESSION_ERROR') \
+   AND type = 'INVOCATION_STARTED' ORDER BY created_at DESC LIMIT ?) AS recent";
+
+/// The turn starts and session errors since then, newest first.
+const TURN_ROWS_SQL: &str = "SELECT session_id, seq, type, payload, created_at FROM events \
+   WHERE deployment_id = ? AND type IN ('INVOCATION_STARTED', 'SESSION_ERROR') \
+   AND created_at >= ? ORDER BY created_at DESC, seq DESC";
 
 type EventRow = (
   Uuid,              // id
@@ -317,6 +323,40 @@ mod tests {
     let path = temp_db();
     let store = crate::store::SqliteStore::open(&path).await.unwrap();
     (store.journal(), path)
+  }
+
+  #[tokio::test]
+  async fn the_wakes_queries_use_the_turn_starts_index() {
+    let (journal, _path) = journal().await;
+    let mut conn = journal.pool.acquire().await.unwrap();
+    // EXPLAIN doesn't check the schema is current, and this connection may
+    // predate the migrations: a real query first makes it load the index.
+    let _: (i64,) = sqlx::query_as("SELECT count(*) FROM events")
+      .fetch_one(&mut *conn)
+      .await
+      .unwrap();
+    for sql in [TURNS_SINCE_SQL, TURN_ROWS_SQL] {
+      let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .bind(Uuid::now_v7())
+        .bind(20)
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap();
+      let steps: Vec<&str> = plan
+        .iter()
+        .map(|(_, _, _, detail)| detail.as_str())
+        .collect();
+      assert!(
+        steps
+          .iter()
+          .any(|s| s.contains("USING INDEX idx_events_turn_starts")),
+        "{sql}: {steps:?}"
+      );
+      assert!(
+        !steps.iter().any(|s| s.starts_with("SCAN events")),
+        "{sql}: {steps:?}"
+      );
+    }
   }
 
   /// Minimal registry rows so `events.session_id` FK resolves. The Registry
