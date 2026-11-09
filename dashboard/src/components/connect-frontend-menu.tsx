@@ -45,8 +45,9 @@ const FRONTENDS: MenuOption[] = [
 
 /** The public server base the AG-UI URL hangs off, as the CLI would print
  *  it: the public API in prod and mock, the gateway under `sectr dev`.
- *  (Never API_URL in prod: that's the same-origin /api rewrite.) */
-function aguiBase(): string {
+ *  (Never API_URL in prod: that's the same-origin /api rewrite.) Also the
+ *  base of the invoke API (`POST /sessions`). */
+export function aguiBase(): string {
     if (api.MOCK_MODE) return "https://api.sectr.dev";
     return api.PROD_MODE ? publicServerUrl() : api.API_URL;
 }

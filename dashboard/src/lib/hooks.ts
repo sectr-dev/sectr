@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import * as api from "@/lib/api";
 import { peekRememberedGateway } from "@/lib/gateway-swap";
 import { createSessionsApi } from "@/lib/transport/sessions-api";
-import type { App, Deployment, Session } from "@/lib/types";
+import type { App, Deployment, Session, WakeSummary } from "@/lib/types";
 import type { DevStatus, JournalEvent } from "@/lib/transport/types";
 
 import { toUiApproval, toUiSession } from "@/lib/view";
@@ -88,6 +88,20 @@ export function useDeployments(appId: string): Deployment[] {
 }
 
 /** Sessions (UI-shaped, app_name joined). All sessions, or one app's. */
+/** How a deployment's recent turns woke: null while loading, when there's
+ *  no deployment to ask about, or where the backend has no wakes API (the
+ *  dev gateway). Fetched once per deployment, no live updates. */
+export function useDeploymentWakes(deploymentId: string | null): WakeSummary | null {
+  const { data } = useAsync(
+    () =>
+      deploymentId && api.getDeploymentWakes
+        ? api.getDeploymentWakes(deploymentId, 20)
+        : Promise.resolve(null),
+    [deploymentId],
+  );
+  return data ?? null;
+}
+
 export function useSessions(appId?: string): Session[] {
   return useSessionList(appId).sessions;
 }

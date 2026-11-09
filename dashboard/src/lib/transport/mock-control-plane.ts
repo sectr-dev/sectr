@@ -7,7 +7,7 @@
 
 import type { App, Deployment } from "../types";
 import { ApiError, type ApiKeyMeta, type ControlPlaneApi, type SecretMeta } from "./types";
-import { mockApps as fixtureApps } from "../mock-data";
+import { mockApps as fixtureApps, mockWakes } from "../mock-data";
 import { MOCK_EMPTY } from "../mock-scenario";
 
 // The empty demo account (badge toggle) starts with nothing; creating a key
@@ -48,6 +48,11 @@ export const mockControlPlane: ControlPlaneApi = {
 
   async listDeployments(appId: string): Promise<Deployment[]> {
     return mockApps.find((a) => a.id === appId)?.deployments ?? [];
+  },
+
+  async getDeploymentWakes(deploymentId: string) {
+    // Managed demo deployments: every turn woke.
+    return mockWakes[deploymentId] ?? { turns: 20, failed: 0, latest_failure: null };
   },
 
   async activateDeployment(_deploymentId: string): Promise<void> {

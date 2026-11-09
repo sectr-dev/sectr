@@ -149,6 +149,7 @@ export const {
     getApp,
     listDeployments,
     activateDeployment,
+    getDeploymentWakes,
     login,
     logout,
     listApiKeys,

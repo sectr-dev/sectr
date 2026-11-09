@@ -29,6 +29,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
+import { ENDPOINT_GUIDE } from "@/lib/connections";
 import { cn } from "@/lib/utils";
 
 const DOCS = "https://docs.sectr.dev";
@@ -508,18 +509,33 @@ export function Segmented<T extends string>({
     );
 }
 
+/** Where the agent runs: Sectr's runners, or the developer's own platform
+ *  (`sectr init --endpoint <platform>`). */
+const RUNS_ON = [
+    { id: "sectr", label: "Sectr runs it" },
+    { id: "lambda", label: "Your AWS Lambda" },
+    { id: "cloud-run", label: "Your Cloud Run" },
+    { id: "container", label: "Your container platform" },
+] as const;
+type RunsOnId = (typeof RUNS_ON)[number]["id"];
+
 /** The framework + chat-frontend choice behind `sectr init`. */
 function AgentChoice({
     framework,
     frontend,
+    runsOn,
     onFramework,
     onFrontend,
+    onRunsOn,
 }: {
     framework: FrameworkId;
     /** Omit both to show only the framework row. */
     frontend?: boolean;
+    /** Omit both to leave out the where-it-runs row. */
+    runsOn?: RunsOnId;
     onFramework: (f: FrameworkId) => void;
     onFrontend?: (b: boolean) => void;
+    onRunsOn?: (r: RunsOnId) => void;
 }) {
     return (
         <div className="flex flex-col gap-3">
@@ -540,6 +556,14 @@ function AgentChoice({
                     onChange={(v) => onFrontend(v === "yes")}
                 />
             )}
+            {onRunsOn && runsOn && (
+                <Segmented
+                    label="Where will it run?"
+                    value={runsOn}
+                    options={RUNS_ON}
+                    onChange={onRunsOn}
+                />
+            )}
         </div>
     );
 }
@@ -552,15 +576,20 @@ function AgentChoice({
 function StartBody() {
     const [framework, setFramework] = useState<FrameworkId>("openai-agents");
     const [frontend, setFrontend] = useState(false);
+    const [runsOn, setRunsOn] = useState<RunsOnId>("sectr");
     const label = FRAMEWORKS.find((f) => f.id === framework)!.label;
     const choice = (
         <AgentChoice
             framework={framework}
             frontend={frontend}
+            runsOn={runsOn}
             onFramework={setFramework}
             onFrontend={setFrontend}
+            onRunsOn={setRunsOn}
         />
     );
+    const endpoint = runsOn !== "sectr";
+    const platform = RUNS_ON.find((r) => r.id === runsOn)!.label.replace(/^Your /, "");
 
     // With the chat frontend the agent lives in my-agent/agent/, and that's
     // where `sectr dev` and `sectr deploy` run.
@@ -568,6 +597,7 @@ function StartBody() {
     const init =
         `sectr init my-agent --template ${framework}` +
         (frontend ? " --frontend copilotkit" : "") +
+        (endpoint ? ` --endpoint ${runsOn}` : "") +
         ` && cd ${dir}`;
     const steps: Step[] = [
         {
@@ -583,11 +613,33 @@ function StartBody() {
             command: "sectr dev",
             note: "Chat with it in your browser while you iterate.",
         },
-        {
-            title: "Deploy it",
-            command: "sectr deploy",
-            note: "Ships it as a live endpoint. It shows up here once it's live.",
-        },
+        endpoint
+            ? {
+                  title: "Deploy it on your platform",
+                  extra: (
+                      <p className="mb-2 text-xs text-muted-foreground">
+                          Build the image from the generated Dockerfile and deploy it on your{" "}
+                          {platform} (init prints the steps;{" "}
+                          <a
+                              href={ENDPOINT_GUIDE}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline underline-offset-2 hover:text-foreground"
+                          >
+                              full guide
+                          </a>
+                          ). Put its URL in sectr.toml as{" "}
+                          <span className="font-mono">[deploy] endpoint</span>, then:
+                      </p>
+                  ),
+                  command: "sectr deploy",
+                  note: "Registers your endpoint. Sectr wakes it for each turn; it shows up here once it's live.",
+              }
+            : {
+                  title: "Deploy it",
+                  command: "sectr deploy",
+                  note: "Ships it as a live endpoint. It shows up here once it's live.",
+              },
     ];
 
     return (
@@ -602,7 +654,7 @@ function StartBody() {
                                 frontend
                                     ? " and a CopilotKit chat frontend"
                                     : ""
-                            }`,
+                            }${endpoint ? `, running on my own ${platform}` : ""}`,
                         )}
                     />
                 </>

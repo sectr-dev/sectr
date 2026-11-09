@@ -111,6 +111,9 @@ export interface ControlPlaneApi {
   getApp(appId: string): Promise<App | undefined>;
   listDeployments(appId: string): Promise<Deployment[]>;
   activateDeployment(deploymentId: string): Promise<void>;
+  /** GET /deployments/{id}/wakes — absent on the dev gateway, which has no
+   *  endpoint deployments. */
+  getDeploymentWakes?(deploymentId: string, limit?: number): Promise<WakeSummary>;
   /**
    * Platform-key login (no cookies): the key exchanged
    * from a Clerk session. The impl validates
@@ -182,5 +185,5 @@ export interface SecretMeta {
 
 // UI-view types (control-plane domain is hand-mirrored until its contract
 // exists; see src/lib/types.ts)
-import type { App, Deployment } from "../types";
+import type { App, Deployment, WakeSummary } from "../types";
 export type { App, Deployment };
