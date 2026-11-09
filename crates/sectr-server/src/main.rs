@@ -144,8 +144,29 @@ async fn serve() -> anyhow::Result<()> {
              (rebuild with: cargo build --features e2b)"
     ),
   };
+  // Endpoint deployments run on the customer's own endpoint: the routing
+  // platform sends their spawns (wakes) and teardowns there, and
+  // everything else to the managed platform above. It's the ONE platform
+  // object every consumer below shares.
+  let endpoints = Arc::new(sectr_server::platform::EndpointPlatform::new(
+    config.endpoints.clone(),
+  ));
+  let platform: Arc<dyn RunnerPlatform> = Arc::new(sectr_server::platform::RoutingPlatform::new(
+    platform,
+    endpoints.clone(),
+    registry.clone(),
+  ));
+  if let Some(ingest_url) = config.endpoints.ingest_url.as_deref() {
+    tracing::info!(
+      ingest_url,
+      allow_private = config.endpoints.allow_private,
+      "endpoint deployments on"
+    );
+  }
   let hub = Arc::new(IngestHub::new(registry.clone(), journal.clone(), ttl));
   hub.set_teardown(platform.clone());
+  // A weak reference: the hub already holds the platform.
+  endpoints.attach_hub(Arc::downgrade(&hub));
   let dispatcher: Arc<dyn TurnDispatcher> = Arc::new(SidecarDispatcher::new(
     hub.clone(),
     registry.clone(),
@@ -176,6 +197,7 @@ async fn serve() -> anyhow::Result<()> {
     secrets_enabled,
   )
   .with_pg_registry(pg_registry)
+  .with_endpoints(endpoints)
   .with_analytics(analytics)
   .with_signup_notifier(Arc::new(sectr_server::signup::SignupNotifier::from_config(
     &config,

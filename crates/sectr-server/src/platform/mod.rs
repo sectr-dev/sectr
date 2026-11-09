@@ -25,10 +25,12 @@
 pub mod docker;
 #[cfg(feature = "e2b")] // the E2B sandbox execution backend
 pub mod e2b;
+pub mod endpoint; // endpoint deployments: the customer's own serve-mode sidecar
 #[cfg(feature = "gcp")] // the model-(b) build half
 pub mod gcp_build;
 #[cfg(feature = "gcp")] // the model-(b) execution half
 pub mod gcp_run;
+pub mod routing; // one platform object: managed + endpoint deployments
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -37,6 +39,8 @@ use uuid::Uuid;
 use crate::dispatch::DispatchError;
 
 pub use docker::DockerPlatform;
+pub use endpoint::EndpointPlatform;
+pub use routing::RoutingPlatform;
 
 #[cfg(feature = "e2b")]
 pub use e2b::E2bPlatform;

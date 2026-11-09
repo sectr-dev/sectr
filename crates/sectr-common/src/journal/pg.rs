@@ -500,6 +500,7 @@ mod tests {
       .unwrap();
     let deployment = registry
       .create_deployment(crate::registry::NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: json!({"routes": [{"path": "/test"}]}),
@@ -995,6 +996,7 @@ mod tests {
       .unwrap();
     let deployment = registry
       .create_deployment(crate::registry::NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: json!({"routes": [{"path": "/test"}]}),

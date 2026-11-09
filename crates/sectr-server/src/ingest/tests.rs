@@ -50,6 +50,7 @@ struct World {
 
 fn test_config(lease_ttl_secs: u64) -> crate::config::ServerConfig {
   crate::config::ServerConfig {
+    endpoints: Default::default(),
     pg_url: "postgres://unused".into(),
     bind_addr: "127.0.0.1:0".parse().unwrap(),
     secrets_master_key: None,
@@ -108,9 +109,52 @@ async fn world(lease_ttl_secs: u64) -> Option<World> {
 /// [`world`] with the deployment's manifest given (serve-mode tests run
 /// the assignment's runner command for real).
 async fn world_with_manifest(lease_ttl_secs: u64, manifest: Value) -> Option<World> {
+  world_full(WorldSetup::managed(lease_ttl_secs, manifest)).await
+}
+
+/// Makes an endpoint deployment's URL once the server's address is known
+/// (the endpoint's sidecar must be told where to dial).
+type EndpointMaker =
+  Box<dyn FnOnce(std::net::SocketAddr) -> futures_util::future::BoxFuture<'static, String> + Send>;
+
+/// How [`world_full`] builds its world.
+struct WorldSetup {
+  lease_ttl_secs: u64,
+  manifest: Value,
+  /// Endpoint deployments on: the platform is the routing platform
+  /// (managed half = the `AcceptedSpawner`) with this config.
+  endpoints: Option<crate::config::EndpointConfig>,
+  /// Make the world's deployment an endpoint deployment at this URL.
+  endpoint_url: Option<EndpointMaker>,
+}
+
+impl WorldSetup {
+  fn managed(lease_ttl_secs: u64, manifest: Value) -> Self {
+    WorldSetup {
+      lease_ttl_secs,
+      manifest,
+      endpoints: None,
+      endpoint_url: None,
+    }
+  }
+}
+
+async fn world_full(setup: WorldSetup) -> Option<World> {
+  let WorldSetup {
+    lease_ttl_secs,
+    manifest,
+    endpoints,
+    endpoint_url,
+  } = setup;
   let store: PgStore = test_pg::fresh_store().await?;
   let registry: Arc<dyn Registry> = Arc::new(store.registry());
   let journal: Arc<dyn sectr_common::journal::Journal> = Arc::new(store.journal());
+  let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let endpoint_url = match endpoint_url {
+    Some(make) => Some(make(addr).await),
+    None => None,
+  };
   let org = registry.create_org("test-org", "default").await.unwrap();
   let app = registry
     .create_app(NewApp {
@@ -122,6 +166,7 @@ async fn world_with_manifest(lease_ttl_secs: u64, manifest: Value) -> Option<Wor
     .unwrap();
   let deployment = registry
     .create_deployment(NewDeployment {
+      endpoint_url,
       app_id: app.id,
       version: 1,
       manifest,
@@ -156,11 +201,32 @@ async fn world_with_manifest(lease_ttl_secs: u64, manifest: Value) -> Option<Wor
   let ttl = chrono::Duration::seconds(lease_ttl_secs as i64);
   let hub = Arc::new(IngestHub::new(registry.clone(), journal.clone(), ttl));
   let spawner = Arc::new(AcceptedSpawner::default());
+  let mut config = test_config(lease_ttl_secs);
+  let (runner_platform, endpoint_platform): (Arc<dyn crate::platform::RunnerPlatform>, _) =
+    match endpoints {
+      None => (spawner.clone(), None),
+      Some(mut endpoints) => {
+        // This server's ingest, as the endpoint's sidecar dials it.
+        if endpoints.ingest_url.is_none() {
+          endpoints.ingest_url = Some(format!("ws://{addr}/ingest"));
+        }
+        config.endpoints = endpoints.clone();
+        let endpoint = Arc::new(crate::platform::EndpointPlatform::new(endpoints));
+        endpoint.attach_hub(Arc::downgrade(&hub));
+        let routing = Arc::new(crate::platform::RoutingPlatform::new(
+          spawner.clone(),
+          endpoint.clone(),
+          registry.clone(),
+        ));
+        hub.set_teardown(routing.clone());
+        (routing, Some(endpoint))
+      }
+    };
   let dispatcher = crate::ingest::SidecarDispatcher::new(
     hub.clone(),
     registry.clone(),
     journal.clone(),
-    spawner.clone(),
+    runner_platform,
   );
   let service = Arc::new(ProdSessionService::new(
     registry.clone(),
@@ -168,8 +234,7 @@ async fn world_with_manifest(lease_ttl_secs: u64, manifest: Value) -> Option<Wor
     Arc::new(dispatcher),
     ttl,
   ));
-  let config = test_config(lease_ttl_secs);
-  let state = AppState::new(
+  let mut state = AppState::new(
     registry.clone(),
     journal.clone(),
     service,
@@ -184,10 +249,11 @@ async fn world_with_manifest(lease_ttl_secs: u64, manifest: Value) -> Option<Wor
     )),
     false,
   );
+  if let Some(endpoint) = endpoint_platform {
+    state = state.with_endpoints(endpoint);
+  }
 
   let router = crate::http::router(state);
-  let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-  let addr = listener.local_addr().unwrap();
   {
     let server_router = router.clone();
     tokio::spawn(async move { axum::serve(listener, server_router).await.expect("server") });
@@ -847,6 +913,7 @@ async fn full_loop_real_sidecar_client_and_fake_runner() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
@@ -893,6 +960,7 @@ async fn full_loop_real_sidecar_client_and_fake_runner() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
@@ -945,6 +1013,7 @@ async fn approval_flow_through_the_real_sidecar() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
@@ -988,6 +1057,7 @@ async fn approval_flow_through_the_real_sidecar() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
@@ -1149,6 +1219,7 @@ async fn world_docker(
   ]);
   let deployment = registry
     .create_deployment(NewDeployment {
+      endpoint_url: None,
       app_id: app.id,
       version: 1,
       manifest: json!({
@@ -1922,6 +1993,7 @@ async fn server_restart_durability_end_to_end() {
     }
     let deployment = registry
       .create_deployment(NewDeployment {
+        endpoint_url: None,
         app_id: app.id,
         version: 1,
         manifest: serde_json::json!({
@@ -2223,5 +2295,112 @@ async fn two_concurrent_turns_on_one_deployment() {
   assert_eq!(b_events[2].seq, 2);
 }
 
+/// The delivery watch flips when the sidecar dials and takes its
+/// assignment, and not before.
+#[tokio::test]
+async fn delivery_is_signalled_when_the_sidecar_takes_the_assignment() {
+  let Some(w) = world(30).await else { return };
+  let token = ingest_token(&w).await;
+  assert!(
+    !w.hub
+      .wait_delivered(w.session, std::time::Duration::from_millis(100))
+      .await,
+    "nothing has dialed yet"
+  );
+  let waiter = {
+    let hub = w.hub.clone();
+    let session = w.session;
+    tokio::spawn(async move {
+      hub
+        .wait_delivered(session, std::time::Duration::from_secs(5))
+        .await
+    })
+  };
+  let mut ws = dial(&w, &token).await;
+  let frame = recv_json(&mut ws, "assignment").await;
+  assert_eq!(frame["kind"], "assignment");
+  assert!(waiter.await.unwrap(), "delivery was signalled");
+  // No grant at all: false at once.
+  assert!(
+    !w.hub
+      .wait_delivered(uuid::Uuid::now_v7(), std::time::Duration::from_secs(5))
+      .await
+  );
+}
+
+/// A wake that gives up drops the turn's grant only while no sidecar has
+/// taken it; once one has, the turn is running and the grant stays.
+#[tokio::test]
+async fn a_given_up_wake_drops_only_an_untaken_grant() {
+  let Some(w) = world(30).await else { return };
+  let token = ingest_token(&w).await;
+  let mut ws = dial(&w, &token).await;
+  assert_eq!(recv_json(&mut ws, "assignment").await["kind"], "assignment");
+  assert!(
+    !w.hub.fail_undelivered_spawn(w.session).await,
+    "taken: reported delivered"
+  );
+  assert!(
+    w.hub.delivery_watch(w.session).await.is_some(),
+    "the running turn keeps its grant"
+  );
+
+  // Untaken: dropped, and the token is dead.
+  let Some(w) = world(30).await else { return };
+  let token = ingest_token(&w).await;
+  assert!(w.hub.fail_undelivered_spawn(w.session).await);
+  assert!(w.hub.delivery_watch(w.session).await.is_none());
+  assert_eq!(dial_status(&w, &token).await, Err(401));
+  // No grant at all: nothing to report delivered.
+  assert!(w.hub.fail_undelivered_spawn(uuid::Uuid::now_v7()).await);
+}
+
+async fn dial_status(w: &World, token: &str) -> Result<(), u16> {
+  let mut request = format!("ws://{}/ingest", w.addr)
+    .into_client_request()
+    .unwrap();
+  request.headers_mut().insert(
+    "Authorization",
+    tokio_tungstenite::tungstenite::http::HeaderValue::from_str(&format!("Bearer {token}"))
+      .unwrap(),
+  );
+  match tokio_tungstenite::connect_async(request).await {
+    Ok(_) => Ok(()),
+    Err(tokio_tungstenite::tungstenite::Error::Http(response)) => Err(response.status().as_u16()),
+    Err(e) => panic!("dial failed: {e}"),
+  }
+}
+
+/// Registration tokens: accepted once (and recorded), then 401; an expired
+/// one is 401; neither touches a session.
+#[tokio::test]
+async fn registration_tokens_work_once_and_expire() {
+  let Some(w) = world(30).await else { return };
+  let (token, dialed) = w
+    .hub
+    .register_probe(std::time::Duration::from_secs(120))
+    .await;
+  assert!(token.starts_with("sit_"));
+  assert!(!*dialed.borrow());
+  assert_eq!(dial_status(&w, &token).await, Ok(()));
+  assert!(*dialed.borrow(), "the dial was recorded");
+  assert_eq!(dial_status(&w, &token).await, Err(401), "single use");
+
+  let (late, late_dialed) = w
+    .hub
+    .register_probe(std::time::Duration::from_millis(50))
+    .await;
+  tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+  assert_eq!(dial_status(&w, &late).await, Err(401), "expired");
+  assert!(!*late_dialed.borrow());
+
+  // The session's own turn is untouched: its token still gets the
+  // assignment.
+  let turn_token = ingest_token(&w).await;
+  let mut ws = dial(&w, &turn_token).await;
+  assert_eq!(recv_json(&mut ws, "assignment").await["kind"], "assignment");
+}
+
 mod docker;
+mod endpoint;
 mod serve;

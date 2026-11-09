@@ -11,14 +11,14 @@ use super::*;
 
 use sectr_common::sidecar::Assignment;
 use sectr_worker::runner::{SubprocessRunner, SubprocessRunnerConfig};
-use sectr_worker::serve::{ServeConfig, router};
+use sectr_worker::serve::{ServeConfig, WAKE_DIAL_WINDOW, router};
 use sectr_worker::sidecar::RunnerSpawner;
 
 /// A `SubprocessRunner` that counts its starts and stops.
-struct CountingRunner {
-  inner: SubprocessRunner,
-  starts: AtomicUsize,
-  stops: AtomicUsize,
+pub(super) struct CountingRunner {
+  pub(super) inner: SubprocessRunner,
+  pub(super) starts: AtomicUsize,
+  pub(super) stops: AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -44,7 +44,7 @@ struct Serve {
   http: reqwest::Client,
 }
 
-fn temp_path(what: &str) -> std::path::PathBuf {
+pub(super) fn temp_path(what: &str) -> std::path::PathBuf {
   std::env::temp_dir().join(format!("sectr-serve-{what}-{}", uuid::Uuid::now_v7()))
 }
 
@@ -53,7 +53,7 @@ fn temp_path(what: &str) -> std::path::PathBuf {
 /// only the direct child would leave the agent running. The shell logs
 /// the agent's pid and, with `delay_secs`, waits before starting it (so a
 /// turn is still running while a test sends a second request).
-fn fake_runner_manifest(
+pub(super) fn fake_runner_manifest(
   frames: &std::path::Path,
   pids: &std::path::Path,
   delay_secs: u32,
@@ -75,7 +75,7 @@ fn fake_runner_manifest(
   })
 }
 
-fn serve_config(ingest_url: String, runner_port: u16) -> ServeConfig {
+pub(super) fn serve_config(ingest_url: String, runner_port: u16) -> ServeConfig {
   ServeConfig {
     port: 0,
     ingest_url,
@@ -83,12 +83,13 @@ fn serve_config(ingest_url: String, runner_port: u16) -> ServeConfig {
     app_dir: std::env::temp_dir(),
     python: "python3".into(),
     dial_retry_window: Duration::from_secs(10),
+    wake_dial_window: WAKE_DIAL_WINDOW,
     import_timeout: Duration::from_secs(60),
   }
 }
 
 /// Bind the serve router on a free port; returns its base URL.
-async fn start_router(config: ServeConfig, spawner: Arc<dyn RunnerSpawner>) -> String {
+pub(super) async fn start_router(config: ServeConfig, spawner: Arc<dyn RunnerSpawner>) -> String {
   let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
   let app = router(config, spawner);
@@ -97,15 +98,16 @@ async fn start_router(config: ServeConfig, spawner: Arc<dyn RunnerSpawner>) -> S
 }
 
 async fn serve_world(delay_secs: u32, frames: &[String]) -> Option<Serve> {
-  serve_world_via(delay_secs, frames, None).await
+  serve_world_via(delay_secs, frames, None, WAKE_DIAL_WINDOW).await
 }
 
 /// [`serve_world`], with the sidecar dialing ingest through `relay` when
-/// one is given.
+/// one is given, and giving up on a wake's dial after `dial_window`.
 async fn serve_world_via(
   delay_secs: u32,
   frames: &[String],
   relay: Option<&Relay>,
+  dial_window: Duration,
 ) -> Option<Serve> {
   let frames_file = temp_path("frames.json");
   let pids = temp_path("pids");
@@ -125,11 +127,9 @@ async fn serve_world_via(
     relay.target.set(w.addr).expect("one world per relay");
   }
   let ingest = relay.map_or(w.addr, |r| r.addr);
-  let base = start_router(
-    serve_config(format!("ws://{ingest}/ingest"), runner_port),
-    runner.clone(),
-  )
-  .await;
+  let mut config = serve_config(format!("ws://{ingest}/ingest"), runner_port);
+  config.wake_dial_window = dial_window;
+  let base = start_router(config, runner.clone()).await;
   Some(Serve {
     w,
     base,
@@ -146,6 +146,8 @@ struct Relay {
   addr: std::net::SocketAddr,
   target: Arc<std::sync::OnceLock<std::net::SocketAddr>>,
   conns: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
+  /// While set, new connections are closed at once (ingest unreachable).
+  down: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Relay {
@@ -154,9 +156,13 @@ impl Relay {
     let addr = listener.local_addr().unwrap();
     let target = Arc::new(std::sync::OnceLock::<std::net::SocketAddr>::new());
     let conns = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let (to, open) = (target.clone(), conns.clone());
+    let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (to, open, is_down) = (target.clone(), conns.clone(), down.clone());
     tokio::spawn(async move {
       while let Ok((mut inbound, _)) = listener.accept().await {
+        if is_down.load(Ordering::SeqCst) {
+          continue;
+        }
         let Some(&target) = to.get() else { continue };
         let relay = tokio::spawn(async move {
           if let Ok(mut outbound) = tokio::net::TcpStream::connect(target).await {
@@ -170,7 +176,13 @@ impl Relay {
       addr,
       target,
       conns,
+      down,
     }
+  }
+
+  /// Refuse new connections (`true`), or let them through again.
+  fn set_down(&self, down: bool) {
+    self.down.store(down, Ordering::SeqCst);
   }
 
   /// Drop every open connection (new ones still go through).
@@ -474,7 +486,13 @@ async fn a_turn_lost_mid_wake_answers_turn_ended() {
   let relay = Relay::start().await;
   // The runner waits 5 s before serving: the turn is still starting when
   // the server loses it.
-  let Some(s) = serve_world_via(5, &[sectr_worker::testing::final_frame()], Some(&relay)).await
+  let Some(s) = serve_world_via(
+    5,
+    &[sectr_worker::testing::final_frame()],
+    Some(&relay),
+    WAKE_DIAL_WINDOW,
+  )
+  .await
   else {
     return;
   };
@@ -518,6 +536,104 @@ async fn a_turn_lost_mid_wake_answers_turn_ended() {
   // The instance is free again.
   let (status, body) = s.wake(json!({"ingest_token": "sit_never_minted"})).await;
   assert_eq!((status, body), (200, json!({"outcome": "token_rejected"})));
+}
+
+#[tokio::test]
+async fn a_wake_that_cant_reach_ingest_gives_up_after_the_dial_window() {
+  // A port nothing listens on (refused at once), and one that accepts and
+  // never answers the upgrade (the dial itself must time out).
+  let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let silent_addr = silent.local_addr().unwrap();
+  tokio::spawn(async move {
+    let mut held = Vec::new();
+    while let Ok((socket, _)) = silent.accept().await {
+      held.push(socket);
+    }
+  });
+  for ingest in [
+    format!("ws://127.0.0.1:{}/ingest", free_port()),
+    format!("ws://{silent_addr}/ingest"),
+  ] {
+    let mut config = serve_config(ingest.clone(), free_port());
+    config.wake_dial_window = Duration::from_secs(1);
+    let base = start_router(config, Arc::new(sectr_worker::sidecar::ExternalRunner)).await;
+    let started = Instant::now();
+    let (status, body) = tokio::time::timeout(
+      Duration::from_secs(10),
+      post_raw(
+        &reqwest::Client::new(),
+        format!("{base}/wake"),
+        json!({"ingest_token": "sit_whatever"}).to_string(),
+      ),
+    )
+    .await
+    .expect("the wake gave up");
+    assert_eq!(status, 200, "{ingest}: {body}");
+    assert_eq!(body["outcome"], "dial_failed", "{ingest}: {body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+      message.starts_with(&format!("dial {ingest}: ")),
+      "{message}"
+    );
+    let elapsed = started.elapsed();
+    assert!(
+      elapsed >= Duration::from_millis(500) && elapsed < Duration::from_secs(3),
+      "{ingest}: {elapsed:?}"
+    );
+  }
+}
+
+#[tokio::test]
+async fn a_turn_that_dialed_redials_past_the_dial_window() {
+  let relay = Relay::start().await;
+  // The runner waits 2 s before serving: the connection is lost while the
+  // turn is starting, and stays lost for longer than the dial window.
+  let Some(s) = serve_world_via(
+    2,
+    &[sectr_worker::testing::final_frame()],
+    Some(&relay),
+    Duration::from_millis(300),
+  )
+  .await
+  else {
+    return;
+  };
+  let token = ingest_token(&s.w).await;
+  let wake = {
+    let (http, url, body) = (
+      s.http.clone(),
+      format!("{}/wake", s.base),
+      json!({"ingest_token": token}).to_string(),
+    );
+    tokio::spawn(async move { post_raw(&http, url, body).await })
+  };
+  for _ in 0..200 {
+    if s.runner.starts.load(Ordering::SeqCst) == 1 {
+      break;
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
+  assert_eq!(
+    s.runner.starts.load(Ordering::SeqCst),
+    1,
+    "the turn started"
+  );
+
+  relay.set_down(true);
+  relay.cut();
+  tokio::time::sleep(Duration::from_secs(1)).await;
+  assert!(
+    !wake.is_finished(),
+    "the wake gave up on a turn it had started"
+  );
+  relay.set_down(false);
+
+  let (status, body) = tokio::time::timeout(Duration::from_secs(15), wake)
+    .await
+    .expect("the turn finished")
+    .unwrap();
+  assert_eq!((status, body), (200, json!({"outcome": "turn_ended"})));
+  wait_for_tail(&s.w, &[EventType::NoMoreActions]).await;
 }
 
 #[tokio::test]
@@ -634,7 +750,7 @@ async fn an_approval_suspension_ends_the_wake_and_the_resume_is_a_second_wake() 
 // POST /manifest
 // ---------------------------------------------------------------------------
 
-const AGENT_SRC: &str = r#"
+pub(super) const AGENT_SRC: &str = r#"
 import os
 from sectr import AgentApp
 
@@ -647,7 +763,7 @@ async def chat(ctx):
 
 /// The SDK's interpreter (the repo's `sdk-python/.venv`), or `None` to
 /// skip: the import needs `sectr` installed.
-fn sdk_python() -> Option<String> {
+pub(super) fn sdk_python() -> Option<String> {
   // Not canonicalized: the venv's python3 is a symlink to the base
   // interpreter, and only the venv path finds the venv's packages.
   let python = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -661,7 +777,7 @@ fn sdk_python() -> Option<String> {
 
 /// An app directory holding `agent.py` (and `pyproject.toml` if asked),
 /// plus a marker file the module creates when it's imported.
-fn app_dir(source: &str, pyproject: bool) -> (std::path::PathBuf, std::path::PathBuf) {
+pub(super) fn app_dir(source: &str, pyproject: bool) -> (std::path::PathBuf, std::path::PathBuf) {
   let dir = temp_path("app");
   std::fs::create_dir_all(&dir).unwrap();
   let marker = dir.join("imported");

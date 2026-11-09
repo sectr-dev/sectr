@@ -22,7 +22,7 @@
 //! |---|---|---|
 //! | [`events::ORG_CREATED`] | `clerk.rs::exchange` | top of funnel — a Clerk sign-in created a brand-new org (prop `signup: "clerk"`). Returning users never fire it. |
 //! | [`events::FIRST_APP_DEPLOYED`] | `deploy.rs::activate` | the org's first deployment reached `active` |
-//! | [`events::DEPLOY_SUCCESS`] / [`events::DEPLOY_FAIL`] | `deploy.rs::run_build` outcome arms | every deploy build outcome |
+//! | [`events::DEPLOY_SUCCESS`] / [`events::DEPLOY_FAIL`] | `deploy.rs::record_deploy_outcome` (from `run_build`, and endpoint registration with prop `kind: "endpoint"`) | every deploy outcome |
 //! | [`events::FIRST_SESSION`] (+ `session_origin` prop) | `ProdSessionService::create_session` | the org's first session; origin = api \| playground |
 //! | [`events::FIRST_APPROVAL_USED`] | `ProdSessionService::decide_approval` | the org's first approval decision |
 //!
@@ -248,6 +248,7 @@ mod tests {
 
   fn test_server_config() -> ServerConfig {
     ServerConfig {
+      endpoints: Default::default(),
       pg_url: "postgres://unused".into(),
       bind_addr: "127.0.0.1:0".parse().unwrap(),
       secrets_master_key: None,

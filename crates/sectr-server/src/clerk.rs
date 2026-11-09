@@ -519,6 +519,7 @@ mod tests {
 
   fn test_config(clerk: Option<ClerkConfig>) -> ServerConfig {
     ServerConfig {
+      endpoints: Default::default(),
       pg_url: "postgres://unused".into(),
       bind_addr: "127.0.0.1:0".parse().unwrap(),
       secrets_master_key: None,

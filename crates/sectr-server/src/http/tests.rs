@@ -103,6 +103,7 @@ fn test_config() -> ServerConfig {
   // pg_url is only read by main()'s open path (tests build the state
   // directly).
   ServerConfig {
+    endpoints: Default::default(),
     pg_url: "postgres://unused".into(),
     bind_addr: "127.0.0.1:0".parse().unwrap(),
     secrets_master_key: None,

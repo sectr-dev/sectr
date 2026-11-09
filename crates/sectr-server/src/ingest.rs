@@ -93,6 +93,16 @@ struct HubInner {
   acked: HashMap<Uuid, HashMap<Uuid, i64>>,
   /// Per-session ingest serialization (batch order guarantee).
   locks: HashMap<Uuid, Arc<Mutex<()>>>,
+  /// Registration tokens (token hash → probe): single-use, short-lived,
+  /// belonging to no session. See [`IngestHub::register_probe`].
+  probes: HashMap<String, Probe>,
+}
+
+/// An outstanding registration token: the dial an endpoint's sidecar makes
+/// when asked for its manifest, which proves it reaches this server.
+struct Probe {
+  expires_at: tokio::time::Instant,
+  dialed: tokio::sync::watch::Sender<bool>,
 }
 
 struct Grant {
@@ -104,6 +114,9 @@ struct Grant {
   /// (Cloud Run: the execution resource name; docker: the container name).
   /// Consumed by the boundary teardown. Lives exactly as long as the turn.
   execution: Option<String>,
+  /// Set once the sidecar has dialed and taken this grant's assignment.
+  /// The endpoint platform waits on it to know a wake was delivered.
+  delivered: tokio::sync::watch::Sender<bool>,
 }
 
 /// A platform that accepts every spawn and streams the minted ingest
@@ -217,6 +230,7 @@ impl IngestHub {
         conns: HashMap::new(),
         acked: HashMap::new(),
         locks: HashMap::new(),
+        probes: HashMap::new(),
       }),
     }
   }
@@ -348,6 +362,7 @@ impl IngestHub {
             lease_id: Some(lease_id),
             assignment: Some(assignment),
             execution: None,
+            delivered: tokio::sync::watch::Sender::new(false),
           },
         );
         Some(token)
@@ -374,6 +389,25 @@ impl IngestHub {
     let mut inner = self.inner.lock().await;
     if let Some(grant) = inner.grants.remove(&session) {
       inner.by_token.remove(&grant.token_hash);
+    }
+  }
+
+  /// A wake gave up on its turn: drop the grant as [`Self::fail_first_spawn`]
+  /// does, but only if no sidecar has taken the assignment, in the same
+  /// lock `take_assignment` takes it in. False when it was taken: the turn
+  /// is running, and the wake must report it delivered instead of failing
+  /// a turn whose sidecar has already started the agent. True when the
+  /// grant is gone, dropped now or before.
+  pub async fn fail_undelivered_spawn(&self, session: Uuid) -> bool {
+    let mut inner = self.inner.lock().await;
+    match inner.grants.get(&session) {
+      Some(grant) if *grant.delivered.borrow() => false,
+      Some(_) => {
+        let grant = inner.grants.remove(&session).expect("just found");
+        inner.by_token.remove(&grant.token_hash);
+        true
+      }
+      None => true,
     }
   }
 
@@ -411,13 +445,75 @@ impl IngestHub {
 
   /// Pop the undelivered assignment (delivered once per dispatch — a
   /// reconnecting sidecar already knows what it was running; it replays
-  /// events instead).
+  /// events instead). Taking it is the delivery point: the grant's
+  /// delivery watch flips to true.
   pub async fn take_assignment(&self, session: Uuid) -> Option<Assignment> {
     let mut inner = self.inner.lock().await;
-    inner
-      .grants
-      .get_mut(&session)
-      .and_then(|g| g.assignment.take())
+    let grant = inner.grants.get_mut(&session)?;
+    let assignment = grant.assignment.take()?;
+    grant.delivered.send_replace(true);
+    Some(assignment)
+  }
+
+  /// The delivery watch of the session's CURRENT grant, if it has one:
+  /// true once a sidecar has dialed and taken the assignment. The sender
+  /// dies with the grant, so a waiter sees the channel close if the turn
+  /// ends or the grant is replaced first.
+  pub async fn delivery_watch(&self, session: Uuid) -> Option<tokio::sync::watch::Receiver<bool>> {
+    let inner = self.inner.lock().await;
+    inner.grants.get(&session).map(|g| g.delivered.subscribe())
+  }
+
+  /// Wait until the session's current turn is delivered. False at the
+  /// deadline, or when there is no grant or it goes away first.
+  #[cfg(test)]
+  pub async fn wait_delivered(&self, session: Uuid, deadline: std::time::Duration) -> bool {
+    let Some(mut watch) = self.delivery_watch(session).await else {
+      return false;
+    };
+    matches!(
+      tokio::time::timeout(deadline, watch.wait_for(|delivered| *delivered)).await,
+      Ok(Ok(_))
+    )
+  }
+
+  /// Mint a registration token: a `sit_` token that belongs to no session,
+  /// is valid for `ttl` and works for ONE dial. A sidecar dialing with it
+  /// is accepted and closed at once, and the returned watch flips to true.
+  /// Endpoint registration hands it to the endpoint's `POST /manifest`, so
+  /// the server learns from its own ingest, not the endpoint's word, that
+  /// the endpoint's sidecar reaches this server.
+  pub async fn register_probe(
+    &self,
+    ttl: std::time::Duration,
+  ) -> (String, tokio::sync::watch::Receiver<bool>) {
+    let token = mint_ingest_token();
+    let (dialed, watch) = tokio::sync::watch::channel(false);
+    let now = tokio::time::Instant::now();
+    let mut inner = self.inner.lock().await;
+    inner.probes.retain(|_, probe| probe.expires_at > now);
+    inner.probes.insert(
+      keys::hash(&token),
+      Probe {
+        expires_at: now + ttl,
+        dialed,
+      },
+    );
+    (token, watch)
+  }
+
+  /// Consume a registration token if `token` is one that is still valid:
+  /// records the dial and removes it (single use). False for anything
+  /// else, including an expired or already-used registration token.
+  pub async fn take_probe(&self, token: &str) -> bool {
+    let mut inner = self.inner.lock().await;
+    match inner.probes.remove(&keys::hash(token)) {
+      Some(probe) if probe.expires_at > tokio::time::Instant::now() => {
+        probe.dialed.send_replace(true);
+        true
+      }
+      _ => false,
+    }
   }
 
   /// Push a frame to the sidecar's connection, if one is attached.
@@ -672,6 +768,14 @@ pub async fn ingest_ws(
     .and_then(|v| v.strip_prefix("Bearer "))
     .unwrap_or("");
   let hub = state.hub().clone();
+  // A registration token: the dial IS the whole exchange. Accept the
+  // upgrade (the sidecar must see it accepted) and close at once.
+  if token.starts_with(INGEST_TOKEN_PREFIX) && hub.take_probe(token).await {
+    tracing::info!("endpoint registration dial accepted");
+    return upgrade.on_upgrade(|mut socket| async move {
+      let _ = socket.send(Message::Close(None)).await;
+    });
+  }
   let (tx, rx) = mpsc::channel(64);
   let (session, reconnect) = match hub.attach(token, tx.clone()).await {
     Ok((session, reconnect)) if token.starts_with(INGEST_TOKEN_PREFIX) => (session, reconnect),

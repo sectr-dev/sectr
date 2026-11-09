@@ -220,6 +220,10 @@ pub struct ServerConfig {
   /// limits, the signup cap and the orphan-runner reaper mode. See
   /// [`LimitsConfig`] for the env keys.
   pub limits: LimitsConfig,
+
+  /// Endpoint deployments: agents on the customer's own serverless or
+  /// containers, woken over HTTP per turn. See [`EndpointConfig`].
+  pub endpoints: EndpointConfig,
 }
 
 /// The image repository the default base image comes from. It's public, so
@@ -382,6 +386,112 @@ impl ClerkConfig {
       authorized_parties: parties,
       session_ttl_secs,
     }))
+  }
+}
+
+/// Endpoint deployments' settings. Endpoint deployments are on only when
+/// `ingest_url` is set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointConfig {
+  /// This server's ingest as reached from the public internet
+  /// (`SECTR_ENDPOINT_INGEST_URL`; hosted: `wss://ingest.sectr.dev/ingest`).
+  /// It's the value customers set as `SECTR_INGEST_URL` in their image, and
+  /// separate from `SECTR_RUNNER_SERVER_URL`, whose self-hosted Docker value
+  /// is a bridge address no outside platform can reach. Unset = the server
+  /// doesn't accept endpoint deployments.
+  pub ingest_url: Option<String>,
+  /// Turns the address guard off (`SECTR_ENDPOINT_ALLOW_PRIVATE`, default
+  /// false), for self-hosters whose endpoints are on their own network.
+  /// Hosted leaves it unset.
+  pub allow_private: bool,
+  /// How long a turn's wake may take to be delivered, cold start included
+  /// (`SECTR_ENDPOINT_WAKE_DEADLINE_SECS`, default 60, 5 to 90). The
+  /// client's request waits through it, and stays under the ~100 s limit of
+  /// a proxy in front of the server.
+  pub wake_deadline: std::time::Duration,
+  /// How long the server holds a wake request open for its turn
+  /// (`SECTR_ENDPOINT_TURN_TIMEOUT_SECS`, default 3600, Cloud Run's maximum
+  /// request time).
+  pub turn_timeout: std::time::Duration,
+}
+
+impl Default for EndpointConfig {
+  fn default() -> Self {
+    EndpointConfig {
+      ingest_url: None,
+      allow_private: false,
+      wake_deadline: std::time::Duration::from_secs(60),
+      turn_timeout: std::time::Duration::from_secs(3600),
+    }
+  }
+}
+
+impl EndpointConfig {
+  /// Takes the raw values (not the environment) so it is unit-testable.
+  fn from_vars(
+    ingest_url: Option<&str>,
+    allow_private: Option<&str>,
+    wake_deadline: Option<&str>,
+    turn_timeout: Option<&str>,
+  ) -> anyhow::Result<Self> {
+    fn set(v: Option<&str>) -> Option<&str> {
+      v.map(str::trim).filter(|v| !v.is_empty())
+    }
+    use sectr_common::endpoint::MAX_WAKE_DEADLINE_SECS;
+    let defaults = EndpointConfig::default();
+    let ingest_url = match set(ingest_url) {
+      None => None,
+      Some(url) => {
+        let parsed = reqwest::Url::parse(url)
+          .map_err(|e| anyhow::anyhow!("SECTR_ENDPOINT_INGEST_URL={url:?} is not a URL: {e}"))?;
+        if !matches!(parsed.scheme(), "ws" | "wss") || parsed.host_str().is_none_or(str::is_empty) {
+          anyhow::bail!(
+            "SECTR_ENDPOINT_INGEST_URL={url:?} must be a ws:// or wss:// URL with a host"
+          );
+        }
+        Some(url.to_owned())
+      }
+    };
+    let allow_private = match set(allow_private).map(str::to_ascii_lowercase).as_deref() {
+      None | Some("false" | "0" | "no") => false,
+      Some("true" | "1" | "yes") => true,
+      Some(other) => anyhow::bail!("SECTR_ENDPOINT_ALLOW_PRIVATE={other:?} is not true or false"),
+    };
+    let wake_deadline = match set(wake_deadline) {
+      None => defaults.wake_deadline,
+      Some(v) => v
+        .parse::<u64>()
+        .ok()
+        .filter(|s| (5..=MAX_WAKE_DEADLINE_SECS).contains(s))
+        .map(std::time::Duration::from_secs)
+        .ok_or_else(|| {
+          anyhow::anyhow!(
+            "SECTR_ENDPOINT_WAKE_DEADLINE_SECS={v:?} must be 5 to {MAX_WAKE_DEADLINE_SECS} seconds"
+          )
+        })?,
+    };
+    let turn_timeout = match set(turn_timeout) {
+      None => defaults.turn_timeout,
+      Some(v) => v
+        .parse::<u64>()
+        .ok()
+        .filter(|s| *s > 0)
+        .map(std::time::Duration::from_secs)
+        .ok_or_else(|| {
+          anyhow::anyhow!("SECTR_ENDPOINT_TURN_TIMEOUT_SECS={v:?} is not a positive integer")
+        })?,
+    };
+    Ok(EndpointConfig {
+      ingest_url,
+      allow_private,
+      wake_deadline,
+      turn_timeout,
+    })
+  }
+
+  /// Whether this server accepts endpoint deployments.
+  pub fn enabled(&self) -> bool {
+    self.ingest_url.is_some()
   }
 }
 
@@ -577,6 +687,18 @@ impl ServerConfig {
           .as_deref(),
       )?,
       limits: LimitsConfig::from_env()?,
+      endpoints: EndpointConfig::from_vars(
+        std::env::var("SECTR_ENDPOINT_INGEST_URL").ok().as_deref(),
+        std::env::var("SECTR_ENDPOINT_ALLOW_PRIVATE")
+          .ok()
+          .as_deref(),
+        std::env::var("SECTR_ENDPOINT_WAKE_DEADLINE_SECS")
+          .ok()
+          .as_deref(),
+        std::env::var("SECTR_ENDPOINT_TURN_TIMEOUT_SECS")
+          .ok()
+          .as_deref(),
+      )?,
     };
 
     // Fail fast on an incoherent artifact-backend configuration — a
@@ -1077,5 +1199,49 @@ mod tests {
   fn platform_env_parses_e2b() {
     // from_env is private; the enum mapping is pinned via as_str.
     assert_eq!(PlatformKind::E2b.as_str(), "e2b");
+  }
+
+  #[test]
+  fn endpoint_config_defaults_to_off() {
+    let config = EndpointConfig::from_vars(None, None, None, None).unwrap();
+    assert_eq!(config, EndpointConfig::default());
+    assert!(!config.enabled());
+    assert_eq!(config.wake_deadline, std::time::Duration::from_secs(60));
+    assert_eq!(config.turn_timeout, std::time::Duration::from_secs(3600));
+  }
+
+  #[test]
+  fn endpoint_config_parses_and_checks_its_values() {
+    let config = EndpointConfig::from_vars(
+      Some("wss://ingest.sectr.dev/ingest"),
+      Some("true"),
+      Some("30"),
+      Some("900"),
+    )
+    .unwrap();
+    assert!(config.enabled());
+    assert!(config.allow_private);
+    assert_eq!(config.wake_deadline, std::time::Duration::from_secs(30));
+    assert_eq!(config.turn_timeout, std::time::Duration::from_secs(900));
+
+    for (ingest, private, deadline, turn, needle) in [
+      (
+        Some("https://x/ingest"),
+        None,
+        None,
+        None,
+        "ws:// or wss://",
+      ),
+      (Some("not a url"), None, None, None, "is not a URL"),
+      (None, Some("maybe"), None, None, "not true or false"),
+      (None, None, Some("4"), None, "5 to 90"),
+      (None, None, Some("91"), None, "5 to 90"),
+      (None, None, None, Some("0"), "positive integer"),
+    ] {
+      let err = EndpointConfig::from_vars(ingest, private, deadline, turn)
+        .unwrap_err()
+        .to_string();
+      assert!(err.contains(needle), "{err}");
+    }
   }
 }

@@ -80,6 +80,21 @@ pub static INGEST_FAILURES: LazyLock<Counter<u64>> = LazyLock::new(|| {
     .build()
 });
 
+/// `sectr.endpoint.wakes` — wakes of endpoint deployments, by `outcome`:
+/// `delivered` (the sidecar took the turn), `connect_error`,
+/// `http_error`, `deadline`, `blocked` (the address guard), and once a
+/// delivered wake's request ends, `turn_ended`, `token_rejected`,
+/// `http_error` or `broken_after_delivery`. A delivered wake is counted
+/// twice (`delivered`, then how its request ended), so the sum over
+/// `outcome` is not the number of wakes: count wakes as `delivered` plus
+/// the failures before delivery. URLs and hosts are never attributes.
+pub static ENDPOINT_WAKES: LazyLock<Counter<u64>> = LazyLock::new(|| {
+  meter()
+    .u64_counter("sectr.endpoint.wakes")
+    .with_description("Endpoint deployment wakes, by outcome")
+    .build()
+});
+
 /// `sectr.approval.decision_latency` — milliseconds from the
 /// TOOL_APPROVAL_REQUIRED/TOOL_CALL journal timestamp to the decision POST
 /// landing (the human-in-the-loop wait). f64 histogram in ms.
@@ -155,6 +170,7 @@ mod tests {
     let _ = &*RUNNERS_REAPED;
     let _ = &*SESSION_ERRORS;
     let _ = &*INGEST_FAILURES;
+    let _ = &*ENDPOINT_WAKES;
     SESSIONS_CREATED.add(1, &[]);
     TURNS.add(1, &[]);
     APPROVAL_DECISION_LATENCY.record(42.0, &[]);
@@ -164,5 +180,6 @@ mod tests {
     RUNNERS_REAPED.add(1, &[]);
     SESSION_ERRORS.add(1, &[opentelemetry::KeyValue::new("source", "runner")]);
     INGEST_FAILURES.add(1, &[opentelemetry::KeyValue::new("reason", "journal")]);
+    ENDPOINT_WAKES.add(1, &[opentelemetry::KeyValue::new("outcome", "delivered")]);
   }
 }

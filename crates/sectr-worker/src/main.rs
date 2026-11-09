@@ -102,6 +102,8 @@ async fn run_env_mode() {
     runner_base,
     reconnect_backoff: Duration::from_millis(250),
     max_backoff: Duration::from_secs(10),
+    // The platform ends a container that never connects.
+    dial_window: None,
   };
   let runner = SubprocessRunner::new(SubprocessRunnerConfig::default());
   let client = SidecarClient::new(config, std::sync::Arc::new(runner));

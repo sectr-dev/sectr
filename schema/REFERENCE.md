@@ -175,7 +175,7 @@ One WebSocket per sidecar container, dialed by the sidecar (`sidecar.schema.json
 |---|---|---|
 | `identity` | `GET /` → 200 | `sectr_sidecar.version` and `mode: serve`; the platform's readiness check. |
 | `wakeRequest` | `POST /wake` | The turn's ingest token. The sidecar dials its OWN `SECTR_INGEST_URL`, never a URL from the request. |
-| `wakeResponse` | `POST /wake` → 200 | Sent when the invocation ends: `turn_ended` (also when the server took the turn back), or `token_rejected` (401 before any turn started, nothing ran). |
+| `wakeResponse` | `POST /wake` → 200 | Sent when the invocation ends: `turn_ended` (also when the server took the turn back), `token_rejected` (401 before any turn started, nothing ran), or `dial_failed` (+ `message`: no dial accepted within 120 s, nothing ran). |
 | `manifestRequest` | `POST /manifest` | A registration token and the app's entry point. |
 | `manifestResponse` | `POST /manifest` → 200 | `manifest` (+ `uses_uv`), or `token_rejected` / `dial_failed` (never imported) / `import_failed`. |
 | `error` | 400 / 409 / 413 / 500 | `bad_request`, `busy` (one turn per instance, never queued), `too_large` (bodies over 4 KiB), `internal` (the sidecar itself failed). |
