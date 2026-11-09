@@ -378,7 +378,8 @@ const sessT2Events = buildEvents(sessT2Id, TRIAGE_DEPLOYMENT, [
 /** The mock wakes summary per deployment (GET /deployments/{id}/wakes). */
 export const mockWakes: Record<string, WakeSummary> = {
   [TRIAGE_DEPLOYMENT]: {
-    turns: 20,
+    // One turn in each of its two sessions; the first failed to wake.
+    turns: 2,
     failed: 1,
     latest_failure: {
       message: (sessT1Events[2].payload as { message: string }).message,
