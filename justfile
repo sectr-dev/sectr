@@ -286,10 +286,18 @@ publish-skill version="":
 publish-images version="":
     scripts/publish-images.sh {{version}}
 
-# The dashboard Worker from `just build`, to app.sectr.dev (Cloudflare).
+# The sites from `just build`, to Cloudflare: release stages.
 [private]
-deploy-dashboard version="":
-    scripts/deploy-dashboard.sh {{version}}
+deploy-dashboard version:
+    scripts/deploy-site.sh dashboard {{version}}
+
+[private]
+deploy-docs version:
+    scripts/deploy-site.sh docs {{version}}
+
+# Rebuild a site (dashboard or docs) from main and deploy it, without a release.
+redeploy site:
+    scripts/deploy-site.sh {{site}}
 
 [private]
 deploy-server version="":

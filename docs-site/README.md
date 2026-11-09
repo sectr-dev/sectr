@@ -13,10 +13,9 @@ npm run build    # static build → dist/
 npm run preview  # serve the built output
 ```
 
-Deploy: automatic — the Cloudflare↔GitHub integration (Workers Builds)
-builds and deploys on every push to `main` (same model as dashboard/).
-`just release` smoke-checks the live site (scripts/smoke-docs.sh). Manual
-fallback: `npx wrangler deploy` from this directory.
+Deploy: with each release (`just release`), or `just redeploy docs` to ship a
+docs-only fix from `main` without a release. Pushes to `main` don't deploy
+it. See RELEASING.md.
 
 ## Layout
 

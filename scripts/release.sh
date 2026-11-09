@@ -14,11 +14,11 @@
 #     tag        annotated tag vX.Y.Z on the verified SHA   (--dry-run stops here)
 #   after (the version is burned; use `resume` to finish):
 #     push, merge-back, publish-r2, publish-sdk, publish-npm,
-#     publish-skill, publish-images, deploy-server, deploy-dashboard, smoke-docs
+#     publish-skill, publish-images, deploy-server, deploy-dashboard, deploy-docs
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-POST_STAGES=(push merge-back publish-r2 publish-sdk publish-npm publish-skill publish-images deploy-server deploy-dashboard smoke-docs)
+POST_STAGES=(push merge-back publish-r2 publish-sdk publish-npm publish-skill publish-images deploy-server deploy-dashboard deploy-docs)
 # Test hook: branch releases are cut from / merged back into (default main).
 BASE=${RELEASE_BASE_BRANCH:-main}
 
@@ -158,7 +158,7 @@ stage_publish_skill()      { just publish-skill "$VER"; }
 stage_publish_images()     { ensure_artifacts_for_tag; just publish-images "$VER"; }
 stage_deploy_server()      { ensure_artifacts_for_tag; just deploy-server "$VER"; }
 stage_deploy_dashboard()   { ensure_artifacts_for_tag; just deploy-dashboard "$VER"; }
-stage_smoke_docs()         { scripts/smoke-docs.sh "$VER"; }
+stage_deploy_docs()        { ensure_artifacts_for_tag; just deploy-docs "$VER"; }
 
 run_post() { # start-stage (empty = first not done); explicit => run it and all later
   local start="${1:-}" explicit=0 s fn started=0
@@ -191,7 +191,7 @@ Release v$VER complete:
   Images           sectr-runner-base, sectr-server, sectr-dashboard:v$VER (+ :latest) on GHCR
   Server           deployed and health-checked
   Dashboard        app.sectr.dev deployed (Worker version tagged v$VER)
-  Docs             docs.sectr.dev shows v$VER
+  Docs             docs.sectr.dev deployed and shows v$VER
   main             contains the bump; release/v$VER deleted
 Post-release sanity checks: RELEASING.md#after-a-release
 EOS

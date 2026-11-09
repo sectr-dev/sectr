@@ -4,15 +4,11 @@
 // ./dist as static assets. Every page is prerendered by `astro build`
 // (docs-site has NO Astro adapter by design).
 //
-// Deploys: the Cloudflare↔GitHub integration (Workers Builds) — build &
-// deploy run on every push to main, same model as dashboard/ (which
-// deploys from root dir dashboard/). Configure in the Cloudflare
-// dashboard: root dir docs-site/, build `npm ci && npm run build`,
-// assets via this wrangler.jsonc. No CI workflow — the release's
-// docs guarantee is the smoke check in scripts/smoke-docs.sh (stage
-// smoke-docs of `just release`), which polls the live site after the
-// merge-back push and asserts the sidebar version footer shows
-// the released version.
+// Deploys: with a release (its deploy-docs stage), or `just redeploy docs`
+// from main for a docs-only fix (scripts/deploy-site.sh). Both run `npm
+// run build` and upload ./dist with this file via `wrangler deploy`, then
+// check the sidebar footer shows the version. Pushes to main don't deploy
+// it.
 {
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "docs-sectr-dev",
