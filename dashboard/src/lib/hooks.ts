@@ -88,7 +88,6 @@ export function useDeployments(appId: string): Deployment[] {
   return data ?? [];
 }
 
-/** Sessions (UI-shaped, app_name joined). All sessions, or one app's. */
 /** How a deployment's recent turns woke: the summary, null while loading,
  *  when there's no deployment to ask about, or where the backend has no
  *  wakes API (the dev gateway); or "error" when the fetch failed. Fetched
@@ -105,6 +104,7 @@ export function useDeploymentWakes(deploymentId: string | null): Wakes {
   return data ?? null;
 }
 
+/** Sessions (UI-shaped, app_name joined). All sessions, or one app's. */
 export function useSessions(appId?: string): Session[] {
   return useSessionList(appId).sessions;
 }
