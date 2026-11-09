@@ -7,7 +7,8 @@
 #       VERSION. Nothing is rebuilt, so what goes live is what was verified.
 #   deploy-site.sh SITE           `just redeploy SITE`: build the site from main,
 #       as it is on origin, and deploy it without a release. For a fix to the
-#       site alone; it still shows the last release's version.
+#       site alone; it still shows the last release's version. It lists what
+#       main has gained since the last release and asks first (YES=1 skips).
 #
 # Needs CLOUDFLARE_ACCOUNT_ID and CF_WORKERS_TOKEN (an API token with Workers
 # Scripts: Edit on the account), from the environment or Bitwarden.
@@ -18,6 +19,48 @@ site="${1:?usage: deploy-site.sh dashboard|docs [VERSION]}"
 ver="${2:-}"
 dir=$(site_dir "$site")
 url=$(site_url "$site")
+
+# commits SINCE PATH — the commits since SINCE that touch PATH, the newest 15.
+commits() {
+  local all n
+  all=$(git log --oneline "$1..HEAD" -- "$2")
+  n=$(printf '%s' "$all" | grep -c . || true)
+  [ "$n" -gt 0 ] || { echo "  (none)"; return; }
+  printf '%s\n' "$all" | head -15 | sed 's/^/  /'
+  [ "$n" -le 15 ] || echo "  … and $((n - 15)) more"
+}
+
+# What's on main since the last release goes live with a redeploy: show it,
+# then ask. YES=1 skips the question (for a script with no terminal).
+confirm_redeploy() {
+  local last
+  last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
+  {
+    echo
+    if [ -n "$last" ]; then
+      echo "main is $(git rev-list --count "$last..HEAD") commits past $last. Since then, $dir/ changed in:"
+      commits "$last" "$dir"
+      if [ "$site" = dashboard ]; then
+        echo "and the API it calls (schema/public-api.yaml; live only with the next release) in:"
+        commits "$last" schema/public-api.yaml
+      fi
+      echo
+    fi
+    echo "This deploys $site from main@$sha without a release: every $dir/ change since ${last:-the last release} goes live."
+    case "$site" in
+      dashboard) echo "The API changes aren't live until the next release, so only do it if the dashboard on main doesn't need them." ;;
+      docs) echo "Only do it if none of them describes something that isn't released yet." ;;
+    esac
+  } >&2
+  [ "${YES:-}" = 1 ] && return
+  local answer
+  read -r -p "Deploy $site from main@$sha? [y/N] " answer </dev/tty \
+    || die "no terminal to confirm on (YES=1 skips the question)"
+  case "$answer" in
+    y|Y|yes) ;;
+    *) die "not deployed" ;;
+  esac
+}
 
 if [ -n "$ver" ]; then
   need_artifacts "$ver"
@@ -33,6 +76,7 @@ else
     || die "HEAD isn't origin/main: git switch main && git pull, then redeploy"
   ver=$(scripts/version.sh)
   sha=$(git rev-parse --short HEAD)
+  [ "${DRY_RUN:-}" = 1 ] || confirm_redeploy
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
   log "building the $site site from main ($sha)"

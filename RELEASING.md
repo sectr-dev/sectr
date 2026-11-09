@@ -22,7 +22,7 @@ lives in the `justfile`; GitHub workflows are thin wrappers around it.
 | Run the self-hosted stack end to end | `just selfhost-smoke` (builds the images unless `SECTR_SMOKE_REGISTRY` names a prefix that has them; a release runs it on both architectures of the images it's about to publish) |
 | Check tools are installed | `just doctor` (`just doctor release` also checks publish/deploy tools and credentials) |
 | Build all release artifacts, no publish | `just build` (`just build no-image` skips the docker image) |
-| Ship a dashboard-only or docs-only fix without a release | `just redeploy dashboard` or `just redeploy docs` (builds the site from `main` as it is on origin and deploys it; `DRY_RUN=1` only bundles) |
+| Ship a dashboard-only or docs-only fix without a release | `just redeploy dashboard` or `just redeploy docs` (builds the site from `main` as it is on origin, shows what's merged since the release, asks, then deploys; `DRY_RUN=1` only bundles) |
 | Cut a release | `just release patch\|minor\|major` (flags: `--dry-run`, `--require-gh`, `--skip-verify "<reason>"`, `--yes`; `just release --help` lists the stages) |
 | Finish/retry an interrupted release (tag already pushed) | `just release-resume vX.Y.Z [stage]` |
 | Back out before the tag is pushed | `just release-abort [vX.Y.Z]` |
@@ -207,7 +207,9 @@ builds that one site from `main` (the checkout must be clean and at
 `origin/main`) and deploys it, tagged `vX.Y.Z-<sha>`. It still shows the last
 release's version. Everything else merged since the release goes live with it,
 so redeploy the dashboard only when `main` doesn't need an unreleased server,
-and the docs only when they describe nothing unreleased. The agent skill isn't tied to a release at all: `just
+and the docs only when they describe nothing unreleased. Before deploying, it
+lists the site's commits since the last release (and, for the dashboard, the
+server's) and asks y/N; `YES=1` skips the question. The agent skill isn't tied to a release at all: `just
 publish-skill` brings github.com/sectr-dev/skills up to date with the docs
 in your checkout whenever you want. Add
 `DRY_RUN=1` to see exactly what would happen first, or `OPEN_PR=1` to open
