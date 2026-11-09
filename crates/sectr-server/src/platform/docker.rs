@@ -45,6 +45,7 @@ use sectr_common::drivers::ArtifactStore;
 use sectr_common::drivers::sandbox::{
   ContainerRun, DockerSandboxDriver, ListedContainer, OneShotRun,
 };
+use sectr_common::inspect;
 use sectr_common::registry::Registry;
 
 use crate::config::ServerConfig;
@@ -325,18 +326,8 @@ impl DockerPlatform {
     //    pyproject — the deps were `uv sync`ed into /app/.venv at build,
     //    which system python3 cannot see (this is why dep-bearing apps
     //    422'd on first deploy).
-    let has_pyproject = workdir.join("app/pyproject.toml").is_file();
-    let mut import_cmd = if has_pyproject {
-      vec![
-        "uv".into(),
-        "run".into(),
-        "--no-sync".into(),
-        "python3".into(),
-      ]
-    } else {
-      vec!["python3".into()]
-    };
-    import_cmd.extend(["-m".into(), "sectr.inspect".into()]);
+    let has_pyproject = inspect::uses_uv(&workdir.join("app"));
+    let import_cmd = inspect::import_command(has_pyproject, "python3");
     let import = docker
       .run_once(OneShotRun {
         image: tag.clone(),

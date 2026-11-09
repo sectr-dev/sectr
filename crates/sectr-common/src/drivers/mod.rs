@@ -33,7 +33,7 @@ pub use artifacts::GcsArtifactStore;
 pub use artifacts::{ArtifactStore, FilesystemArtifactStore, InMemoryArtifactStore};
 pub use sandbox::{
   FakeSandboxDriver, RunnerExit, RunnerHandle, RunnerSpec, SandboxDriver, StderrTail,
-  SubprocessDriver, startup_failure_message,
+  SubprocessDriver, UserProcess, startup_failure_message,
 };
 pub use secret_source::{EnvFileSecretSource, InMemorySecretSource, SecretSource};
 

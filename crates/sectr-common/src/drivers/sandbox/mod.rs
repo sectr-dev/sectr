@@ -11,11 +11,13 @@ mod docker;
 mod fake;
 mod stderr_tail;
 mod subprocess;
+mod user_process;
 
 pub use docker::{ContainerRun, DockerSandboxDriver, ListedContainer, OneShotOutput, OneShotRun};
 pub use fake::FakeSandboxDriver;
 pub use stderr_tail::{STDERR_TAIL_BYTES, StderrTail, startup_failure_message};
 pub use subprocess::SubprocessDriver;
+pub use user_process::UserProcess;
 
 use async_trait::async_trait;
 

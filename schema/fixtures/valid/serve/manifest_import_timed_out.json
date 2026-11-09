@@ -1,0 +1,6 @@
+{
+  "outcome": "import_failed",
+  "exit_code": null,
+  "stderr_tail": "",
+  "message": "the import didn't finish within 60s"
+}

@@ -37,6 +37,7 @@ JOURNAL_SQL = (SCHEMA_DIR / "data-model.sql").read_text()
 EVENT_SCHEMA = json.loads((SCHEMA_DIR / "event.schema.json").read_text())
 INVOCATION_SCHEMA = json.loads((SCHEMA_DIR / "invocation.schema.json").read_text())
 SIDECAR_SCHEMA = json.loads((SCHEMA_DIR / "sidecar.schema.json").read_text())
+SERVE_SCHEMA = json.loads((SCHEMA_DIR / "serve.schema.json").read_text())
 
 EVENT_TYPES = set(EVENT_SCHEMA["$defs"]["eventType"]["enum"])
 RUNNER_TYPES = set(EVENT_SCHEMA["$defs"]["runnerEventType"]["enum"])
@@ -49,6 +50,7 @@ def validators() -> dict[str, jsonschema.Draft202012Validator]:
             (EVENT_SCHEMA["$id"], Resource.from_contents(EVENT_SCHEMA)),
             (INVOCATION_SCHEMA["$id"], Resource.from_contents(INVOCATION_SCHEMA)),
             (SIDECAR_SCHEMA["$id"], Resource.from_contents(SIDECAR_SCHEMA)),
+            (SERVE_SCHEMA["$id"], Resource.from_contents(SERVE_SCHEMA)),
         ]
     )
     format_checker = jsonschema.FormatChecker()  # date-time needs rfc3339-validator
@@ -66,6 +68,9 @@ def validators() -> dict[str, jsonschema.Draft202012Validator]:
         ),
         "sidecar": jsonschema.Draft202012Validator(
             SIDECAR_SCHEMA, registry=registry, format_checker=format_checker
+        ),
+        "serve": jsonschema.Draft202012Validator(
+            SERVE_SCHEMA, registry=registry, format_checker=format_checker
         ),
     }
 
@@ -247,7 +252,7 @@ def test_dev_api_has_no_auth() -> None:
 # ---------------------------------------------------------------------------
 
 
-ALL_KINDS = ("event", "runner-event", "invocation", "sidecar")
+ALL_KINDS = ("event", "runner-event", "invocation", "sidecar", "serve")
 
 
 @pytest.mark.parametrize(

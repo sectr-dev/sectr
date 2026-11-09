@@ -193,10 +193,36 @@ def sidecar_section(sidecar: dict) -> str:
     return "\n".join(lines)
 
 
+def serve_section(serve: dict) -> str:
+    """Serve mode's HTTP surface: one row per message, its route and what
+    it carries."""
+    meta = {
+        "identity": ("`GET /` → 200", "`sectr_sidecar.version` and `mode: serve`; the platform's readiness check."),
+        "wakeRequest": ("`POST /wake`", "The turn's ingest token. The sidecar dials its OWN `SECTR_INGEST_URL`, never a URL from the request."),
+        "wakeResponse": ("`POST /wake` → 200", "Sent when the invocation ends: `turn_ended` (also when the server took the turn back), or `token_rejected` (401 before any turn started, nothing ran)."),
+        "manifestRequest": ("`POST /manifest`", "A registration token and the app's entry point."),
+        "manifestResponse": ("`POST /manifest` → 200", "`manifest` (+ `uses_uv`), or `token_rejected` / `dial_failed` (never imported) / `import_failed`."),
+        "error": ("400 / 409 / 413 / 500", "`bad_request`, `busy` (one turn per instance, never queued), `too_large` (bodies over 4 KiB), `internal` (the sidecar itself failed)."),
+    }
+    lines = ["## Sidecar serve mode (HTTP)", "",
+             "`sectr-worker --serve` on the customer's own serverless or "
+             "container platform (`serve.schema.json`). A wake is held open "
+             "for the whole turn, which then runs over Contract 4 as above. "
+             "The sidecar never answers 429 or 503 itself.", "",
+             "| message | route | carries |", "|---|---|---|"]
+    for branch in serve["anyOf"]:
+        name = branch["$ref"].split("/")[-1]
+        route, what = meta[name]
+        lines.append(f"| `{name}` | {route} | {what} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render() -> str:
     event = load("event.schema.json")
     inv = load("invocation.schema.json")
     sidecar = load("sidecar.schema.json")
+    serve = load("serve.schema.json")
     parts = [
         "# Sectr contracts — human-readable reference",
         "",
@@ -213,6 +239,8 @@ def render() -> str:
         "",
         sidecar_section(sidecar),
         "",
+        serve_section(serve),
+        "",
         example_section(event),
         "",
         "## Fixture library",
@@ -220,8 +248,8 @@ def render() -> str:
         "Golden files under `fixtures/` feed conformance checks and the "
         "Rust/Python typed-model tests:",
         "",
-        "- `fixtures/valid/{event,runner-event,invocation,sidecar}/` — must validate",
-        "- `fixtures/invalid/{event,runner-event,invocation,sidecar}/` — must be rejected",
+        "- `fixtures/valid/{event,runner-event,invocation,sidecar,serve}/` — must validate",
+        "- `fixtures/invalid/{event,runner-event,invocation,sidecar,serve}/` — must be rejected",
         "- Check everything: `uv run pytest` (from `schema/`)",
         "",
     ]

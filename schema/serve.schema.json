@@ -1,0 +1,117 @@
+{
+  "$id": "https://sectr.dev/schemas/serve.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sectr sidecar serve mode (HTTP)",
+  "description": "The HTTP surface of `sectr-worker --serve`, the sidecar run as a server on a platform that starts a container per request (AWS Lambda through the Lambda Web Adapter, Google Cloud Run and similar). The server sends these requests to the customer's endpoint; the sidecar answers them.\n\nRoutes: `GET /` answers `identity`. `POST /wake` takes a `wakeRequest` and runs ONE invocation: it dials the image's own SECTR_INGEST_URL with the token over the Contract-4 WebSocket (sidecar.schema.json), receives the assignment and runs the turn. The request is held open until the turn ends, then answered with a `wakeResponse`. `POST /manifest` takes a `manifestRequest`, dials ingest with the token first, and only if the upgrade is accepted imports the app as managed builds do; it answers a `manifestResponse`.\n\nThe ingest URL is never taken from a request: endpoint URLs are public, so a sidecar that dialed a URL the request named could be pointed at another server. One turn at a time per instance: a request while another runs is answered 409 `busy` at once, never queued. Bodies over 4 KiB are answered 413 `too_large`; a malformed body 400 `bad_request`. The sidecar itself never answers 429 or 503: a caller may treat those as the platform saying the request never reached a container.\n\nThe wake response is never journaled; the journal says how the turn ended. Forward compatibility: additionalProperties is deliberately NOT false, and receivers ignore unknown fields.",
+  "anyOf": [
+    { "$ref": "#/$defs/identity" },
+    { "$ref": "#/$defs/wakeRequest" },
+    { "$ref": "#/$defs/wakeResponse" },
+    { "$ref": "#/$defs/manifestRequest" },
+    { "$ref": "#/$defs/manifestResponse" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "ingestToken": {
+      "description": "A token minted by the Sectr server (`sit_…`). It authenticates the sidecar's dial to ingest; the request itself needs no other auth, because the dial destination is fixed by the image.",
+      "type": "string",
+      "pattern": "^sit_"
+    },
+    "identity": {
+      "description": "`GET /` (200). At `/` because platform readiness checks use `/`. The version is the sidecar's (the public base image's).",
+      "type": "object",
+      "required": ["sectr_sidecar"],
+      "properties": {
+        "sectr_sidecar": {
+          "type": "object",
+          "required": ["version", "mode"],
+          "properties": {
+            "version": { "type": "string" },
+            "mode": { "const": "serve" }
+          }
+        }
+      }
+    },
+    "wakeRequest": {
+      "description": "`POST /wake`: the turn's ingest token, minted at dispatch.",
+      "type": "object",
+      "required": ["ingest_token"],
+      "properties": {
+        "ingest_token": { "$ref": "#/$defs/ingestToken" }
+      }
+    },
+    "wakeResponse": {
+      "description": "`POST /wake` (200), sent when the invocation is over. `turn_ended`: a turn ran and is over: a turn boundary (sentinel, approval suspension or failure), or the server took the turn back mid-turn (a reclaim or a restart, after which its token is refused); the journal holds how it ended. `token_rejected`: ingest answered 401 before any turn started, so nothing ran.",
+      "type": "object",
+      "required": ["outcome"],
+      "properties": {
+        "outcome": { "enum": ["turn_ended", "token_rejected"] }
+      }
+    },
+    "manifestRequest": {
+      "description": "`POST /manifest`: a registration token (the dial check) and the app's entry point from sectr.toml.",
+      "type": "object",
+      "required": ["registration_token", "entry"],
+      "properties": {
+        "registration_token": { "$ref": "#/$defs/ingestToken" },
+        "entry": {
+          "description": "`module:attribute` (or a bare module), as in sectr.toml's `agent.entry`.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "manifestResponse": {
+      "description": "`POST /manifest` (200).",
+      "oneOf": [
+        {
+          "description": "The import's manifest (what `python3 -m sectr.inspect` writes: name, entry, python, routes, env names, warnings), and whether the import ran under `uv run --no-sync` because the app ships a pyproject.toml.",
+          "type": "object",
+          "required": ["outcome", "manifest", "uses_uv"],
+          "properties": {
+            "outcome": { "const": "manifest" },
+            "manifest": { "type": "object" },
+            "uses_uv": { "type": "boolean" }
+          }
+        },
+        {
+          "description": "Ingest answered 401 at the dial. The app was not imported.",
+          "type": "object",
+          "required": ["outcome"],
+          "properties": {
+            "outcome": { "const": "token_rejected" }
+          }
+        },
+        {
+          "description": "The dial failed for another reason, after about 10 s of retries. The app was not imported.",
+          "type": "object",
+          "required": ["outcome", "message"],
+          "properties": {
+            "outcome": { "const": "dial_failed" },
+            "message": { "type": "string" }
+          }
+        },
+        {
+          "description": "The import failed. `exit_code` is null when it never exited on its own (couldn't start, timed out, killed by a signal); `message` then says why, and also covers an import that exited 0 without a usable manifest. `stderr_tail` is the last 4 KiB of its stderr.",
+          "type": "object",
+          "required": ["outcome", "exit_code", "stderr_tail"],
+          "properties": {
+            "outcome": { "const": "import_failed" },
+            "exit_code": { "type": ["integer", "null"] },
+            "stderr_tail": { "type": "string" },
+            "message": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "error": {
+      "description": "A refused request: 400 `bad_request`, 409 `busy` (a turn is running on this instance), 413 `too_large`; 500 `internal` only if the sidecar itself failed.",
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": { "enum": ["bad_request", "busy", "too_large", "internal"] },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

@@ -31,7 +31,9 @@ futures = { workspace = true }
 bytes = "1"
 tracing = { workspace = true }
 thiserror = { workspace = true }
+# Serve mode's HTTP server (src/serve.rs).
+axum = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
 sqlx = { workspace = true }

@@ -8,6 +8,7 @@
 pub mod dispatch;
 pub mod invoke;
 pub mod runner;
+pub mod serve;
 pub mod service;
 pub mod sidecar;
 pub mod testing;
