@@ -209,7 +209,8 @@ types (`sidecar.schema.json`):
     The turn then runs over this protocol unchanged.
   - The request is held open until the turn ends, then answered `turn_ended` (also when
     the server took the turn back mid-turn), or `token_rejected` when ingest refused the
-    token before any turn started, so nothing ran.
+    token before any turn started, so nothing ran. If no dial is accepted within 120 s,
+    longer than any server's wake deadline, it gives up and answers `dial_failed`.
   - `POST /manifest` dials ingest with a registration token first. Only if the upgrade
     is accepted does it import the app, the same way managed builds do, and return the
     manifest.

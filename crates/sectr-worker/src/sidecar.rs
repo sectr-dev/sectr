@@ -15,8 +15,9 @@
 //! never reads their contents — only success/failure matters to it).
 //!
 //! Reconnect semantics: [`SidecarClient::run`] dials forever with capped
-//! exponential backoff; each connection serves assignments until the WS
-//! dies. A turn that loses its WS mid-flight keeps running — its next
+//! exponential backoff (serve mode gives up if no dial is accepted within
+//! [`SidecarConfig::dial_window`]); each connection serves assignments
+//! until the WS dies. A turn that loses its WS mid-flight keeps running — its next
 //! append reconnects and replays. If the server's reconciler aborted the
 //! turn meanwhile, the appends are rejected (`Conflict`) and the turn ends
 //! via [`TurnResult::IngestFailed`].
@@ -53,6 +54,14 @@ pub struct SidecarConfig {
   /// First reconnect delay; doubles up to [`Self::max_backoff`].
   pub reconnect_backoff: Duration,
   pub max_backoff: Duration,
+  /// Give up, with [`RunExit::DialFailed`], when no dial has been accepted
+  /// within this long of the run's start. Serve mode sets it: an instance
+  /// that can't reach ingest would otherwise dial, and bill its owner,
+  /// until the platform's request timeout, long after the server failed
+  /// the turn. `None` (env mode) dials forever. Once a dial is accepted it
+  /// no longer applies: a turn that loses its connection redials until the
+  /// server takes the turn back.
+  pub dial_window: Option<Duration>,
 }
 
 /// Spawns/stops the user process per invocation (the real implementation is
@@ -106,7 +115,7 @@ const POST_TURN_POLICY: PostTurnPolicy = PostTurnPolicy::Exit;
 
 /// How [`SidecarClient::run`] returned. Env mode exits either way; serve
 /// mode reports it as the wake's outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunExit {
   /// A turn boundary: the invocation ended (sentinel, approval
   /// suspension or failure; the journal holds which). The turn task has
@@ -120,6 +129,9 @@ pub enum RunExit {
   /// The turn task was aborted and the runner stopped; the server's
   /// reconciler ends the turn in the journal.
   Reclaimed,
+  /// No dial was accepted within [`SidecarConfig::dial_window`]: ingest
+  /// was unreachable, so nothing ran. Carries the last dial error.
+  DialFailed(String),
 }
 
 /// How one `serve_once` connection ended (besides errors).
@@ -160,6 +172,9 @@ struct Conn {
   /// process that lives across runs (serve mode) never has a turn from an
   /// earlier run still touching the runner.
   turn_task: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
+  /// Set once ingest has accepted a dial: [`SidecarConfig::dial_window`]
+  /// no longer applies.
+  dialed: Arc<AtomicBool>,
 }
 
 impl Conn {
@@ -170,7 +185,12 @@ impl Conn {
       turn_boundary: Arc::new(AtomicBool::new(false)),
       boundary_notify: Arc::new(Notify::new()),
       turn_task: Arc::new(std::sync::Mutex::new(None)),
+      dialed: Arc::new(AtomicBool::new(false)),
     }
+  }
+
+  fn dialed(&self) -> bool {
+    self.dialed.load(Ordering::Acquire)
   }
 
   fn take_turn_task(&self) -> Option<JoinHandle<()>> {
@@ -232,7 +252,8 @@ impl SidecarClient {
   /// turn-boundary policy says the process terminates (`PostTurnPolicy::
   /// Exit` — the default: every turn boundary ends the process) or on an
   /// unauthorized dial (the token is no longer valid — grant dropped:
-  /// boundary, server restart, or revocation). Everything else
+  /// boundary, server restart, or revocation), or when no dial was
+  /// accepted within [`SidecarConfig::dial_window`]. Everything else
   /// reconnects forever (mid-turn connection losses reconnect and replay;
   /// the turn task survives reconnects via the shared `Conn`).
   ///
@@ -259,12 +280,26 @@ impl SidecarClient {
         self.spawner.stop().await;
         RunExit::Reclaimed
       }
+      // Not reached: a turn task means a dial was accepted, after which
+      // the window no longer applies. Stopped like a reclaim regardless.
+      RunExit::DialFailed(e) => {
+        task.abort();
+        let _ = task.await;
+        self.spawner.stop().await;
+        RunExit::DialFailed(e)
+      }
     }
   }
 
   async fn run_loop(&self, conn: &Conn) -> RunExit {
     let mut backoff = self.config.reconnect_backoff;
+    let dial_deadline = self
+      .config
+      .dial_window
+      .map(|window| tokio::time::Instant::now() + window);
     loop {
+      // The window applies only until a dial is accepted.
+      let dial_deadline = dial_deadline.filter(|_| !conn.dialed());
       // A boundary that fired while we were between connections
       // (e.g. the turn ended with IngestFailed during a reconnect
       // gap) — the policy still applies.
@@ -274,7 +309,7 @@ impl SidecarClient {
           ServeFlow::Reconnect => {}
         }
       }
-      match self.serve_once(conn).await {
+      match self.serve_once(conn, dial_deadline).await {
         Ok(ServeFlow::Exit) => return RunExit::Boundary,
         Ok(ServeFlow::Reconnect) => {
           // Clean close: dial again immediately.
@@ -285,6 +320,12 @@ impl SidecarClient {
           return RunExit::Unauthorized;
         }
         Err(ServeError::Other(e)) => {
+          if let Some(deadline) = dial_deadline.filter(|_| !conn.dialed())
+            && tokio::time::Instant::now() + backoff >= deadline
+          {
+            tracing::warn!(error = %e, "ingest unreachable for the whole dial window; giving up");
+            return RunExit::DialFailed(e);
+          }
           tracing::warn!(error = %e, "ingest connection lost; reconnecting");
           tokio::time::sleep(backoff).await;
           backoff = (backoff * 2).min(self.config.max_backoff);
@@ -315,7 +356,14 @@ impl SidecarClient {
     }
   }
 
-  async fn serve_once(&self, conn: &Conn) -> Result<ServeFlow, ServeError> {
+  /// One connection. `dial_deadline`: the dial itself gives up then (a
+  /// dial to an address that never answers otherwise waits for the OS's
+  /// connect timeout, minutes).
+  async fn serve_once(
+    &self,
+    conn: &Conn,
+    dial_deadline: Option<tokio::time::Instant>,
+  ) -> Result<ServeFlow, ServeError> {
     let mut request: tokio_tungstenite::tungstenite::http::Request<()> = self
       .config
       .ingest_url
@@ -327,17 +375,22 @@ impl SidecarClient {
       HeaderValue::from_str(&format!("Bearer {}", self.config.ingest_token))
         .map_err(|e| ServeError::Other(e.to_string()))?,
     );
-    let (ws, _) = tokio_tungstenite::connect_async(request)
-      .await
-      .map_err(|e| match e {
-        tokio_tungstenite::tungstenite::Error::Http(response)
-          if response.status()
-            == tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED =>
-        {
-          ServeError::Unauthorized
-        }
-        e => ServeError::Other(e.to_string()),
-      })?;
+    let dial = tokio_tungstenite::connect_async(request);
+    let dialed = match dial_deadline {
+      Some(deadline) => tokio::time::timeout_at(deadline, dial)
+        .await
+        .map_err(|_| ServeError::Other("timed out".into()))?,
+      None => dial.await,
+    };
+    let (ws, _) = dialed.map_err(|e| match e {
+      tokio_tungstenite::tungstenite::Error::Http(response)
+        if response.status() == tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED =>
+      {
+        ServeError::Unauthorized
+      }
+      e => ServeError::Other(e.to_string()),
+    })?;
+    conn.dialed.store(true, Ordering::Release);
     tracing::info!("ingest connection established");
     let (mut write, mut read) = ws.split();
 

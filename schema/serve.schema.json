@@ -41,11 +41,12 @@
       }
     },
     "wakeResponse": {
-      "description": "`POST /wake` (200), sent when the invocation is over. `turn_ended`: a turn ran and is over: a turn boundary (sentinel, approval suspension or failure), or the server took the turn back mid-turn (a reclaim or a restart, after which its token is refused); the journal holds how it ended. `token_rejected`: ingest answered 401 before any turn started, so nothing ran.",
+      "description": "`POST /wake` (200), sent when the invocation is over. `turn_ended`: a turn ran and is over: a turn boundary (sentinel, approval suspension or failure), or the server took the turn back mid-turn (a reclaim or a restart, after which its token is refused); the journal holds how it ended. `token_rejected`: ingest answered 401 before any turn started, so nothing ran. `dial_failed`: no dial to ingest was accepted within 120 s (longer than any server's wake deadline, so the server has already failed the turn), so nothing ran; `message` says why. Once a dial is accepted, a turn that loses its connection redials until the server takes the turn back.",
       "type": "object",
       "required": ["outcome"],
       "properties": {
-        "outcome": { "enum": ["turn_ended", "token_rejected"] }
+        "outcome": { "enum": ["turn_ended", "token_rejected", "dial_failed"] },
+        "message": { "type": "string", "description": "With `dial_failed`: the last dial's error." }
       }
     },
     "manifestRequest": {

@@ -56,6 +56,13 @@ pub const DEFAULT_PORT: u16 = 8080;
 /// Request bodies are small JSON objects: anything bigger is refused (413).
 pub const BODY_LIMIT: usize = 4 * 1024;
 
+/// How long a wake keeps dialing an ingest that doesn't answer. Past the
+/// longest wake deadline a server may set, so the server has given up on
+/// the turn first (and says why in the journal); the bound is what the
+/// customer pays for an instance that can't reach ingest.
+pub const WAKE_DIAL_WINDOW: Duration =
+  Duration::from_secs(sectr_common::endpoint::MAX_WAKE_DEADLINE_SECS + 30);
+
 /// Serve-mode configuration. [`ServeConfig::from_env`] fills it for the
 /// binary; tests build it directly.
 #[derive(Debug, Clone)]
@@ -72,6 +79,9 @@ pub struct ServeConfig {
   /// How long `POST /manifest` retries a dial that fails for a reason
   /// other than a rejected token.
   pub dial_retry_window: Duration,
+  /// How long `POST /wake` retries a dial before it answers `dial_failed`
+  /// ([`WAKE_DIAL_WINDOW`] by default).
+  pub wake_dial_window: Duration,
   /// How long the manifest import may run before it's killed.
   pub import_timeout: Duration,
 }
@@ -127,6 +137,7 @@ impl ServeConfig {
       app_dir: PathBuf::from("/app"),
       python: "python3".into(),
       dial_retry_window: Duration::from_secs(10),
+      wake_dial_window: WAKE_DIAL_WINDOW,
       import_timeout: Duration::from_secs(60),
     })
   }
@@ -287,27 +298,33 @@ async fn wake(
       runner_base: state.config.runner_base.clone(),
       reconnect_backoff: Duration::from_millis(250),
       max_backoff: Duration::from_secs(10),
+      dial_window: Some(state.config.wake_dial_window),
     },
     state.spawner.clone(),
   );
+  let ingest_url = state.config.ingest_url.clone();
   let run = tokio::spawn(async move {
     let _permit = permit;
     let exit = client.run().await;
-    let outcome_name = match exit {
+    let answer = match &exit {
       // A reclaimed turn ran: the journal holds how it ended.
-      RunExit::Boundary | RunExit::Reclaimed => "turn_ended",
-      RunExit::Unauthorized => "token_rejected",
+      RunExit::Boundary | RunExit::Reclaimed => json!({"outcome": "turn_ended"}),
+      RunExit::Unauthorized => json!({"outcome": "token_rejected"}),
+      RunExit::DialFailed(e) => json!({
+        "outcome": "dial_failed",
+        "message": format!("dial {ingest_url}: {e}"),
+      }),
     };
     tracing::info!(
-      outcome = outcome_name,
+      outcome = answer["outcome"].as_str().unwrap_or_default(),
       exit = ?exit,
       duration_ms = started.elapsed().as_millis() as u64,
       "wake finished"
     );
-    outcome_name
+    answer
   });
   match run.await {
-    Ok(outcome_name) => outcome(json!({"outcome": outcome_name})),
+    Ok(answer) => outcome(answer),
     // Only a panic in the turn's own code gets here.
     Err(e) => {
       tracing::error!(error = %e, "wake task failed");

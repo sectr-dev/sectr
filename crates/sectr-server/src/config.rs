@@ -437,6 +437,7 @@ impl EndpointConfig {
     fn set(v: Option<&str>) -> Option<&str> {
       v.map(str::trim).filter(|v| !v.is_empty())
     }
+    use sectr_common::endpoint::MAX_WAKE_DEADLINE_SECS;
     let defaults = EndpointConfig::default();
     let ingest_url = match set(ingest_url) {
       None => None,
@@ -461,10 +462,12 @@ impl EndpointConfig {
       Some(v) => v
         .parse::<u64>()
         .ok()
-        .filter(|s| (5..=90).contains(s))
+        .filter(|s| (5..=MAX_WAKE_DEADLINE_SECS).contains(s))
         .map(std::time::Duration::from_secs)
         .ok_or_else(|| {
-          anyhow::anyhow!("SECTR_ENDPOINT_WAKE_DEADLINE_SECS={v:?} must be 5 to 90 seconds")
+          anyhow::anyhow!(
+            "SECTR_ENDPOINT_WAKE_DEADLINE_SECS={v:?} must be 5 to {MAX_WAKE_DEADLINE_SECS} seconds"
+          )
         })?,
     };
     let turn_timeout = match set(turn_timeout) {

@@ -26,6 +26,12 @@ pub const DIAL_FAILED: &str = "couldn't reach";
 /// A wake whose sidecar never took the turn in time.
 pub const WAKE_TIMEOUT: &str = "did not start the turn within";
 
+/// The longest wake deadline a server may set
+/// (`SECTR_ENDPOINT_WAKE_DEADLINE_SECS`). A serve-mode sidecar that has
+/// dialed nothing for longer than this gives up on its wake: the server has
+/// already failed the turn.
+pub const MAX_WAKE_DEADLINE_SECS: u64 = 90;
+
 /// Where an endpoint runs, as far as its URL tells: hints differ per
 /// platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -913,6 +913,7 @@ async fn full_loop_real_sidecar_client_and_fake_runner() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
@@ -959,6 +960,7 @@ async fn full_loop_real_sidecar_client_and_fake_runner() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
@@ -1011,6 +1013,7 @@ async fn approval_flow_through_the_real_sidecar() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
@@ -1054,6 +1057,7 @@ async fn approval_flow_through_the_real_sidecar() {
       runner_base: format!("http://127.0.0.1:{port}"),
       reconnect_backoff: std::time::Duration::from_millis(100),
       max_backoff: std::time::Duration::from_millis(500),
+      dial_window: None,
     },
     Arc::new(sectr_worker::sidecar::ExternalRunner),
   );
