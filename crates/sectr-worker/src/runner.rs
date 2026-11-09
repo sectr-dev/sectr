@@ -4,7 +4,12 @@
 //!
 //! Dev-parity decisions carried over:
 //! - **One fresh runner process per invocation** (`start` kills any prior
-//!   child; `stop` kills after the turn) — statelessness is the design.
+//!   runner; `stop` kills after the turn) — statelessness is the design.
+//!   A kill is a [`UserProcess`] kill: the whole process group, so the
+//!   python behind `uv run` goes too. And `start` refuses to run while the
+//!   port still answers: in serve mode one sidecar runs many turns, and a
+//!   leftover listener would pass the readiness poll and serve the next
+//!   turn from the previous turn's process.
 //! - **Readiness = TCP poll on the runner's `$SECTR_PORT`** with a
 //!   deadline; the deadline is spawn-failure detection, NOT liveness.
 //! - Env = `SECTR_PORT` + the assignment's resolved secrets + the
@@ -21,10 +26,10 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 
-use sectr_common::drivers::{RunnerExit, StderrTail, startup_failure_message};
+use sectr_common::drivers::{RunnerExit, StderrTail, UserProcess, startup_failure_message};
 use sectr_common::sidecar::{APPROVAL_POLICY_ENV, Assignment, approval_policy_env};
 
 use crate::sidecar::RunnerSpawner;
@@ -52,10 +57,13 @@ impl Default for SubprocessRunnerConfig {
   }
 }
 
+/// How long `start` waits for the previous runner's port to close.
+const PORT_FREE_DEADLINE: Duration = Duration::from_secs(5);
+
 /// Spawns the assignment's user process inside the container.
 pub struct SubprocessRunner {
   config: SubprocessRunnerConfig,
-  child: Mutex<Option<(Child, StderrTail)>>,
+  child: Mutex<Option<(UserProcess, StderrTail)>>,
 }
 
 impl SubprocessRunner {
@@ -68,11 +76,28 @@ impl SubprocessRunner {
 
   async fn kill_current(&self) {
     let mut child = self.child.lock().await;
-    if let Some((mut c, _)) = child.take()
-      && c.kill().await.is_err()
-    {
-      // Already exited — fine.
+    if let Some((mut process, _)) = child.take() {
+      let _ = process.kill().await;
     }
+  }
+
+  /// Wait until nothing answers on the runner port, so the readiness poll
+  /// can only find the runner `start` is about to spawn. A runner that
+  /// escaped its process group (it started a new session) would still
+  /// hold the port: that's a startup failure, never a turn served by it.
+  async fn wait_port_free(&self) -> Result<(), String> {
+    let addr: SocketAddr = ([127, 0, 0, 1], self.config.port).into();
+    let deadline = tokio::time::Instant::now() + PORT_FREE_DEADLINE;
+    while tokio::net::TcpStream::connect(addr).await.is_ok() {
+      if tokio::time::Instant::now() >= deadline {
+        return Err(format!(
+          "{addr} still answers after the previous runner was stopped: a process outside the \
+           runner's process group holds the port, and a new runner can't be started"
+        ));
+      }
+      tokio::time::sleep(self.config.ready_poll_interval).await;
+    }
+    Ok(())
   }
 
   /// TCP-poll the runner port until it accepts (dev parity: the
@@ -90,7 +115,7 @@ impl SubprocessRunner {
       let Some((process, stderr)) = child.as_mut() else {
         return Err("the runner was stopped during startup".into());
       };
-      if let Ok(Some(status)) = process.try_wait() {
+      if let Ok(Some(status)) = process.child().try_wait() {
         let what = format!(
           "the runner exited during startup ({})",
           RunnerExit::from(status)
@@ -118,6 +143,7 @@ impl RunnerSpawner for SubprocessRunner {
   /// the assignment env, and wait for the port to bind.
   async fn start(&self, assignment: &Assignment) -> Result<(), String> {
     self.kill_current().await;
+    self.wait_port_free().await?;
     if assignment.runner.command.is_empty() {
       return Err("assignment has no runner command".into());
     }
@@ -147,12 +173,11 @@ impl RunnerSpawner for SubprocessRunner {
       cmd.current_dir(workdir);
     }
     cmd.stderr(std::process::Stdio::piped());
-    let mut child = cmd
-      .spawn()
+    let mut process = UserProcess::spawn(&mut cmd)
       .map_err(|e| format!("spawn runner {:?}: {e}", assignment.runner.command))?;
-    let stderr = child.stderr.take().expect("stderr is piped");
+    let stderr = process.child().stderr.take().expect("stderr is piped");
     let stderr = StderrTail::tee(stderr, tokio::io::stderr());
-    *self.child.lock().await = Some((child, stderr));
+    *self.child.lock().await = Some((process, stderr));
     self.wait_ready().await?;
     Ok(())
   }

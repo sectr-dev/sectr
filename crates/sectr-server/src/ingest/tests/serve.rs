@@ -48,9 +48,11 @@ fn temp_path(what: &str) -> std::path::PathBuf {
   std::env::temp_dir().join(format!("sectr-serve-{what}-{}", uuid::Uuid::now_v7()))
 }
 
-/// The deployment's runner: the python fake runner, behind a shell that
-/// logs its pid and, with `delay_secs`, waits before serving (so a turn is
-/// still running while a test sends a second request).
+/// The deployment's runner: the python fake runner, started by a wrapper
+/// shell as ITS child, the way `uv run` starts python (no `exec`): killing
+/// only the direct child would leave the agent running. The shell logs
+/// the agent's pid and, with `delay_secs`, waits before starting it (so a
+/// turn is still running while a test sends a second request).
 fn fake_runner_manifest(
   frames: &std::path::Path,
   pids: &std::path::Path,
@@ -62,7 +64,10 @@ fn fake_runner_manifest(
     "runner": {
       "command": [
         "sh", "-c",
-        format!("echo $$ >> '{}'; sleep {delay_secs}; exec python3 '{script}'", pids.display()),
+        format!(
+          "sleep {delay_secs}; python3 '{script}' & echo $! >> '{}'; wait $!",
+          pids.display()
+        ),
       ],
       "env": {"SECTR_FRAMES_FILE": frames.to_string_lossy()},
     },
@@ -176,6 +181,36 @@ impl Relay {
   }
 }
 
+/// A test's agents are killed when it ends, pass or fail: a survivor
+/// (when the code under test is broken) would hold cargo's pipes open and
+/// hang the run.
+impl Drop for Serve {
+  fn drop(&mut self) {
+    for pid in self.pids() {
+      let _ = std::process::Command::new("kill")
+        .args(["-9", &pid])
+        .status();
+    }
+  }
+}
+
+/// Whether the process `pid` has ended (a zombie counts: it no longer
+/// runs or holds a port). Polls, since a SIGKILL lands asynchronously.
+async fn agent_gone(pid: &str) -> bool {
+  for _ in 0..40 {
+    let out = std::process::Command::new("ps")
+      .args(["-o", "stat=", "-p", pid])
+      .output()
+      .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    if stat.trim().is_empty() || stat.trim().starts_with('Z') {
+      return true;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+  }
+  false
+}
+
 async fn post_raw(
   http: &reqwest::Client,
   url: String,
@@ -274,6 +309,11 @@ async fn two_wakes_in_a_row_run_two_turns_in_fresh_runners() {
   let (status, body) = s.wake(json!({"ingest_token": token})).await;
   assert_eq!((status, body), (200, json!({"outcome": "turn_ended"})));
   wait_lease_gone(&s.w).await;
+  // The agent itself is gone, not just its wrapper: a survivor would keep
+  // the port and serve the next turn.
+  let first = s.pids();
+  assert_eq!(first.len(), 1, "{first:?}");
+  assert!(agent_gone(&first[0]).await, "turn 1's agent survived");
 
   sectr_worker::testing::script_turn(
     &s.frames,
@@ -310,6 +350,7 @@ async fn two_wakes_in_a_row_run_two_turns_in_fresh_runners() {
   let pids = s.pids();
   assert_eq!(pids.len(), 2, "one runner per turn: {pids:?}");
   assert_ne!(pids[0], pids[1], "the second turn ran a fresh runner");
+  assert!(agent_gone(&pids[1]).await, "turn 2's agent survived");
   assert_eq!(s.runner.starts.load(Ordering::SeqCst), 2);
   assert_eq!(s.runner.stops.load(Ordering::SeqCst), 2);
 }

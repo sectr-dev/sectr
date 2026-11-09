@@ -18,7 +18,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::io::AsyncWrite;
 
-use crate::drivers::StderrTail;
+use crate::drivers::{StderrTail, UserProcess};
 
 /// The manifest file the import writes is refused above this size.
 pub const MANIFEST_CAP: u64 = 16 * 1024 * 1024;
@@ -96,8 +96,8 @@ pub async fn run_import(
 }
 
 /// The manifest file, removed when the import is over, including when its
-/// future is dropped mid-import (the request was cancelled; `kill_on_drop`
-/// ends the child).
+/// future is dropped mid-import (the request was cancelled; dropping the
+/// [`UserProcess`] has already killed the import's process group).
 struct RemovedOnDrop(PathBuf);
 
 impl Drop for RemovedOnDrop {
@@ -135,30 +135,36 @@ async fn import_to(
     .env("SECTR_MANIFEST_OUT", out)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
-    .stderr(Stdio::piped())
-    .kill_on_drop(true);
-  let mut child = cmd.spawn().map_err(|e| {
+    .stderr(Stdio::piped());
+  // Its own process group, killed whole on timeout and when this future
+  // is dropped: under `uv run` the import is python's, not uv's.
+  let mut process = UserProcess::spawn(&mut cmd).map_err(|e| {
     failure(
       None,
       String::new(),
       format!("start `{}`: {e}", command.join(" ")),
     )
   })?;
-  let stderr = StderrTail::tee(child.stderr.take().expect("stderr is piped"), forward);
+  let stderr = StderrTail::tee(
+    process.child().stderr.take().expect("stderr is piped"),
+    forward,
+  );
 
   let waited = match timeout {
-    Some(limit) => tokio::time::timeout(limit, child.wait()).await.ok(),
-    None => Some(child.wait().await),
+    Some(limit) => tokio::time::timeout(limit, process.child().wait())
+      .await
+      .ok(),
+    None => Some(process.child().wait().await),
   };
   let status = match waited {
     Some(Ok(status)) => status,
     Some(Err(e)) => {
-      let _ = child.kill().await;
+      let _ = process.kill().await;
       let message = format!("wait for the import: {e}");
       return Err(failure(None, stderr.text().await, message));
     }
     None => {
-      let _ = child.kill().await;
+      let _ = process.kill().await;
       let limit = timeout.expect("only a timeout gives up waiting");
       let message = format!("the import didn't finish within {limit:?}");
       return Err(failure(None, stderr.text().await, message));
@@ -262,6 +268,54 @@ mod tests {
     let out = std::fs::read_to_string(&seen).unwrap();
     assert!(!Path::new(out.trim()).exists(), "{out} was left behind");
     std::fs::remove_file(&seen).unwrap();
+  }
+
+  /// Whether a process whose command line ends with `needle` is running.
+  async fn gone(needle: &str) -> bool {
+    for _ in 0..40 {
+      let out = std::process::Command::new("ps")
+        .args(["-axo", "command="])
+        .output()
+        .unwrap();
+      if !String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|line| line.trim().ends_with(needle))
+      {
+        return true;
+      }
+      tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+  }
+
+  #[tokio::test]
+  async fn an_import_that_times_out_or_is_cancelled_leaves_no_process() {
+    // `sh` starts sleep as its own child, the way `uv run` starts python.
+    let timed_out = run(
+      &sh("sleep 59.1241 & wait $!"),
+      Some(Duration::from_millis(300)),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+      timed_out.to_string().contains("didn't finish within"),
+      "{timed_out}"
+    );
+    assert!(
+      gone("sleep 59.1241").await,
+      "a timed-out import kept running"
+    );
+
+    let cancelled = tokio::time::timeout(
+      Duration::from_millis(300),
+      run(&sh("sleep 59.1242 & wait $!"), None),
+    )
+    .await;
+    assert!(cancelled.is_err(), "the import was still running");
+    assert!(
+      gone("sleep 59.1242").await,
+      "a cancelled import kept running"
+    );
   }
 
   #[tokio::test]

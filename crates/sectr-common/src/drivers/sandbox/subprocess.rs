@@ -11,9 +11,8 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use tokio::process::Child;
 
-use super::{RunnerExit, RunnerHandle, RunnerSpec, SandboxDriver, StderrTail};
+use super::{RunnerExit, RunnerHandle, RunnerSpec, SandboxDriver, StderrTail, UserProcess};
 use crate::drivers::{DriverError, Result};
 
 /// Dev [`SandboxDriver`]: spawn the user's code as a plain subprocess.
@@ -48,17 +47,7 @@ impl SandboxDriver for SubprocessDriver {
       return Err(DriverError::Spawn("empty command".into()));
     }
     let mut cmd = tokio::process::Command::new(&spec.command[0]);
-    cmd
-      .args(&spec.command[1..])
-      // Teardown hygiene: an abandoned handle must not orphan a runner.
-      .kill_on_drop(true)
-      // Own process group: the runner command usually WRAPS the real
-      // process (`uv run python -m sectr.server …`), and killing the
-      // direct child would orphan its children. With the child as
-      // group leader, `kill()` tears down the whole group.
-      // (Detach side effect: terminal Ctrl-C doesn't reach the runner —
-      // deliberate; graceful turn-aware shutdown is the CLI's job.)
-      .process_group(0);
+    cmd.args(&spec.command[1..]);
     if let Some(workdir) = &spec.workdir {
       cmd.current_dir(workdir);
     }
@@ -76,17 +65,17 @@ impl SandboxDriver for SubprocessDriver {
           .await?,
       ),
     };
-    let mut child = cmd
-      .spawn()
+    // Its own process group, killed whole (and on drop): see UserProcess.
+    let mut process = UserProcess::spawn(&mut cmd)
       .map_err(|e| DriverError::Spawn(format!("{}: {e}", spec.command.join(" "))))?;
-    let stderr = child.stderr.take().expect("stderr is piped");
+    let stderr = process.child().stderr.take().expect("stderr is piped");
     let stderr = StderrTail::tee(stderr, forward);
-    Ok(Box::new(SubprocessHandle { child, stderr }))
+    Ok(Box::new(SubprocessHandle { process, stderr }))
   }
 }
 
 struct SubprocessHandle {
-  child: Child,
+  process: UserProcess,
   stderr: StderrTail,
 }
 
@@ -94,29 +83,21 @@ struct SubprocessHandle {
 impl RunnerHandle for SubprocessHandle {
   fn id(&self) -> String {
     self
-      .child
+      .process
       .id()
       .map(|pid| format!("pid-{pid}"))
       .unwrap_or_else(|| "pid-<exited>".into())
   }
 
   async fn wait(&mut self) -> Result<RunnerExit> {
-    Ok(self.child.wait().await?.into())
+    Ok(self.process.child().wait().await?.into())
   }
 
   async fn kill(&mut self) -> Result<()> {
-    // SIGKILL the process GROUP (the child was spawned as its own group
-    // leader — see `spawn`): covers the wrapped real process, e.g. the
-    // python behind `uv run …`. Only the direct child would leave it
-    // orphaned — that's how a surviving runner pinned a stdout pipe open
-    // and hung the CLI's consumer (found 2026-09-10 running sectr dev).
-    #[cfg(unix)]
-    if let Some(pid) = self.child.id() {
-      unsafe {
-        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-      }
-    }
-    self.child.kill().await?;
+    // The whole group: the python behind `uv run …` too. Only the direct
+    // child would leave it orphaned, which is how a surviving runner
+    // pinned a stdout pipe open and hung the CLI (2026-09-10).
+    self.process.kill().await?;
     Ok(())
   }
 
