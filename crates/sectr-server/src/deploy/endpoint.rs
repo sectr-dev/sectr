@@ -5,9 +5,12 @@
 //! answers `202` like a deploy:
 //!
 //! 1. Synchronously, with a 4xx on failure: parse `sectr.toml`, apply the
-//!    URL rules, the shared deploy start ([`super::prepare_deploy`]), and
-//!    probe the endpoint (`GET /` must be a serve-mode sidecar). The row is
-//!    created in `building` with its `endpoint_url`.
+//!    URL rules, probe the endpoint (`GET /` must be a serve-mode sidecar),
+//!    then the shared deploy start ([`super::prepare_deploy`]). The probe
+//!    comes first because it can take a cold start's time: the deploy
+//!    start creates the app on first use and picks the next version, which
+//!    the row then takes at once. The row is created in `building` with
+//!    its `endpoint_url`.
 //! 2. In the background: mint a registration token, ask the endpoint for
 //!    its manifest (`POST /manifest`, which dials this server with the
 //!    token before importing the app in the deployed image), and require
@@ -99,16 +102,18 @@ pub(super) async fn register_endpoint(
     Ok(url) => url,
     Err(e) => return unprocessable(e),
   };
+  // Before the deploy start: a failed probe leaves no new app behind, and
+  // the version the deploy start picks isn't held through a cold start.
+  let probe = match endpoints.probe(&url).await {
+    Ok(probe) => probe,
+    Err(e) => return unprocessable(e),
+  };
   let (app, version) = match prepare_deploy(&state, org_id, &parsed).await {
     Ok(prepared) => prepared,
     Err(e) => {
       tracing::warn!(error = %e, "endpoint deployment rejected");
       return unprocessable(e);
     }
-  };
-  let probe = match endpoints.probe(&url).await {
-    Ok(probe) => probe,
-    Err(e) => return unprocessable(e),
   };
   let mut warnings = Vec::new();
   let ours = env!("CARGO_PKG_VERSION");

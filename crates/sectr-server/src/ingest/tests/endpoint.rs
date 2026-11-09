@@ -962,6 +962,27 @@ async fn registration_refuses_an_endpoint_that_isnt_a_serve_mode_sidecar() {
   let (status, body) = register(&w, &format!("http://127.0.0.1:{}", free_port())).await;
   assert_eq!(status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
   assert!(body.contains("could not connect"), "{body}");
+  // The probe runs before the deploy start: a refused first registration
+  // leaves no new app behind.
+  let org_id = w
+    .registry
+    .get_app(
+      w.registry
+        .get_deployment(w.deployment_id)
+        .await
+        .unwrap()
+        .app_id,
+    )
+    .await
+    .unwrap()
+    .org_id;
+  assert!(
+    w.registry
+      .find_app_by_slug(org_id, "edge-agent")
+      .await
+      .unwrap()
+      .is_none()
+  );
 }
 
 #[tokio::test]
