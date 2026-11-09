@@ -301,8 +301,10 @@ impl EndpointPlatform {
       }
       Err(failure) => {
         // A delivery that raced the failure wins: the sidecar is running
-        // the turn, and failing the spawn now would strand it.
-        if *delivered.borrow() {
+        // the turn, and failing the spawn now would strand it. Checked and
+        // the grant dropped in one step, so no sidecar can take the turn
+        // in between (the dispatcher's own drop then finds nothing).
+        if !hub.fail_undelivered_spawn(session).await {
           record("delivered");
           return Ok(Some(handle));
         }

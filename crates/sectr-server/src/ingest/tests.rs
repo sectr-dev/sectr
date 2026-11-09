@@ -2327,6 +2327,33 @@ async fn delivery_is_signalled_when_the_sidecar_takes_the_assignment() {
   );
 }
 
+/// A wake that gives up drops the turn's grant only while no sidecar has
+/// taken it; once one has, the turn is running and the grant stays.
+#[tokio::test]
+async fn a_given_up_wake_drops_only_an_untaken_grant() {
+  let Some(w) = world(30).await else { return };
+  let token = ingest_token(&w).await;
+  let mut ws = dial(&w, &token).await;
+  assert_eq!(recv_json(&mut ws, "assignment").await["kind"], "assignment");
+  assert!(
+    !w.hub.fail_undelivered_spawn(w.session).await,
+    "taken: reported delivered"
+  );
+  assert!(
+    w.hub.delivery_watch(w.session).await.is_some(),
+    "the running turn keeps its grant"
+  );
+
+  // Untaken: dropped, and the token is dead.
+  let Some(w) = world(30).await else { return };
+  let token = ingest_token(&w).await;
+  assert!(w.hub.fail_undelivered_spawn(w.session).await);
+  assert!(w.hub.delivery_watch(w.session).await.is_none());
+  assert_eq!(dial_status(&w, &token).await, Err(401));
+  // No grant at all: nothing to report delivered.
+  assert!(w.hub.fail_undelivered_spawn(uuid::Uuid::now_v7()).await);
+}
+
 async fn dial_status(w: &World, token: &str) -> Result<(), u16> {
   let mut request = format!("ws://{}/ingest", w.addr)
     .into_client_request()

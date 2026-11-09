@@ -392,6 +392,25 @@ impl IngestHub {
     }
   }
 
+  /// A wake gave up on its turn: drop the grant as [`Self::fail_first_spawn`]
+  /// does, but only if no sidecar has taken the assignment, in the same
+  /// lock `take_assignment` takes it in. False when it was taken: the turn
+  /// is running, and the wake must report it delivered instead of failing
+  /// a turn whose sidecar has already started the agent. True when the
+  /// grant is gone, dropped now or before.
+  pub async fn fail_undelivered_spawn(&self, session: Uuid) -> bool {
+    let mut inner = self.inner.lock().await;
+    match inner.grants.get(&session) {
+      Some(grant) if *grant.delivered.borrow() => false,
+      Some(_) => {
+        let grant = inner.grants.remove(&session).expect("just found");
+        inner.by_token.remove(&grant.token_hash);
+        true
+      }
+      None => true,
+    }
+  }
+
   /// Verify an ingest token and attach the connection. Replaces any
   /// existing connection for the session (the old one is stale — the
   /// sidecar reconnects after a drop).
