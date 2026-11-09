@@ -167,18 +167,19 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
       config_path.display()
     )
   })?;
-  let mode = deploy_mode(&manifest_toml)?;
-  if mode == Mode::EndpointUnset {
-    anyhow::bail!("{}", unset_endpoint_message());
-  }
+  // An endpoint that isn't deployed yet stops here, before the server is
+  // resolved; only `Managed` reaches the managed deploy.
+  let endpoint = match deploy_mode(&manifest_toml)? {
+    Mode::EndpointUnset => anyhow::bail!("{}", unset_endpoint_message()),
+    Mode::Endpoint(url) => Some(url),
+    Mode::Managed => None,
+  };
 
   let target = crate::auth::resolve(args.api.as_deref(), args.key.as_deref())?;
   let timeout = Duration::from_secs(args.timeout_secs);
-  match mode {
-    Mode::Endpoint(url) => deploy_endpoint(&target, manifest_toml, &url, timeout).await,
-    Mode::Managed | Mode::EndpointUnset => {
-      deploy_managed(&target, &project, manifest_toml, timeout).await
-    }
+  match endpoint {
+    Some(url) => deploy_endpoint(&target, manifest_toml, &url, timeout).await,
+    None => deploy_managed(&target, &project, manifest_toml, timeout).await,
   }
 }
 
