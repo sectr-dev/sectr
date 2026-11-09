@@ -96,7 +96,10 @@ impl Platform {
            --timeout 3600 --concurrency 1"
       )],
       Platform::Container => vec![
-        format!("1. docker build -t {app_name} ."),
+        // Without --platform, an Apple Silicon Mac builds arm64, which an
+        // amd64 host can't run.
+        format!("1. docker build --platform linux/amd64 -t {app_name} ."),
+        "   (--platform linux/arm64 instead if your platform runs on Arm)".to_owned(),
         "2. run it with its port published and PORT set (8080 by default), behind HTTPS, \
          with requests allowed to last as long as a turn"
           .to_owned(),
@@ -597,6 +600,8 @@ mod tests {
     assert!(lambda.contains("--platform linux/amd64 --provenance=false"));
     assert!(lambda.contains("lambda:InvokeFunction "), "{lambda}");
     assert!(lambda.contains("timeout 900 s"));
+    let container = Platform::Container.next_steps("a").join("\n");
+    assert!(container.contains("--platform linux/amd64"), "{container}");
     let run = Platform::CloudRun.next_steps("a").join("\n");
     assert!(run.contains("--timeout 3600 --concurrency 1"));
   }
