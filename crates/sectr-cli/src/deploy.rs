@@ -178,7 +178,12 @@ pub async fn run_deploy(args: DeployArgs) -> anyhow::Result<()> {
   let target = crate::auth::resolve(args.api.as_deref(), args.key.as_deref())?;
   let timeout = Duration::from_secs(args.timeout_secs);
   match endpoint {
-    Some(url) => deploy_endpoint(&target, manifest_toml, &url, timeout).await,
+    Some(url) => {
+      deploy_endpoint(&target, manifest_toml, &url, timeout, &mut |line| {
+        eprintln!("{line}")
+      })
+      .await
+    }
     None => deploy_managed(&target, &project, manifest_toml, timeout).await,
   }
 }
@@ -275,8 +280,14 @@ async fn deploy_managed(
       serde_json::to_string_pretty(&body)?
     );
   }
-  track(target, &body, None, timeout).await
+  track(target, &body, None, timeout, &mut |line| {
+    eprintln!("{line}")
+  })
+  .await
 }
+
+/// Where a deploy's progress lines go: stderr, or a test's list.
+pub(crate) type Say<'a> = &'a mut (dyn FnMut(String) + Send);
 
 /// Endpoint mode: register the endpoint's URL and track its registration.
 pub(crate) async fn deploy_endpoint(
@@ -284,8 +295,11 @@ pub(crate) async fn deploy_endpoint(
   manifest_toml: String,
   endpoint_url: &str,
   timeout: Duration,
+  say: Say<'_>,
 ) -> anyhow::Result<()> {
-  eprintln!("deploying as an endpoint ([deploy] endpoint in sectr.toml): {endpoint_url}");
+  say(format!(
+    "deploying as an endpoint ([deploy] endpoint in sectr.toml): {endpoint_url}"
+  ));
   let client = reqwest::Client::builder()
     .timeout(REGISTER_REQUEST_TIMEOUT)
     .build()
@@ -322,15 +336,12 @@ pub(crate) async fn deploy_endpoint(
     .flatten()
     .filter_map(|w| w.as_str())
   {
-    eprintln!(
-      "{}",
-      with_hint(
-        format!("⚠ {warning}"),
-        Some(crate::endpoint::warning_hint(endpoint_url))
-      )
-    );
+    say(with_hint(
+      format!("⚠ {warning}"),
+      Some(crate::endpoint::warning_hint(endpoint_url)),
+    ));
   }
-  track(target, &body, Some(endpoint_url), timeout).await
+  track(target, &body, Some(endpoint_url), timeout, say).await
 }
 
 /// Poll a `202` deployment until it resolves, then report it. `endpoint`
@@ -340,6 +351,7 @@ async fn track(
   body: &serde_json::Value,
   endpoint: Option<&str>,
   timeout: Duration,
+  say: Say<'_>,
 ) -> anyhow::Result<()> {
   let key = &target.key;
   // 202 + {id, app_id, version, status: "building"}: the build resolves
@@ -361,7 +373,9 @@ async fn track(
   } else {
     "building"
   };
-  eprintln!("deployment {deployment_id}: version {version} — {doing}…");
+  say(format!(
+    "deployment {deployment_id}: version {version} — {doing}…"
+  ));
   let list_url = format!("{}/apps/{app_id}/deployments", target.api);
   let client = reqwest::Client::builder()
     .timeout(POLL_REQUEST_TIMEOUT)
@@ -408,11 +422,11 @@ async fn track(
 
   match poll_until_resolved(fetch, Duration::from_secs(2), timeout).await? {
     Resolved::Active => {
-      eprintln!("{}", active_line(version, &deployment_id, endpoint));
+      say(active_line(version, &deployment_id, endpoint));
       // Best effort too: the deploy already succeeded.
       match view_live_link(&target.api, key, &app_id).await {
-        Ok(link) => eprintln!("🚀 view live at: {link}"),
-        Err(e) => eprintln!("(could not look up the dashboard link: {e:#})"),
+        Ok(link) => say(format!("🚀 view live at: {link}")),
+        Err(e) => say(format!("(could not look up the dashboard link: {e:#})")),
       }
       // Every deployed route is also an AG-UI endpoint (CopilotKit / any
       // AG-UI client): print the full URL so the frontend needs no config.
@@ -420,13 +434,13 @@ async fn track(
       match fetch_agui_endpoints(&client, &target.api, key, &app_id).await {
         Ok(endpoints) => {
           for endpoint in endpoints {
-            eprintln!("🔌 connect via AG-UI at: {endpoint}");
+            say(format!("🔌 connect via AG-UI at: {endpoint}"));
           }
         }
-        Err(e) => eprintln!("(could not look up the AG-UI endpoints: {e})"),
+        Err(e) => say(format!("(could not look up the AG-UI endpoints: {e})")),
       }
       if endpoint.is_some() {
-        eprintln!("After you redeploy your image or change sectr.toml, run `sectr deploy` again.");
+        say("After you redeploy your image or change sectr.toml, run `sectr deploy` again.".into());
       }
       Ok(())
     }
@@ -707,14 +721,31 @@ mod tests {
       serde_json::json!({"id": "dep-1", "status": "active"}),
     )
     .await;
+    let mut lines = Vec::new();
     deploy_endpoint(
       &target,
       SECTR_TOML.into(),
       LAMBDA_URL,
       Duration::from_secs(10),
+      &mut |line| lines.push(line),
     )
     .await
     .unwrap();
+    let expected_start = [
+      format!("deploying as an endpoint ([deploy] endpoint in sectr.toml): {LAMBDA_URL}"),
+      format!(
+        "⚠ the endpoint runs sidecar 0.1.3; this server is 0.1.5.\n  hint: {}",
+        crate::endpoint::warning_hint(LAMBDA_URL)
+      ),
+      "deployment dep-1: version 4 — registering…".to_owned(),
+      format!("✓ deployed: version 4 (dep-1) is active. Turns wake {LAMBDA_URL}"),
+    ];
+    assert_eq!(lines[..4], expected_start, "{lines:#?}");
+    assert_eq!(
+      lines.last().unwrap(),
+      "After you redeploy your image or change sectr.toml, run `sectr deploy` again.",
+      "{lines:#?}"
+    );
   }
 
   #[tokio::test]
@@ -734,6 +765,7 @@ mod tests {
       SECTR_TOML.into(),
       LAMBDA_URL,
       Duration::from_secs(5),
+      &mut |_| {},
     )
     .await
     .unwrap_err()
@@ -763,6 +795,7 @@ mod tests {
       SECTR_TOML.into(),
       LAMBDA_URL,
       Duration::from_secs(10),
+      &mut |_| {},
     )
     .await
     .unwrap_err()
@@ -789,6 +822,7 @@ mod tests {
       SECTR_TOML.into(),
       LAMBDA_URL,
       Duration::from_secs(5),
+      &mut |_| {},
     )
     .await
     .unwrap_err()
