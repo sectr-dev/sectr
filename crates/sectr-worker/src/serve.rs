@@ -60,6 +60,11 @@ pub const BODY_LIMIT: usize = 4 * 1024;
 /// longest wake deadline a server may set, so the server has given up on
 /// the turn first (and says why in the journal); the bound is what the
 /// customer pays for an instance that can't reach ingest.
+///
+/// 120 s today. The contract docs state that number: change it, or
+/// [`sectr_common::endpoint::MAX_WAKE_DEADLINE_SECS`], and update
+/// `schema/serve.schema.json` (`wakeResponse`), `schema/README.md` (serve
+/// mode) and `schema/render_docs.py` (then regenerate `REFERENCE.md`).
 pub const WAKE_DIAL_WINDOW: Duration =
   Duration::from_secs(sectr_common::endpoint::MAX_WAKE_DEADLINE_SECS + 30);
 

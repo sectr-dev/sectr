@@ -29,7 +29,9 @@ pub const WAKE_TIMEOUT: &str = "did not start the turn within";
 /// The longest wake deadline a server may set
 /// (`SECTR_ENDPOINT_WAKE_DEADLINE_SECS`). A serve-mode sidecar that has
 /// dialed nothing for longer than this gives up on its wake: the server has
-/// already failed the turn.
+/// already failed the turn. Changing it changes that window
+/// (`sectr_worker::serve::WAKE_DIAL_WINDOW`), whose docs state it in
+/// seconds.
 pub const MAX_WAKE_DEADLINE_SECS: u64 = 90;
 
 /// Where an endpoint runs, as far as its URL tells: hints differ per
