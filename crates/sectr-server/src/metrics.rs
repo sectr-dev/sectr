@@ -83,8 +83,11 @@ pub static INGEST_FAILURES: LazyLock<Counter<u64>> = LazyLock::new(|| {
 /// `sectr.endpoint.wakes` — wakes of endpoint deployments, by `outcome`:
 /// `delivered` (the sidecar took the turn), `connect_error`,
 /// `http_error`, `deadline`, `blocked` (the address guard), and once a
-/// delivered wake's request ends, `turn_ended`, `token_rejected` or
-/// `broken_after_delivery`. URLs and hosts are never attributes.
+/// delivered wake's request ends, `turn_ended`, `token_rejected`,
+/// `http_error` or `broken_after_delivery`. A delivered wake is counted
+/// twice (`delivered`, then how its request ended), so the sum over
+/// `outcome` is not the number of wakes: count wakes as `delivered` plus
+/// the failures before delivery. URLs and hosts are never attributes.
 pub static ENDPOINT_WAKES: LazyLock<Counter<u64>> = LazyLock::new(|| {
   meter()
     .u64_counter("sectr.endpoint.wakes")
