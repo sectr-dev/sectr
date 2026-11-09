@@ -120,6 +120,14 @@ test("wake failures get the fix for their platform", () => {
   }
   assert.equal(wakeHint(`${PHRASES.WAKE_FAILED} the wake was cancelled`, LAMBDA), null);
 
+  // The --force fix names the platform and says what it replaces.
+  const wrong = `${PHRASES.WAKE_FAILED} the endpoint's sidecar ${PHRASES.WRONG_INGEST} turn.`;
+  for (const [url, arg] of [[LAMBDA, "lambda"], [RUN, "cloud-run"], [OTHER, "container"], [null, "<platform>"]] as const) {
+    const hint = wakeHint(wrong, url) ?? "";
+    assert.ok(hint.includes(`sectr init --endpoint ${arg} --force`), hint);
+    assert.match(hint, /rewrites the Dockerfile and \.dockerignore from scratch/);
+  }
+
   // Without the deployment's URL, the host in the message decides.
   assert.match(wakeHint(forbidden) ?? "", /auth type NONE/);
   assert.equal(endpointUrlIn(forbidden), "https://abc.lambda-url.us-east-1.on.aws/");

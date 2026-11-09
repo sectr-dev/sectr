@@ -101,7 +101,9 @@ export function wakeHint(message: string, endpointUrl?: string | null): string |
     return "The endpoint answered but never started the turn: its cold start may be too slow, or the image may not run `sectr-worker --serve`.";
   }
   if (message.includes(PHRASES.WRONG_INGEST)) {
-    return "The image's SECTR_INGEST_URL points at another server. Rewrite the Dockerfile with `sectr init --endpoint <platform> --force`, then rebuild and redeploy the image.";
+    // `sectr init`'s name for the platform; unknown without a URL.
+    const arg = url ? { lambda: "lambda", "cloud-run": "cloud-run", other: "container" }[platform] : "<platform>";
+    return `The image's SECTR_INGEST_URL points at another server. Fix it in the Dockerfile, or rerun \`sectr init --endpoint ${arg} --force\` (it rewrites the Dockerfile and .dockerignore from scratch), then rebuild and redeploy the image.`;
   }
   return null;
 }
