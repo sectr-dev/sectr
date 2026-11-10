@@ -17,7 +17,7 @@
   generated too.
 */
 
-import type { App, Deployment } from "../types";
+import type { App, Deployment, WakeSummary } from "../types";
 import { fetchWithAuthRetry } from "./auth-refresh";
 import {
   ApiError,
@@ -134,6 +134,7 @@ interface DeploymentDto {
   created_at: string | null;
   error?: string | null;
   active: boolean;
+  endpoint_url?: string | null;
 }
 
 interface AppSummaryDto {
@@ -273,6 +274,11 @@ export function createProdControlPlane(): ControlPlaneApi {
         method: "POST",
       });
       if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
+    },
+
+    /** GET /deployments/{id}/wakes — the endpoint's health line. */
+    async getDeploymentWakes(deploymentId: string, limit = 20): Promise<WakeSummary> {
+      return request<WakeSummary>("GET", `/deployments/${deploymentId}/wakes?limit=${limit}`);
     },
 
     // -- settings (WS: the real settings page) ---------------------------

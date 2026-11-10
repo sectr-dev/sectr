@@ -6,7 +6,7 @@
   deltas); the mock sessions transport converts to contract envelopes.
 */
 
-import type { App, Deployment, EventType, SectrEvent, Session } from "./types";
+import type { App, Deployment, EventType, SectrEvent, Session, WakeSummary } from "./types";
 
 // ---------------------------------------------------------------------------
 // id + time helpers
@@ -339,6 +339,56 @@ const sessV2Events = buildEvents("d20a9332-3b00-4df8-8a8b-e7621391b5d2", "dep-re
   { t: "NO_MORE_ACTIONS" },
 ], 75);
 
+// — triage-agent: runs on the customer's own Lambda (an endpoint
+// deployment). One session's turn never started: the function URL refused
+// the wake.
+const TRIAGE_DEPLOYMENT = "dep-triage-0002";
+const TRIAGE_URL = "https://k7xq2b4pd3.lambda-url.us-east-1.on.aws/";
+const sessT1Id = "3f0c8e52-9d1a-4b7e-8c35-6a2f1e9d4b70";
+const sessT1Events = buildEvents(sessT1Id, TRIAGE_DEPLOYMENT, [
+  { t: "SESSION_CREATED", app_id: "app-triage", route: "/triage" },
+  {
+    t: "INVOCATION_STARTED",
+    invocation_id: "inv-t1",
+    route: "/triage",
+    deployment_id: TRIAGE_DEPLOYMENT,
+    reason: { kind: "user_message", input: "New ticket: checkout page returns 502 for EU customers." },
+  },
+  {
+    t: "SESSION_ERROR",
+    message: "endpoint wake failed: k7xq2b4pd3.lambda-url.us-east-1.on.aws answered HTTP 403: {\"Message\":\"Forbidden. For troubleshooting Function URL authorization issues, see: https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html\"}",
+  },
+], 18);
+const sessT2Id = "a41d7b39-2c85-4f60-9e1b-7d3c5a8f2e16";
+const sessT2Events = buildEvents(sessT2Id, TRIAGE_DEPLOYMENT, [
+  { t: "SESSION_CREATED", app_id: "app-triage", route: "/triage" },
+  {
+    t: "INVOCATION_STARTED",
+    invocation_id: "inv-t2",
+    route: "/triage",
+    deployment_id: TRIAGE_DEPLOYMENT,
+    reason: { kind: "user_message", input: "New ticket: password reset emails arrive twice." },
+  },
+  { t: "MESSAGE_START", message_id: "msg_01" },
+  { t: "MESSAGE_DELTA", message_id: "msg_01", delta: "Likely a retry on the mail queue: the reset job enqueues before the transaction commits. Labeled `auth`, priority P3." },
+  { t: "MESSAGE_END", message_id: "msg_01" },
+  { t: "NO_MORE_ACTIONS" },
+], 95);
+
+/** The mock wakes summary per deployment (GET /deployments/{id}/wakes). */
+export const mockWakes: Record<string, WakeSummary> = {
+  [TRIAGE_DEPLOYMENT]: {
+    // One turn in each of its two sessions; the first failed to wake.
+    turns: 2,
+    failed: 1,
+    latest_failure: {
+      message: (sessT1Events[2].payload as { message: string }).message,
+      session_id: sessT1Id,
+      created_at: sessT1Events[2].created_at,
+    },
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Assembled domain objects
 // ---------------------------------------------------------------------------
@@ -429,7 +479,34 @@ export const mockApps: App[] = [
     latest_deployment: deployment("dep-onboarding-0001", "app-onboarding", 1, "active", 35, undefined, true),
     deployments: [deployment("dep-onboarding-0001", "app-onboarding", 1, "active", 35, undefined, true)],
   },
+  {
+    // Runs on the customer's own Lambda: an endpoint deployment.
+    id: "app-triage",
+    name: "triage-agent",
+    slug: "triage-agent",
+    framework: "openai-agents",
+    description: "Labels and routes new support tickets. Runs on our own AWS Lambda.",
+    url: null,
+    routes: [{ path: "/triage", description: "Triage a new ticket" }],
+    sessions_count: 2,
+    latest_deployment: endpointDeployment(TRIAGE_DEPLOYMENT, 2, "active", 240, TRIAGE_URL, true),
+    deployments: [
+      endpointDeployment(TRIAGE_DEPLOYMENT, 2, "active", 240, TRIAGE_URL, true),
+      endpointDeployment("dep-triage-0001", 1, "retired", 4320, TRIAGE_URL),
+    ],
+  },
 ];
+
+function endpointDeployment(
+  id: string,
+  version: number,
+  status: Deployment["status"],
+  minutesAgo: number,
+  endpointUrl: string,
+  active = false,
+): Deployment {
+  return { ...deployment(id, "app-triage", version, status, minutesAgo, undefined, active), endpoint_url: endpointUrl };
+}
 
 function session(
   id: string,
@@ -462,6 +539,8 @@ export const mockSessions: Session[] = [
   session(sessRId, mockApps[1], "/research", "awaiting_approval", sessREvents),
   session("b5b6fcc0-f3e2-4fb3-a532-bbe3bda75fae", mockApps[2], "/review", "ended", sessV1Events),
   session("d20a9332-3b00-4df8-8a8b-e7621391b5d2", mockApps[2], "/review", "ended", sessV2Events),
+  session(sessT1Id, mockApps[4], "/triage", "error", sessT1Events),
+  session(sessT2Id, mockApps[4], "/triage", "ended", sessT2Events),
 ];
 
 export const mockEventsBySession: Record<string, SectrEvent[]> = {
@@ -473,6 +552,8 @@ export const mockEventsBySession: Record<string, SectrEvent[]> = {
   [sessRId]: sessREvents,
   "b5b6fcc0-f3e2-4fb3-a532-bbe3bda75fae": sessV1Events,
   "d20a9332-3b00-4df8-8a8b-e7621391b5d2": sessV2Events,
+  [sessT1Id]: sessT1Events,
+  [sessT2Id]: sessT2Events,
 };
 
 export function getSessionContinuation(

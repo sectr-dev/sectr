@@ -123,6 +123,16 @@ export interface Deployment {
   /** Build error, present on failed deployments. */
   error?: string;
   active: boolean;
+  /** The customer's endpoint for an endpoint deployment; null for a managed
+   *  one; absent on the dev gateway. */
+  endpoint_url?: string | null;
+}
+
+/** GET /deployments/{id}/wakes: how the deployment's recent turns woke. */
+export interface WakeSummary {
+  turns: number;
+  failed: number;
+  latest_failure: { message: string; session_id: string; created_at: string } | null;
 }
 
 export type SessionStatus = "active" | "awaiting_approval" | "ended" | "error";

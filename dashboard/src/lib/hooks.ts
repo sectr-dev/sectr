@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import * as api from "@/lib/api";
 import { peekRememberedGateway } from "@/lib/gateway-swap";
 import { createSessionsApi } from "@/lib/transport/sessions-api";
+import type { Wakes } from "@/lib/connections";
 import type { App, Deployment, Session } from "@/lib/types";
 import type { DevStatus, JournalEvent } from "@/lib/transport/types";
 
@@ -85,6 +86,22 @@ export function useApp(id: string): { app: App | undefined; loading: boolean } {
 export function useDeployments(appId: string): Deployment[] {
   const { data } = useAsync(() => api.listDeployments(appId), [appId]);
   return data ?? [];
+}
+
+/** How a deployment's recent turns woke: the summary, null while loading,
+ *  when there's no deployment to ask about, or where the backend has no
+ *  wakes API (the dev gateway); or "error" when the fetch failed. Fetched
+ *  once per deployment, no live updates. */
+export function useDeploymentWakes(deploymentId: string | null): Wakes {
+  const { data, error } = useAsync(
+    () =>
+      deploymentId && api.getDeploymentWakes
+        ? api.getDeploymentWakes(deploymentId, 20)
+        : Promise.resolve(null),
+    [deploymentId],
+  );
+  if (error) return "error";
+  return data ?? null;
 }
 
 /** Sessions (UI-shaped, app_name joined). All sessions, or one app's. */

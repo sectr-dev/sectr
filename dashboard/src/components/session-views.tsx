@@ -8,6 +8,7 @@ import {
   ShieldAlert,
   Zap,
 } from "lucide-react";
+import { isWakeFailure, wakeHint } from "@/lib/connections";
 import { EVENT_META, formatTimeMs, shortId, deltaText } from "@/lib/events";
 import type { EventMeta } from "@/lib/events";
 import type { JournalEvent } from "@/lib/transport/types";
@@ -410,7 +411,31 @@ function ChatNode({
         </div>
       );
     }
-    case "error":
+    case "error": {
+      if (isWakeFailure(item.message)) {
+        const hint = wakeHint(item.message);
+        return (
+          <div className={cn("pl-8", anim)}>
+            <button
+              {...selectProps}
+              className={cn(
+                wrapperCls,
+                "block w-full rounded-lg border border-danger/30 bg-danger/[0.07] px-3 py-2 text-left text-xs",
+              )}
+            >
+              <span className="flex items-center gap-2 font-medium text-danger">
+                <CircleAlert className="size-3.5 shrink-0" />
+                Your endpoint didn&apos;t start this turn.
+                <span className="ml-auto shrink-0 font-mono text-[10px] font-normal text-faint-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                  seq {item.event.seq}
+                </span>
+              </span>
+              <span className="mt-1 block break-all font-mono text-muted-foreground">{item.message}</span>
+              {hint && <span className="mt-1 block italic text-foreground/80">{hint}</span>}
+            </button>
+          </div>
+        );
+      }
       return (
         <div className={cn("pl-8", anim)}>
           <button
@@ -429,6 +454,7 @@ function ChatNode({
           </button>
         </div>
       );
+    }
   }
 }
 

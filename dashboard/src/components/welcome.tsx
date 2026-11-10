@@ -36,6 +36,7 @@ import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import * as api from "@/lib/api";
 import { refreshApps } from "@/lib/hooks";
 import type { App } from "@/lib/types";
+import { ENDPOINT_GUIDE } from "@/lib/connections";
 import { cn } from "@/lib/utils";
 import { cliLoginCommand } from "@/lib/runtime-config";
 
@@ -142,6 +143,18 @@ export function Welcome({
                                 frameworks
                             />
                         </div>
+                        <p className="mt-3 text-xs text-muted-foreground">
+                            Sectr runs your agents, or they can run on your own compute: your
+                            AWS Lambda, Cloud Run or container platform.{" "}
+                            <a
+                                href={ENDPOINT_GUIDE}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline underline-offset-2 transition-colors hover:text-foreground"
+                            >
+                                How it works
+                            </a>
+                        </p>
                         <ExploreLinks className="mt-5" />
                     </TimelineStep>
                 </ol>
