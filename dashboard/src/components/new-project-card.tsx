@@ -549,30 +549,51 @@ function platformName(r: RunsOnId): string {
     return RUNS_ON.find((o) => o.id === r)!.label.replace(/^Your /, "");
 }
 
-/** The last step for an agent on the developer's own platform, in both
- *  the Start and Deploy modals. */
-function endpointDeployStep(platform: string): Step {
-    return {
-        title: "Deploy it on your platform",
-        extra: (
-            <p className="mb-2 text-xs text-muted-foreground">
-                Build the image from the generated Dockerfile and deploy it on your{" "}
-                {platform} (init prints the steps;{" "}
-                <a
-                    href={ENDPOINT_GUIDE}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline underline-offset-2 hover:text-foreground"
-                >
-                    full guide
-                </a>
-                ). Put its URL in sectr.toml as{" "}
-                <span className="font-mono">[deploy] endpoint</span>, then:
-            </p>
-        ),
-        command: "sectr deploy",
-        note: "Registers your compute endpoint. Sectr wakes it for each turn; it shows up here once it's live.",
-    };
+/** The deploy snippet for sectr.toml: `sectr init --endpoint` adds the key
+ *  empty, and the developer fills it in once their image is deployed. */
+const ENDPOINT_TOML = `[deploy]
+endpoint = "https://…"`;
+
+/** The last steps for an agent on the developer's own platform, in both
+ *  the Start and Deploy modals: deploy the image there, put its URL in
+ *  sectr.toml, then register it. */
+function endpointDeploySteps(platform: string): Step[] {
+    return [
+        {
+            title: `Deploy it on your ${platform}`,
+            extra: (
+                <p className="text-xs text-muted-foreground">
+                    Build the image from the generated Dockerfile and deploy it
+                    there (init prints the steps;{" "}
+                    <a
+                        href={ENDPOINT_GUIDE}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline underline-offset-2 hover:text-foreground"
+                    >
+                        full guide
+                    </a>
+                    ).
+                </p>
+            ),
+        },
+        {
+            title: "Put its URL in sectr.toml",
+            extra: (
+                <CodeSnippet
+                    file="sectr.toml"
+                    code={ENDPOINT_TOML}
+                    lang="toml"
+                />
+            ),
+            note: "The URL your platform gave the deployed image: your compute endpoint.",
+        },
+        {
+            title: "Register it with Sectr",
+            command: "sectr deploy",
+            note: "Sectr wakes your compute endpoint for each turn. It shows up here once it's live.",
+        },
+    ];
 }
 
 /** The framework + chat-frontend choice behind `sectr init`. */
@@ -669,13 +690,15 @@ function StartBody() {
             command: "sectr dev",
             note: "Chat with it in your browser while you iterate.",
         },
-        endpoint
-            ? endpointDeployStep(platform)
-            : {
-                  title: "Deploy it",
-                  command: "sectr deploy",
-                  note: "Ships it as a live endpoint. It shows up here once it's live.",
-              },
+        ...(endpoint
+            ? endpointDeploySteps(platform)
+            : [
+                  {
+                      title: "Deploy it",
+                      command: "sectr deploy",
+                      note: "Ships it as a live endpoint. It shows up here once it's live.",
+                  },
+              ]),
     ];
 
     return (
@@ -752,7 +775,7 @@ function DeployBody({ initialFramework }: { initialFramework?: FrameworkId }) {
                       command: `sectr init --endpoint ${runsOn}`,
                       note: "Run it next to sectr.toml. Adds a Dockerfile and .dockerignore, and [deploy] endpoint to sectr.toml.",
                   },
-                  endpointDeployStep(platform),
+                  ...endpointDeploySteps(platform),
               ]
             : [
                   {
