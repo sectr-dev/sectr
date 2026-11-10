@@ -1,5 +1,5 @@
 //! Endpoint deployments in the CLI: the agent runs on the developer's own
-//! Lambda, Cloud Run or container platform, and Sectr wakes it per turn.
+//! AWS Lambda, Google Cloud Run or container platform, and Sectr wakes it per turn.
 //! `sectr init --endpoint` writes the image's Dockerfile, the developer
 //! deploys it with their own tools, and `sectr deploy` registers it when
 //! `sectr.toml` has `[deploy] endpoint`.

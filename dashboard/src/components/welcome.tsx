@@ -145,7 +145,7 @@ export function Welcome({
                         </div>
                         <p className="mt-3 text-xs text-muted-foreground">
                             Sectr runs your agents, or they can run on your own compute: your
-                            AWS Lambda, Cloud Run or container platform.{" "}
+                            AWS Lambda, Google Cloud Run or container platform.{" "}
                             <a
                                 href={ENDPOINT_GUIDE}
                                 target="_blank"

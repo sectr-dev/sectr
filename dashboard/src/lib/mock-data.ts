@@ -548,7 +548,7 @@ export const mockApps: App[] = [
     name: "meeting-notes",
     slug: "meeting-notes",
     framework: "pydantic-ai",
-    description: "Summarizes meeting transcripts into decisions and action items. Runs on our Cloud Run.",
+    description: "Summarizes meeting transcripts into decisions and action items. Runs on our Google Cloud Run.",
     url: null,
     routes: [{ path: "/summarize", description: "Summarize a transcript" }],
     sessions_count: 2,

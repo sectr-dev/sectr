@@ -87,6 +87,6 @@ sectr auth login --api http://localhost:8080
 
 ### `sectr deploy`
 
-`sectr deploy` packages the project and ships it to Sectr Run, which builds and runs it. With `[deploy] endpoint` in `sectr.toml`, it uploads nothing: your agent runs on your own Lambda, Cloud Run or container platform (your compute endpoint), and this registers its URL. `sectr init --endpoint <platform>` sets a project up for it. See [Run it on your own compute](/guides/your-own-compute/).
+`sectr deploy` packages the project and ships it to Sectr Run, which builds and runs it. With `[deploy] endpoint` in `sectr.toml`, it uploads nothing: your agent runs on your own AWS Lambda, Google Cloud Run or container platform (your compute endpoint), and this registers its URL. `sectr init --endpoint <platform>` sets a project up for it. See [Run it on your own compute](/guides/your-own-compute/).
 
 <Code code={deploy} lang="text" />
