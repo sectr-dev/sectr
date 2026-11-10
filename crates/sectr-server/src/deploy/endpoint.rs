@@ -90,7 +90,7 @@ fn version_warning(theirs: &str, ours: &str, base_image: Option<&str>) -> Option
     None => "Rebuild the image on the matching base image.".to_owned(),
   };
   Some(format!(
-    "the endpoint runs sidecar {theirs}; this server is {ours}. {rebuild}"
+    "your compute endpoint runs sidecar {theirs}; this server is {ours}. {rebuild}"
   ))
 }
 
@@ -213,7 +213,7 @@ async fn register_and_activate(
       // have seen the dial.
       if !*dialed.borrow() {
         return Err(
-          "the endpoint answered with a manifest, but its sidecar never dialed this server with \
+          "your compute endpoint answered with a manifest, but its sidecar never dialed this server with \
            the registration token"
             .into(),
         );
@@ -221,25 +221,25 @@ async fn register_and_activate(
       let imported = answer
         .get("manifest")
         .filter(|m| m.is_object())
-        .ok_or("the endpoint's manifest answer has no manifest object")?;
+        .ok_or("your compute endpoint's manifest answer has no manifest object")?;
       if imported.get("routes").is_some_and(|r| !r.is_array()) {
-        return Err("the endpoint's manifest has a `routes` that isn't a list".into());
+        return Err("your compute endpoint's manifest has a `routes` that isn't a list".into());
       }
       let uses_uv = answer
         .get("uses_uv")
         .and_then(Value::as_bool)
-        .ok_or("the endpoint's manifest answer has no uses_uv")?;
+        .ok_or("your compute endpoint's manifest answer has no uses_uv")?;
       (imported.clone(), uses_uv)
     }
     "token_rejected" => {
       return Err(format!(
-        "the endpoint's sidecar {WRONG_INGEST} registration. Check that \
+        "your compute endpoint's sidecar {WRONG_INGEST} registration. Check that \
          its SECTR_INGEST_URL is {ingest_url}."
       ));
     }
     "dial_failed" => {
       return Err(format!(
-        "the endpoint's sidecar {DIAL_FAILED} {ingest_url}: {}. Check that your platform allows \
+        "your compute endpoint's sidecar {DIAL_FAILED} {ingest_url}: {}. Check that your platform allows \
          outbound connections.",
         field("message")
       ));
@@ -256,7 +256,7 @@ async fn register_and_activate(
     }
     other => {
       return Err(format!(
-        "the endpoint answered the manifest request with an unknown outcome {other:?}"
+        "your compute endpoint answered the manifest request with an unknown outcome {other:?}"
       ));
     }
   };
@@ -285,13 +285,13 @@ mod tests {
       )
       .as_deref(),
       Some(
-        "the endpoint runs sidecar 1.2.2; this server is 1.2.3. Rebuild the image FROM \
+        "your compute endpoint runs sidecar 1.2.2; this server is 1.2.3. Rebuild the image FROM \
          ghcr.io/sectr-dev/sectr-runner-base:v1.2.3."
       )
     );
     let unknown = version_warning("", "1.2.3", None).unwrap();
     assert!(
-      unknown.starts_with("the endpoint runs sidecar of an unknown version;"),
+      unknown.starts_with("your compute endpoint runs sidecar of an unknown version;"),
       "{unknown}"
     );
     assert!(

@@ -42,7 +42,7 @@ enum Commands {
   Tail(tail::TailArgs),
   /// Ship the project to a server: package → upload → the server builds
   /// and activates. With `[deploy] endpoint` in sectr.toml, register your
-  /// own endpoint instead. See `deploy --help`.
+  /// own compute endpoint instead. See `deploy --help`.
   Deploy(deploy::DeployArgs),
   /// Manage the app's server-side secrets (write-only: set/list/rm).
   Secrets(secrets::SecretsArgs),

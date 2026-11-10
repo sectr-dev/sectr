@@ -136,7 +136,8 @@ impl EndpointPlatform {
   /// Parse an endpoint URL and apply the URL rules (no query; guard on:
   /// https, no userinfo or fragment, not localhost or a private IP literal).
   pub fn check_url(&self, raw: &str) -> Result<Url, String> {
-    let url = Url::parse(raw).map_err(|e| format!("the endpoint URL {raw:?} is not a URL: {e}"))?;
+    let url = Url::parse(raw)
+      .map_err(|e| format!("your compute endpoint's URL {raw:?} is not a URL: {e}"))?;
     guard::check_url(&url, self.config.allow_private)?;
     Ok(url)
   }
@@ -167,11 +168,11 @@ impl EndpointPlatform {
           .to_owned(),
       }),
       (200, None) => Err(format!(
-        "the endpoint at {url} answered, but not as a Sectr sidecar in serve mode. Check that \
+        "your compute endpoint at {url} answered, but not as a Sectr sidecar in serve mode. Check that \
          the image's CMD is `sectr-worker --serve`."
       )),
       (code, _) => Err(format!(
-        "the endpoint at {url} {ANSWERED_HTTP} {code}, not a Sectr sidecar in serve mode. Check \
+        "your compute endpoint at {url} {ANSWERED_HTTP} {code}, not a Sectr sidecar in serve mode. Check \
          that the image's CMD is `sectr-worker --serve`."
       )),
     }
@@ -193,7 +194,7 @@ impl EndpointPlatform {
       .map_err(|e| {
         if e.is_timeout() {
           format!(
-            "the endpoint didn't answer the manifest request within {}s",
+            "your compute endpoint didn't answer the manifest request within {}s",
             MANIFEST_TIMEOUT.as_secs()
           )
         } else {
@@ -203,17 +204,22 @@ impl EndpointPlatform {
     let status = response.status().as_u16();
     let body = read_capped(response)
       .await
-      .map_err(|e| format!("reading the endpoint's manifest answer: {e}"))?;
+      .map_err(|e| format!("reading your compute endpoint's manifest answer: {e}"))?;
     if status != 200 {
       return Err(format!(
-        "the endpoint answered the manifest request with HTTP {status}: {}",
+        "your compute endpoint answered the manifest request with HTTP {status}: {}",
         quote(&body)
       ));
     }
     serde_json::from_slice::<Value>(&body)
       .ok()
       .filter(|v| v.get("outcome").and_then(Value::as_str).is_some())
-      .ok_or_else(|| format!("the endpoint's manifest answer isn't one: {}", quote(&body)))
+      .ok_or_else(|| {
+        format!(
+          "your compute endpoint's manifest answer isn't one: {}",
+          quote(&body)
+        )
+      })
   }
 
   /// Wake the endpoint for one turn and wait until it's delivered. See
@@ -232,7 +238,9 @@ impl EndpointPlatform {
       .ok_or_else(|| DispatchError::Unavailable("the ingest hub is not attached".into()))?;
     let url = Url::parse(endpoint_url).map_err(|e| {
       record("http_error");
-      DispatchError::Wake(format!("{WAKE_FAILED} the endpoint URL is not a URL: {e}"))
+      DispatchError::Wake(format!(
+        "{WAKE_FAILED} your compute endpoint's URL is not a URL: {e}"
+      ))
     })?;
     if let Err(reason) = guard::check_url(&url, self.config.allow_private) {
       record("blocked");
@@ -270,7 +278,7 @@ impl EndpointPlatform {
         // The grant went away first (the turn ended or was reclaimed).
         Err(_) => Err(WakeFailure {
           outcome: "deadline",
-          message: format!("{WAKE_FAILED} the turn ended before the endpoint started it"),
+          message: format!("{WAKE_FAILED} the turn ended before your compute endpoint started it"),
         }),
       },
       failure = failed_rx => match failure {
@@ -287,7 +295,7 @@ impl EndpointPlatform {
         Err(retried.unwrap_or(WakeFailure {
           outcome: "deadline",
           message: format!(
-            "{WAKE_FAILED} the endpoint {WAKE_TIMEOUT} {}s",
+            "{WAKE_FAILED} your compute endpoint {WAKE_TIMEOUT} {}s",
             deadline.as_secs()
           ),
         }))
@@ -412,7 +420,7 @@ async fn wake_task(task: WakeTask) {
               Some("token_rejected") => WakeFailure {
                 outcome: "token_rejected",
                 message: format!(
-                  "{WAKE_FAILED} the endpoint's sidecar {WRONG_INGEST} \
+                  "{WAKE_FAILED} your compute endpoint's sidecar {WRONG_INGEST} \
                    turn. Check that its SECTR_INGEST_URL is {ingest_url}"
                 ),
               },
@@ -443,7 +451,7 @@ async fn wake_task(task: WakeTask) {
           record("http_error");
           tracing::warn!(
             status,
-            "the endpoint's wake answered an error after the turn started"
+            "your compute endpoint's wake answered an error after the turn started"
           );
           break_done(&inflight, &handle);
           return;
@@ -518,7 +526,7 @@ fn request_failure(url: &Url, error: &reqwest::Error) -> String {
   if guard::is_blocked_error(error) {
     format!("{host} {PRIVATE_ADDRESS}, which this server doesn't allow")
   } else if error.is_timeout() {
-    format!("the endpoint at {url} {NO_ANSWER_IN_TIME}")
+    format!("your compute endpoint at {url} {NO_ANSWER_IN_TIME}")
   } else if error.is_connect() {
     format!("{COULD_NOT_CONNECT} {host} ({})", source_text(error))
   } else {

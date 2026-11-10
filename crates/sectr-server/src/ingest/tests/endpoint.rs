@@ -440,7 +440,7 @@ async fn an_endpoint_that_never_dials_fails_at_the_deadline() {
   };
   let message = session_error(&e.w).await.expect("the turn failed");
   assert!(
-    message.contains("the endpoint did not start the turn within 1s"),
+    message.contains("your compute endpoint did not start the turn within 1s"),
     "{message}"
   );
   assert!(started.elapsed() < Duration::from_secs(10));
@@ -470,7 +470,7 @@ async fn a_deadline_after_a_retry_names_the_timeout_not_the_old_refusal() {
   };
   let message = session_error(&e.w).await.expect("the turn failed");
   assert!(
-    message.contains("the endpoint did not start the turn within 1s"),
+    message.contains("your compute endpoint did not start the turn within 1s"),
     "{message}"
   );
   assert!(!message.contains("429"), "{message}");
@@ -1001,7 +1001,7 @@ async fn a_different_sidecar_version_is_a_warning() {
   let dto: Value = serde_json::from_str(&body).unwrap();
   let warning = dto["warnings"][0].as_str().unwrap();
   assert!(
-    warning.contains("the endpoint runs sidecar 0.0.1"),
+    warning.contains("your compute endpoint runs sidecar 0.0.1"),
     "{warning}"
   );
   assert!(warning.contains(env!("CARGO_PKG_VERSION")), "{warning}");

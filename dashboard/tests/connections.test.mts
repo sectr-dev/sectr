@@ -113,7 +113,7 @@ test("wake failures get the fix for their platform", () => {
   const cases: [string, RegExp][] = [
     [`${PHRASES.WAKE_FAILED} ${PHRASES.COULD_NOT_CONNECT} x (refused)`, /Check the URL/],
     [`${PHRASES.WAKE_FAILED} the endpoint ${PHRASES.WAKE_TIMEOUT} 60s`, /cold start/],
-    [`${PHRASES.WAKE_FAILED} the endpoint's sidecar ${PHRASES.WRONG_INGEST} turn.`, /SECTR_INGEST_URL/],
+    [`${PHRASES.WAKE_FAILED} your compute endpoint's sidecar ${PHRASES.WRONG_INGEST} turn.`, /SECTR_INGEST_URL/],
     [`${PHRASES.WAKE_FAILED} x ${PHRASES.PRIVATE_ADDRESS}, which…`, /public addresses/],
   ];
   for (const [message, hint] of cases) {
@@ -122,7 +122,7 @@ test("wake failures get the fix for their platform", () => {
   assert.equal(wakeHint(`${PHRASES.WAKE_FAILED} the wake was cancelled`, LAMBDA), null);
 
   // The --force fix names the platform and says what it replaces.
-  const wrong = `${PHRASES.WAKE_FAILED} the endpoint's sidecar ${PHRASES.WRONG_INGEST} turn.`;
+  const wrong = `${PHRASES.WAKE_FAILED} your compute endpoint's sidecar ${PHRASES.WRONG_INGEST} turn.`;
   for (const [url, arg] of [[LAMBDA, "lambda"], [RUN, "cloud-run"], [OTHER, "container"], [null, "<platform>"]] as const) {
     const hint = wakeHint(wrong, url) ?? "";
     assert.ok(hint.includes(`sectr init --endpoint ${arg} --force`), hint);

@@ -1,4 +1,4 @@
-Ship the project to a server: package → upload → the server builds and activates. With `[deploy] endpoint` in sectr.toml, register your own endpoint instead. See `deploy --help`
+Ship the project to a server: package → upload → the server builds and activates. With `[deploy] endpoint` in sectr.toml, register your own compute endpoint instead. See `deploy --help`
 
 Usage: sectr deploy [OPTIONS]
 
@@ -7,5 +7,5 @@ Options:
       --config <CONFIG>              sectr.toml location relative to the project [default: sectr.toml]
       --api <API>                    The server base URL (`http(s)://host[:port]`). Defaults through `sectr auth login` (or SECTR_API_URL)
       --key <KEY>                    Platform API key (`skp_…`). Defaults through `sectr auth login` (or SECTR_PLATFORM_KEY)
-      --timeout-secs <TIMEOUT_SECS>  How long to wait for the server-side build (or the endpoint's registration) to resolve, in seconds [default: 600]
+      --timeout-secs <TIMEOUT_SECS>  How long to wait for the server-side build (or your compute endpoint's registration) to resolve, in seconds [default: 600]
   -h, --help                         Print help

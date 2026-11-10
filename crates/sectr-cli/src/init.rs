@@ -76,7 +76,7 @@ pub struct InitArgs {
   /// Omitted → Sectr's runners with --template, else an interactive picker.
   #[arg(long)]
   pub endpoint: Option<String>,
-  /// The server whose base image and ingest URL an endpoint's Dockerfile
+  /// The server whose base image and ingest URL a compute endpoint's Dockerfile
   /// pins (so only for a project on your own platform). Defaults through
   /// `sectr auth login` (or SECTR_API_URL).
   #[arg(long)]
