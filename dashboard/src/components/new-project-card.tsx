@@ -525,16 +525,16 @@ export function Segmented<T extends string>({
     );
 }
 
-/** Where the agent runs: Sectr's runners, or the developer's own platform
+/** Where the agent runs: Sectr Run, or the developer's own platform
  *  (`sectr init --endpoint <platform>`). */
 const RUNS_ON = [
     {
         id: "sectr",
-        label: "Sectr runs it",
+        label: "Sectr Run",
         icon: <RunsOnMark kind="sectr" bare className="size-4 [&>img]:size-4" />,
     },
     { id: "lambda", label: "Your AWS Lambda", icon: <LambdaIcon className="size-4" /> },
-    { id: "cloud-run", label: "Your Cloud Run", icon: <CloudRunIcon className="size-4" /> },
+    { id: "cloud-run", label: "Your Google Cloud Run", icon: <CloudRunIcon className="size-4" /> },
     {
         id: "container",
         label: "Your container platform",
@@ -543,7 +543,7 @@ const RUNS_ON = [
 ] as const;
 type RunsOnId = (typeof RUNS_ON)[number]["id"];
 
-/** "Lambda", "Cloud Run", "container platform": a runs-on choice in a
+/** "AWS Lambda", "Google Cloud Run", "container platform": a runs-on choice in a
  *  sentence. */
 function platformName(r: RunsOnId): string {
     return RUNS_ON.find((o) => o.id === r)!.label.replace(/^Your /, "");

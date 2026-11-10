@@ -52,7 +52,7 @@ pub struct DeployArgs {
   /// (or SECTR_PLATFORM_KEY).
   #[arg(long)]
   pub key: Option<String>,
-  /// How long to wait for the server-side build (or the endpoint's
+  /// How long to wait for the server-side build (or your compute endpoint's
   /// registration) to resolve, in seconds.
   #[arg(long, default_value_t = 600)]
   pub timeout_secs: u64,
@@ -214,14 +214,14 @@ pub(crate) fn deploy_mode(sectr_toml: &str) -> anyhow::Result<Mode> {
     Some(toml::Value::String(url)) if url.trim().is_empty() => Ok(Mode::EndpointUnset),
     Some(toml::Value::String(url)) => Ok(Mode::Endpoint(url.trim().to_owned())),
     Some(other) => anyhow::bail!(
-      "[deploy] endpoint in sectr.toml must be your endpoint's URL as a string, not {other}"
+      "[deploy] endpoint in sectr.toml must be your compute endpoint's URL as a string, not {other}"
     ),
   }
 }
 
 fn unset_endpoint_message() -> String {
   format!(
-    "deploying as an endpoint ([deploy] endpoint in sectr.toml), but it's empty.\n  \
+    "registering your compute endpoint ([deploy] endpoint in sectr.toml), but it's empty.\n  \
      1. build the image from the Dockerfile and deploy it on your platform (guide: {})\n  \
      2. put its URL in sectr.toml: [deploy] endpoint = \"https://…\"\n  \
      3. run `sectr deploy` again",
@@ -298,7 +298,7 @@ pub(crate) async fn deploy_endpoint(
   say: Say<'_>,
 ) -> anyhow::Result<()> {
   say(format!(
-    "deploying as an endpoint ([deploy] endpoint in sectr.toml): {endpoint_url}"
+    "registering your compute endpoint ([deploy] endpoint in sectr.toml): {endpoint_url}"
   ));
   let client = reqwest::Client::builder()
     .timeout(REGISTER_REQUEST_TIMEOUT)
@@ -637,13 +637,16 @@ mod tests {
     let err = deploy_mode("[deploy]\nendpoint = 1\n")
       .unwrap_err()
       .to_string();
-    assert!(err.contains("must be your endpoint's URL"), "{err}");
+    assert!(err.contains("must be your compute endpoint's URL"), "{err}");
   }
 
   #[test]
   fn an_empty_endpoint_says_whats_left() {
     let message = unset_endpoint_message();
-    assert!(message.starts_with("deploying as an endpoint"), "{message}");
+    assert!(
+      message.starts_with("registering your compute endpoint"),
+      "{message}"
+    );
     assert!(message.contains("1. build the image"));
     assert!(message.contains(crate::endpoint::GUIDE));
     assert!(message.contains("3. run `sectr deploy` again"));
@@ -717,7 +720,7 @@ mod tests {
   #[tokio::test]
   async fn an_endpoint_registers_and_goes_active() {
     let target = endpoint_stub(
-      accepted(&["the endpoint runs sidecar 0.1.3; this server is 0.1.5."]),
+      accepted(&["your compute endpoint runs sidecar 0.1.3; this server is 0.1.5."]),
       serde_json::json!({"id": "dep-1", "status": "active"}),
     )
     .await;
@@ -732,9 +735,9 @@ mod tests {
     .await
     .unwrap();
     let expected_start = [
-      format!("deploying as an endpoint ([deploy] endpoint in sectr.toml): {LAMBDA_URL}"),
+      format!("registering your compute endpoint ([deploy] endpoint in sectr.toml): {LAMBDA_URL}"),
       format!(
-        "⚠ the endpoint runs sidecar 0.1.3; this server is 0.1.5.\n  hint: {}",
+        "⚠ your compute endpoint runs sidecar 0.1.3; this server is 0.1.5.\n  hint: {}",
         crate::endpoint::warning_hint(LAMBDA_URL)
       ),
       "deployment dep-1: version 4 — registering…".to_owned(),
@@ -751,7 +754,7 @@ mod tests {
   #[tokio::test]
   async fn a_refused_registration_shows_the_message_and_its_hint() {
     let refused = format!(
-      "the endpoint at {LAMBDA_URL} {} 403, not a Sectr sidecar in serve mode. Check that the \
+      "your compute endpoint at {LAMBDA_URL} {} 403, not a Sectr sidecar in serve mode. Check that the \
        image's CMD is `sectr-worker --serve`.",
       sectr_common::endpoint::ANSWERED_HTTP
     );
@@ -781,7 +784,7 @@ mod tests {
   #[tokio::test]
   async fn a_failed_registration_names_registration_and_hints() {
     let error = format!(
-      "the endpoint's sidecar {} wss://ingest.example.com/ingest: timed out. Check that your \
+      "your compute endpoint's sidecar {} wss://ingest.example.com/ingest: timed out. Check that your \
        platform allows outbound connections.",
       sectr_common::endpoint::DIAL_FAILED
     );
@@ -801,7 +804,9 @@ mod tests {
     .unwrap_err()
     .to_string();
     assert!(
-      err.starts_with("deployment dep-1: registration failed — error: the endpoint's sidecar"),
+      err.starts_with(
+        "deployment dep-1: registration failed — error: your compute endpoint's sidecar"
+      ),
       "{err}"
     );
     assert!(

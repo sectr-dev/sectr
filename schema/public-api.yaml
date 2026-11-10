@@ -804,16 +804,16 @@ paths:
     /endpoint-deployments:
         post:
             operationId: createEndpointDeployment
-            summary: "Deploy an agent that runs on your own endpoint (no image build)"
+            summary: "Deploy an agent that runs on your own compute endpoint (no image build)"
             description: >-
                 Registers a deployment that runs on the customer's own serverless or
                 containers: the runner base image's sidecar in serve mode
                 (`sectr-worker --serve`, see `schema/serve.schema.json`). For each
-                turn the server POSTs a wake to the endpoint, and the sidecar there
+                turn the server POSTs a wake to the compute endpoint, and the sidecar there
                 dials back to ingest. First deploy for an unknown app name creates
-                the app. The server probes the endpoint (`GET /` must identify a
+                the app. The server probes the compute endpoint (`GET /` must identify a
                 serve-mode sidecar) before answering; then, off-request, it asks
-                the endpoint for its manifest (`POST /manifest`, which first dials
+                the compute endpoint for its manifest (`POST /manifest`, which first dials
                 this server with a single-use registration token) and activates
                 the deployment, or fails it with an `error`. Off unless the server
                 sets `SECTR_ENDPOINT_INGEST_URL`. Auth: platform API key.
@@ -833,8 +833,8 @@ paths:
                                 endpoint_url:
                                     type: string
                                     description: >-
-                                        The endpoint's base URL (a Lambda function URL,
-                                        a Cloud Run service URL, ...), with no query.
+                                        The compute endpoint's base URL (a Lambda function URL,
+                                        a Google Cloud Run service URL, ...), with no query.
                                         `https` only, with no username, password or
                                         fragment, unless the server sets
                                         `SECTR_ENDPOINT_ALLOW_PRIVATE`.
@@ -843,12 +843,12 @@ paths:
             responses:
                 "202":
                     description: >-
-                        Accepted: the endpoint answered as a serve-mode sidecar. The
+                        Accepted: the compute endpoint answered as a serve-mode sidecar. The
                         body is the deployment row in `building` state, plus
-                        `warnings` when the endpoint's sidecar version differs from
+                        `warnings` when the compute endpoint's sidecar version differs from
                         the server's. Poll `GET /apps/{appId}/deployments` until
                         `status` reaches `active` or `failed` (a `failed` row carries
-                        its `error`: the endpoint's sidecar dialed another server,
+                        its `error`: the compute endpoint's sidecar dialed another server,
                         couldn't reach this one, or the manifest import failed in the
                         image).
                     content:
@@ -869,7 +869,7 @@ paths:
                     description: >-
                         Rejected: the server doesn't accept endpoint deployments
                         (`SECTR_ENDPOINT_INGEST_URL` unset), the URL breaks the rules
-                        above or resolves to a private address, the endpoint isn't a
+                        above or resolves to a private address, the compute endpoint isn't a
                         Sectr sidecar in serve mode (the probe failed, answered an
                         error, or answered something else), the app has a secret
                         named `SECTR_APPROVAL_POLICY`, or the deploy was rejected
@@ -877,10 +877,10 @@ paths:
     /endpoint-deployments/config:
         get:
             operationId: getEndpointDeploymentConfig
-            summary: Whether endpoint deployments are on, and what the endpoint's image needs
+            summary: Whether endpoint deployments are on, and what the compute endpoint's image needs
             description: >-
                 `ingest_url` is the value to set as `SECTR_INGEST_URL` in the
-                endpoint's image: the only server its sidecar dials. `base_image` is
+                compute endpoint's image: the only server its sidecar dials. `base_image` is
                 the runner base image of this server's version, which the image
                 builds `FROM` (`sectr init --endpoint` writes both). Auth: platform
                 API key.
@@ -924,10 +924,10 @@ paths:
     /deployments/{deploymentId}/wakes:
         get:
             operationId: getDeploymentWakes
-            summary: How a deployment's recent turns woke (endpoint health)
+            summary: How a deployment's recent turns woke (compute endpoint health)
             description: >-
                 Over the deployment's last `limit` turns, how many failed to wake its
-                endpoint: the turn's first session error, before the session's next
+                compute endpoint: the turn's first session error, before the session's next
                 turn, starts with `endpoint wake failed:`. Other session errors (an
                 agent that raised, a reclaimed lease) don't count. For a managed
                 deployment `failed` is always 0. Auth: platform API key.
@@ -1357,9 +1357,9 @@ components:
                 endpoint_url:
                     type: [string, "null"]
                     description: >-
-                        The customer's endpoint for an endpoint deployment, woken over
-                        HTTP for each turn; `null` for a deployment Sectr built and
-                        runs.
+                        The customer's compute endpoint for an endpoint deployment, woken over
+                        HTTP for each turn; `null` for a Sectr Run deployment (Sectr
+                        builds and runs it).
 
         SecretMeta:
             type: object

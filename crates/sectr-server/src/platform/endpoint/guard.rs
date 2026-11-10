@@ -92,13 +92,13 @@ pub fn check_url(url: &Url, allow_private: bool) -> Result<(), String> {
   let host = url
     .host_str()
     .filter(|host| !host.is_empty())
-    .ok_or_else(|| "the endpoint URL has no host".to_owned())?;
+    .ok_or_else(|| "your compute endpoint's URL has no host".to_owned())?;
   // Not a guard rule: the wake and manifest requests go to paths under
   // the URL and couldn't carry a query, so an endpoint that needs one
   // would pass the probe and then fail every request.
   if url.query().is_some() {
     return Err(
-      "the endpoint URL must not have a ?query: the server sends requests to paths under it \
+      "your compute endpoint's URL must not have a ?query: the server sends requests to paths under it \
        (/wake, /manifest) without one"
         .into(),
     );
@@ -106,20 +106,22 @@ pub fn check_url(url: &Url, allow_private: bool) -> Result<(), String> {
   if allow_private {
     return match url.scheme() {
       "https" | "http" => Ok(()),
-      other => Err(format!("the endpoint URL must be https, not {other}")),
+      other => Err(format!(
+        "your compute endpoint's URL must be https, not {other}"
+      )),
     };
   }
   if url.scheme() != "https" {
     return Err(format!(
-      "the endpoint URL must be https, not {}",
+      "your compute endpoint's URL must be https, not {}",
       url.scheme()
     ));
   }
   if !url.username().is_empty() || url.password().is_some() {
-    return Err("the endpoint URL must not carry a username or password".into());
+    return Err("your compute endpoint's URL must not carry a username or password".into());
   }
   if url.fragment().is_some() {
-    return Err("the endpoint URL must not have a #fragment".into());
+    return Err("your compute endpoint's URL must not have a #fragment".into());
   }
   // IPv6 literals come back bracketed (`[::1]`).
   let literal = host.trim_start_matches('[').trim_end_matches(']');

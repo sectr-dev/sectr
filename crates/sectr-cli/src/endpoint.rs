@@ -1,5 +1,5 @@
 //! Endpoint deployments in the CLI: the agent runs on the developer's own
-//! Lambda, Cloud Run or container platform, and Sectr wakes it per turn.
+//! AWS Lambda, Google Cloud Run or container platform, and Sectr wakes it per turn.
 //! `sectr init --endpoint` writes the image's Dockerfile, the developer
 //! deploys it with their own tools, and `sectr deploy` registers it when
 //! `sectr.toml` has `[deploy] endpoint`.
@@ -121,9 +121,7 @@ pub fn hint(message: &str, url: &str) -> Option<String> {
   }
   let platform = Platform::of_url(url);
   if message.contains(DISABLED) {
-    return Some(
-      "remove `[deploy] endpoint` from sectr.toml to deploy with Sectr's runners".into(),
-    );
+    return Some("remove `[deploy] endpoint` from sectr.toml to deploy to Sectr Run".into());
   }
   if message.contains(&format!("{ANSWERED_HTTP} 403")) {
     return match platform {
@@ -139,7 +137,7 @@ pub fn hint(message: &str, url: &str) -> Option<String> {
     };
   }
   if message.contains(PRIVATE_ADDRESS) {
-    return Some("the server can only reach public endpoints".into());
+    return Some("the server can only reach public compute endpoints".into());
   }
   if message.contains(COULD_NOT_CONNECT) || message.contains(NO_ANSWER_IN_TIME) {
     return Some("check the URL, and that the service is deployed and running".into());
@@ -250,7 +248,7 @@ pub const DOCKERIGNORE: &str = ".git\n.venv\nvenv\n__pycache__\n*.pyc\n.agent\nn
 
 /// The comment above the `endpoint` key `init` adds.
 const ENDPOINT_COMMENT: &str =
-  "# Your endpoint's URL, once the image is deployed: `sectr deploy` registers it.\n";
+  "# Your compute endpoint's URL, once the image is deployed: `sectr deploy` registers it.\n";
 
 /// Write the endpoint files into the agent directory `dir`: `Dockerfile`
 /// and `.dockerignore` (refused if either exists, unless `force`), and
@@ -531,8 +529,9 @@ pub(crate) mod tests {
   /// phrases, each with the hint expected per platform.
   #[test]
   fn each_server_error_gets_its_hint() {
-    let forbidden =
-      format!("the endpoint at {LAMBDA} {ANSWERED_HTTP} 403, not a Sectr sidecar in serve mode.");
+    let forbidden = format!(
+      "your compute endpoint at {LAMBDA} {ANSWERED_HTTP} 403, not a Sectr sidecar in serve mode."
+    );
     let lambda = hint(&forbidden, LAMBDA).unwrap();
     assert!(lambda.contains("auth type NONE"), "{lambda}");
     let run = hint(&forbidden, RUN).unwrap();
@@ -540,7 +539,10 @@ pub(crate) mod tests {
     assert_eq!(hint(&forbidden, OTHER), None);
     // Another status isn't an auth problem.
     assert_eq!(
-      hint(&format!("the endpoint {ANSWERED_HTTP} 404, not a…"), LAMBDA),
+      hint(
+        &format!("your compute endpoint {ANSWERED_HTTP} 404, not a…"),
+        LAMBDA
+      ),
       None
     );
 
@@ -553,7 +555,7 @@ pub(crate) mod tests {
 
     for message in [
       format!("{COULD_NOT_CONNECT} agent.example.com (connection refused)"),
-      format!("the endpoint at {OTHER} {NO_ANSWER_IN_TIME}"),
+      format!("your compute endpoint at {OTHER} {NO_ANSWER_IN_TIME}"),
     ] {
       assert!(
         hint(&message, OTHER).unwrap().contains("check the URL"),
@@ -561,9 +563,13 @@ pub(crate) mod tests {
       );
     }
     let private = format!("agent.example.com {PRIVATE_ADDRESS}, which this server doesn't allow");
-    assert!(hint(&private, OTHER).unwrap().contains("public endpoints"));
+    assert!(
+      hint(&private, OTHER)
+        .unwrap()
+        .contains("public compute endpoints")
+    );
 
-    let wrong = format!("the endpoint's sidecar {WRONG_INGEST} registration. Check that…");
+    let wrong = format!("your compute endpoint's sidecar {WRONG_INGEST} registration. Check that…");
     assert!(
       hint(&wrong, RUN)
         .unwrap()
@@ -583,7 +589,7 @@ pub(crate) mod tests {
     assert!(warning_hint(RUN).contains("FROM line"));
     assert!(warning_hint(RUN).contains("--endpoint cloud-run --force"));
 
-    let dial = format!("the endpoint's sidecar {DIAL_FAILED} wss://x/ingest: timed out.");
+    let dial = format!("your compute endpoint's sidecar {DIAL_FAILED} wss://x/ingest: timed out.");
     assert!(hint(&dial, LAMBDA).unwrap().contains("NAT gateway"));
     assert_eq!(hint(&dial, RUN), None);
 

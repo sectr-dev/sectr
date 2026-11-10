@@ -155,7 +155,7 @@ export function providerLabel(kind: RunsOnKind): string | null {
     case "lambda":
       return "AWS Lambda";
     case "cloud-run":
-      return "Cloud Run";
+      return "Google Cloud Run";
     case "endpoint":
       return "Compute endpoint";
     case "sectr":
