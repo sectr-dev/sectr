@@ -11,7 +11,18 @@ import {
     Rocket,
 } from "lucide-react";
 import { ExploreLinks, WALKTHROUGH_URL } from "@/components/explore-links";
+import {
+    LangGraphIcon,
+    OpenAIIcon,
+    PydanticIcon,
+} from "@/components/framework-icons";
 import { HighlightedCode } from "@/components/highlighted-code";
+import {
+    CloudRunIcon,
+    ContainerIcon,
+    LambdaIcon,
+    RunsOnMark,
+} from "@/components/platform-icons";
 import { TimelineStep } from "@/components/step-timeline";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -415,9 +426,13 @@ export function StepList({ steps }: { steps: Step[] }) {
 }
 
 const FRAMEWORKS = [
-    { id: "openai-agents", label: "OpenAI Agents SDK" },
-    { id: "langgraph", label: "LangGraph" },
-    { id: "pydantic-ai", label: "Pydantic AI" },
+    {
+        id: "openai-agents",
+        label: "OpenAI Agents SDK",
+        icon: <OpenAIIcon className="size-4" />,
+    },
+    { id: "langgraph", label: "LangGraph", icon: <LangGraphIcon className="size-4" /> },
+    { id: "pydantic-ai", label: "Pydantic AI", icon: <PydanticIcon className="size-4" /> },
 ] as const;
 export type FrameworkId = (typeof FRAMEWORKS)[number]["id"];
 
@@ -478,7 +493,7 @@ export function Segmented<T extends string>({
 }: {
     label: string;
     value: T;
-    options: readonly { id: T; label: string }[];
+    options: readonly { id: T; label: string; icon?: React.ReactNode }[];
     onChange: (v: T) => void;
 }) {
     return (
@@ -495,12 +510,13 @@ export function Segmented<T extends string>({
                         aria-checked={value === o.id}
                         onClick={() => onChange(o.id)}
                         className={cn(
-                            "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                            "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
                             value === o.id
                                 ? "border-brand/60 bg-brand/10 text-foreground"
                                 : "border-border bg-surface text-muted-foreground hover:border-border-strong hover:text-foreground",
                         )}
                     >
+                        {o.icon}
                         {o.label}
                     </button>
                 ))}
@@ -512,10 +528,18 @@ export function Segmented<T extends string>({
 /** Where the agent runs: Sectr's runners, or the developer's own platform
  *  (`sectr init --endpoint <platform>`). */
 const RUNS_ON = [
-    { id: "sectr", label: "Sectr runs it" },
-    { id: "lambda", label: "Your AWS Lambda" },
-    { id: "cloud-run", label: "Your Cloud Run" },
-    { id: "container", label: "Your container platform" },
+    {
+        id: "sectr",
+        label: "Sectr runs it",
+        icon: <RunsOnMark kind="sectr" bare className="size-4 [&>img]:size-4" />,
+    },
+    { id: "lambda", label: "Your AWS Lambda", icon: <LambdaIcon className="size-4" /> },
+    { id: "cloud-run", label: "Your Cloud Run", icon: <CloudRunIcon className="size-4" /> },
+    {
+        id: "container",
+        label: "Your container platform",
+        icon: <ContainerIcon className="size-4" />,
+    },
 ] as const;
 type RunsOnId = (typeof RUNS_ON)[number]["id"];
 
