@@ -11,6 +11,11 @@ import {
     Rocket,
 } from "lucide-react";
 import { ExploreLinks, WALKTHROUGH_URL } from "@/components/explore-links";
+import {
+    LangGraphIcon,
+    OpenAIIcon,
+    PydanticIcon,
+} from "@/components/framework-icons";
 import { HighlightedCode } from "@/components/highlighted-code";
 import {
     CloudRunIcon,
@@ -421,9 +426,13 @@ export function StepList({ steps }: { steps: Step[] }) {
 }
 
 const FRAMEWORKS = [
-    { id: "openai-agents", label: "OpenAI Agents SDK" },
-    { id: "langgraph", label: "LangGraph" },
-    { id: "pydantic-ai", label: "Pydantic AI" },
+    {
+        id: "openai-agents",
+        label: "OpenAI Agents SDK",
+        icon: <OpenAIIcon className="size-4" />,
+    },
+    { id: "langgraph", label: "LangGraph", icon: <LangGraphIcon className="size-4" /> },
+    { id: "pydantic-ai", label: "Pydantic AI", icon: <PydanticIcon className="size-4" /> },
 ] as const;
 export type FrameworkId = (typeof FRAMEWORKS)[number]["id"];
 
