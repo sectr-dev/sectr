@@ -3,14 +3,16 @@
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ConnectFrontendMenu } from "@/components/connect-frontend-menu";
+import { DeployDialog } from "@/components/deploy-dialog";
 import { PageHeader } from "@/components/page-header";
+import { ProjectStatChips } from "@/components/project-stat-chips";
 import * as api from "@/lib/api";
 import { FRAMEWORK_LABEL } from "@/lib/events";
 import type { App } from "@/lib/types";
 
 /**
  * Shared app-page header — identical across the app's tabs (detail,
- * sessions, playground). CLIENT: the app resolves browser-side in gateway
+ * sessions, playground, secrets), stat chips included. CLIENT: the app resolves browser-side in gateway
  * mode (dev gateway's /dev/status — the edge can't reach localhost), so
  * the pages that render this are client components.
  */
@@ -23,6 +25,7 @@ export function AppPageHeader({
   actions?: React.ReactNode;
   children?: React.ReactNode;
 }) {
+  const current = app.deployments.find((d) => d.active) ?? app.latest_deployment;
   return (
     <PageHeader
       title={
@@ -36,6 +39,11 @@ export function AppPageHeader({
       breadcrumbs={[{ label: "Projects", href: "/" }, { label: app.name }]}
       actions={
         <>
+          <DeployDialog
+            appName={app.name}
+            nextVersion={app.latest_deployment.version + 1}
+            endpoint={!!current.endpoint_url}
+          />
           <ConnectFrontendMenu app={app} />
           {actions}
         </>
@@ -57,6 +65,7 @@ export function AppPageHeader({
         {app.url && app.description && <span>·</span>}
         {app.description && <span>{app.description}</span>}
       </div>
+      <ProjectStatChips app={app} />
       {children}
     </PageHeader>
   );

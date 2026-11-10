@@ -80,8 +80,8 @@ test("runs on reflects the active deployment", () => {
   const cases: [App, string, string, string | null, boolean][] = [
     [app([deployment({ endpoint_url: LAMBDA })]), "lambda", "Your AWS Lambda", "v4", true],
     [app([deployment({ endpoint_url: RUN })]), "cloud-run", "Your Google Cloud Run", "v4", true],
-    [app([deployment({ endpoint_url: OTHER })]), "endpoint", "Your endpoint", "v4", true],
-    [app([deployment()]), "sectr", "Sectr runners", "v4", false],
+    [app([deployment({ endpoint_url: OTHER })]), "endpoint", "Your compute endpoint", "v4", true],
+    [app([deployment()]), "sectr", "Sectr Run", "v4", false],
     [app([deployment({ active: false, status: "failed" })]), "none", "No active version", null, false],
   ];
   for (const [project, kind, title, version, health] of cases) {
@@ -114,7 +114,7 @@ test("wake failures get the fix for their platform", () => {
     [`${PHRASES.WAKE_FAILED} ${PHRASES.COULD_NOT_CONNECT} x (refused)`, /Check the URL/],
     [`${PHRASES.WAKE_FAILED} the endpoint ${PHRASES.WAKE_TIMEOUT} 60s`, /cold start/],
     [`${PHRASES.WAKE_FAILED} the endpoint's sidecar ${PHRASES.WRONG_INGEST} turn.`, /SECTR_INGEST_URL/],
-    [`${PHRASES.WAKE_FAILED} x ${PHRASES.PRIVATE_ADDRESS}, which…`, /public endpoints/],
+    [`${PHRASES.WAKE_FAILED} x ${PHRASES.PRIVATE_ADDRESS}, which…`, /public addresses/],
   ];
   for (const [message, hint] of cases) {
     for (const url of [LAMBDA, RUN, OTHER]) assert.match(wakeHint(message, url) ?? "", hint, message);
@@ -141,7 +141,7 @@ test("the diagram has two frontends per route, one agent each", () => {
   const { frontends, agents, runsOn } = deriveConnections(project, "https://api.sectr.dev", "server");
   assert.deepEqual(
     frontends.map((f) => f.id),
-    ["http:/chat", "ag-ui:/chat", "http:/plan", "ag-ui:/plan", "http:"],
+    ["ag-ui:/chat", "http:/chat", "ag-ui:/plan", "http:/plan", "http:"],
   );
   assert.deepEqual(agents.map((a) => a.route), ["/chat", "/plan", ""]);
   assert.equal(runsOn.kind, "lambda");

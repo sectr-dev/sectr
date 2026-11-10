@@ -519,6 +519,38 @@ const RUNS_ON = [
 ] as const;
 type RunsOnId = (typeof RUNS_ON)[number]["id"];
 
+/** "Lambda", "Cloud Run", "container platform": a runs-on choice in a
+ *  sentence. */
+function platformName(r: RunsOnId): string {
+    return RUNS_ON.find((o) => o.id === r)!.label.replace(/^Your /, "");
+}
+
+/** The last step for an agent on the developer's own platform, in both
+ *  the Start and Deploy modals. */
+function endpointDeployStep(platform: string): Step {
+    return {
+        title: "Deploy it on your platform",
+        extra: (
+            <p className="mb-2 text-xs text-muted-foreground">
+                Build the image from the generated Dockerfile and deploy it on your{" "}
+                {platform} (init prints the steps;{" "}
+                <a
+                    href={ENDPOINT_GUIDE}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline underline-offset-2 hover:text-foreground"
+                >
+                    full guide
+                </a>
+                ). Put its URL in sectr.toml as{" "}
+                <span className="font-mono">[deploy] endpoint</span>, then:
+            </p>
+        ),
+        command: "sectr deploy",
+        note: "Registers your compute endpoint. Sectr wakes it for each turn; it shows up here once it's live.",
+    };
+}
+
 /** The framework + chat-frontend choice behind `sectr init`. */
 function AgentChoice({
     framework,
@@ -589,7 +621,7 @@ function StartBody() {
         />
     );
     const endpoint = runsOn !== "sectr";
-    const platform = RUNS_ON.find((r) => r.id === runsOn)!.label.replace(/^Your /, "");
+    const platform = platformName(runsOn);
 
     // With the chat frontend the agent lives in my-agent/agent/, and that's
     // where `sectr dev` and `sectr deploy` run.
@@ -614,27 +646,7 @@ function StartBody() {
             note: "Chat with it in your browser while you iterate.",
         },
         endpoint
-            ? {
-                  title: "Deploy it on your platform",
-                  extra: (
-                      <p className="mb-2 text-xs text-muted-foreground">
-                          Build the image from the generated Dockerfile and deploy it on your{" "}
-                          {platform} (init prints the steps;{" "}
-                          <a
-                              href={ENDPOINT_GUIDE}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="underline underline-offset-2 hover:text-foreground"
-                          >
-                              full guide
-                          </a>
-                          ). Put its URL in sectr.toml as{" "}
-                          <span className="font-mono">[deploy] endpoint</span>, then:
-                      </p>
-                  ),
-                  command: "sectr deploy",
-                  note: "Registers your endpoint. Sectr wakes it for each turn; it shows up here once it's live.",
-              }
+            ? endpointDeployStep(platform)
             : {
                   title: "Deploy it",
                   command: "sectr deploy",
@@ -666,16 +678,25 @@ function StartBody() {
 /**
  * The Deploy-an-existing-agent modal body: the same two modes as Start.
  * Manual shows how to wire the user's framework into Sectr (the actual
- * lines), then the manifest and the deploy.
+ * lines), then the manifest and the deploy; for the developer's own
+ * platform, `sectr init --endpoint` adds the image's files first.
  */
 function DeployBody({ initialFramework }: { initialFramework?: FrameworkId }) {
     const [framework, setFramework] = useState<FrameworkId>(
         initialFramework ?? "openai-agents",
     );
+    const [runsOn, setRunsOn] = useState<RunsOnId>("sectr");
     const choice = (
-        <AgentChoice framework={framework} onFramework={setFramework} />
+        <AgentChoice
+            framework={framework}
+            runsOn={runsOn}
+            onFramework={setFramework}
+            onRunsOn={setRunsOn}
+        />
     );
     const wiring = WIRING[framework];
+    const endpoint = runsOn !== "sectr";
+    const platform = platformName(runsOn);
 
     const steps: Step[] = [
         {
@@ -700,22 +721,42 @@ function DeployBody({ initialFramework }: { initialFramework?: FrameworkId }) {
             ),
             note: "Next to app.py. entry points at the AgentApp above.",
         },
-        {
-            title: "Deploy",
-            command: "sectr deploy",
-            note: "Builds it and creates the project. It shows up here once it's live.",
-        },
+        ...(endpoint
+            ? [
+                  {
+                      title: "Add the files for your platform",
+                      command: `sectr init --endpoint ${runsOn}`,
+                      note: "Run it next to sectr.toml. Adds a Dockerfile and .dockerignore, and [deploy] endpoint to sectr.toml.",
+                  },
+                  endpointDeployStep(platform),
+              ]
+            : [
+                  {
+                      title: "Deploy",
+                      command: "sectr deploy",
+                      note: "Builds it and creates the project. It shows up here once it's live.",
+                  },
+              ]),
     ];
 
     return (
         <ModeTabs
             terminal={<StepList steps={steps} />}
             agent={
-                <PromptBlock
-                    command={skillPrompt(
-                        "deploy my existing agent to Sectr, detecting its framework (OpenAI Agents SDK, LangGraph or Pydantic AI) from the project",
-                    )}
-                />
+                <>
+                    <Segmented
+                        label="Where will it run?"
+                        value={runsOn}
+                        options={RUNS_ON}
+                        onChange={setRunsOn}
+                    />
+                    <PromptBlock
+                        command={skillPrompt(
+                            "deploy my existing agent to Sectr, detecting its framework (OpenAI Agents SDK, LangGraph or Pydantic AI) from the project" +
+                                (endpoint ? `, running on my own ${platform}` : ""),
+                        )}
+                    />
+                </>
             }
         />
     );

@@ -22,7 +22,8 @@ import { cn } from "@/lib/utils";
  * Deploy dialog — CLI-first, same story as New app: deploys ship from the
  * developer's terminal. Running `sectr deploy` in the app's project
  * directory builds and ships the next version; the console reflects it.
- * Same placement and motion as the step modals. A project that runs on its
+ * Opened from the project header, on every tab. Same placement and motion
+ * as the step modals. A project that runs on its
  * own endpoint redeploys its image on its platform first; `sectr deploy`
  * then registers the new version.
  */
@@ -39,7 +40,8 @@ export function DeployDialog({
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button size="sm">
+        {/* Outline: it sits beside the header's primary action. */}
+        <Button size="sm" variant="outline">
           <Rocket /> Deploy
         </Button>
       </DialogTrigger>

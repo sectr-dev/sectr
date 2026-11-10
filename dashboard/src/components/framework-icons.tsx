@@ -32,6 +32,27 @@ export function LangGraphLockup({ className }: { className?: string }) {
   );
 }
 
+/** The AG-UI mark: the kite outline with its two crossbars, a simplified
+ *  version of the AG-UI logo (the trademark belongs to its owners). Stroked
+ *  in currentColor, so it takes the surrounding text color. */
+export function AgUiIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 480 480"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="30"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M170 28 L403 88 L346 440 L72 200 Z" />
+      <path d="M72 200 L403 88 M170 28 L346 440" />
+    </svg>
+  );
+}
+
 /** Pydantic logomark (simple-icons path). */
 export function PydanticIcon({ className }: { className?: string }) {
   return (

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, LoaderCircle, TriangleAlert } from "lucide-react";
-import { CopilotKitIcon } from "@/components/framework-icons";
+import { AgUiIcon } from "@/components/framework-icons";
 import {
     CodeSnippet,
     CommandBlock,
@@ -37,7 +37,7 @@ const DOCS = "https://docs.sectr.dev";
 /** The frontends the header menu offers (CopilotKit only, for now). */
 const FRONTENDS: MenuOption[] = [
     {
-        icon: CopilotKitIcon,
+        icon: AgUiIcon,
         title: "CopilotKit via AG-UI",
         description: "Connect your CopilotKit frontend via AG-UI",
     },
@@ -86,44 +86,64 @@ export function ConnectFrontendMenu({ app }: { app: App }) {
                     </DropdownMenuPrimitive.Item>
                 }
             />
-            <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent
-                    overlayClassName={STEPS_OVERLAY_CLASS}
-                    className={`${STEPS_CONTENT_CLASS} sm:max-w-2xl`}
-                >
-                    <DialogHeader>
-                        <DialogTitle className="text-xl">
-                            Connect CopilotKit
-                        </DialogTitle>
-                        <DialogDescription>
-                            Connect your CopilotKit app to {app.name}.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <ConnectBody app={app} />
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm text-muted-foreground">
-                        Starting fresh?
-                        <InlineCommand command="sectr init my-app --frontend copilotkit" />
-                        scaffolds all of this.
-                    </div>
-                    <a
-                        href={`${DOCS}/getting-started/connecting-frontend/`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-                    >
-                        Full guide →
-                    </a>
-                </DialogContent>
-            </Dialog>
+            <ConnectFrontendDialog app={app} open={open} onOpenChange={setOpen} />
         </>
+    );
+}
+
+/** The Connect CopilotKit modal: from the header's menu, and from an AG-UI
+ *  node in the Connections diagram (`route` preselects that agent). */
+export function ConnectFrontendDialog({
+    app,
+    open,
+    onOpenChange,
+    route,
+}: {
+    app: App;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    route?: string;
+}) {
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent
+                overlayClassName={STEPS_OVERLAY_CLASS}
+                className={`${STEPS_CONTENT_CLASS} sm:max-w-2xl`}
+            >
+                <DialogHeader>
+                    <DialogTitle className="text-xl">
+                        Connect CopilotKit
+                    </DialogTitle>
+                    <DialogDescription>
+                        Connect your CopilotKit app to {app.name}.
+                    </DialogDescription>
+                </DialogHeader>
+                <ConnectBody app={app} initialRoute={route} />
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm text-muted-foreground">
+                    Starting fresh?
+                    <InlineCommand command="sectr init my-app --frontend copilotkit" />
+                    scaffolds all of this.
+                </div>
+                <a
+                    href={`${DOCS}/getting-started/connecting-frontend/`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                >
+                    Full guide →
+                </a>
+            </DialogContent>
+        </Dialog>
     );
 }
 
 /** The modal's body. Mounted only while the dialog is open, so a created
  *  key (shown once) and the route choice reset on close. */
-function ConnectBody({ app }: { app: App }) {
+function ConnectBody({ app, initialRoute }: { app: App; initialRoute?: string }) {
     const routes = app.routes.filter((r) => r.path.replace(/^\/+/, ""));
-    const [route, setRoute] = useState(routes[0]?.path ?? "");
+    const [route, setRoute] = useState(
+        routes.find((r) => r.path === initialRoute)?.path ?? routes[0]?.path ?? "",
+    );
     const [key, setKey] = useState<string | null>(null);
     const url = aguiUrl(app, route, aguiBase()) ?? "<your agent's AG-UI URL>";
 

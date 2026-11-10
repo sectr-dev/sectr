@@ -425,7 +425,7 @@ function ChatNode({
             >
               <span className="flex items-center gap-2 font-medium text-danger">
                 <CircleAlert className="size-3.5 shrink-0" />
-                Your endpoint didn&apos;t start this turn.
+                Your compute endpoint didn&apos;t start this turn.
                 <span className="ml-auto shrink-0 font-mono text-[10px] font-normal text-faint-foreground opacity-0 transition-opacity group-hover:opacity-100">
                   seq {item.event.seq}
                 </span>
