@@ -4,6 +4,7 @@ import { useId } from "react";
 import { Laptop, Server } from "lucide-react";
 import { LogoMark } from "@/components/logo";
 import { platformOf, type RunsOnKind } from "@/lib/connections";
+import { cn } from "@/lib/utils";
 
 /** The marks of the platforms an endpoint runs on, in their own colors.
  *  From the Iconify "logos" set (CC0-1.0, @iconify-json/logos 1.2.19); the
@@ -76,8 +77,19 @@ export function EndpointPlatformIcon({ url, className }: { url: string; classNam
 }
 
 /** The bare mark for where a project runs: the platform's own, Sectr's
- *  logo for Sectr Run, a lucide icon for the rest. `className` sizes it. */
-export function RunsOnMark({ kind, className }: { kind: RunsOnKind; className?: string }) {
+ *  logo for Sectr Run, a lucide icon for the rest. `className` sizes it.
+ *  Sectr's logo is dark on a light tile; `bare` drops the tile (and inverts
+ *  the glyph in dark mode) so it reads like the other marks, in a chip or
+ *  button rather than a framed node. */
+export function RunsOnMark({
+  kind,
+  className,
+  bare = false,
+}: {
+  kind: RunsOnKind;
+  className?: string;
+  bare?: boolean;
+}) {
   switch (kind) {
     case "lambda":
       return <LambdaIcon className={className} />;
@@ -86,7 +98,14 @@ export function RunsOnMark({ kind, className }: { kind: RunsOnKind; className?: 
     case "endpoint":
       return <ContainerIcon className={className} />;
     case "sectr":
-      return <LogoMark className={className} />;
+      return (
+        <LogoMark
+          className={cn(
+            className,
+            bare && "bg-transparent ring-0 dark:bg-transparent dark:ring-0 dark:[&>img]:invert",
+          )}
+        />
+      );
     case "local":
       return <Laptop className={className} />;
     case "none":
