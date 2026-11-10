@@ -3,10 +3,9 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /**
- * Tab bar shared by the app pages. Connections (how users reach the agents,
- * and where they run), Sessions, Playground, Deployments and Secrets live on
- * separate routes but present as one tabbed page — sessions are the
- * most-used surface and shouldn't hide behind a button.
+ * Tab bar shared by the app pages. Overview (routes + deployments), Sessions,
+ * Playground and Secrets live on separate routes but present as one tabbed page —
+ * sessions are the most-used surface and shouldn't hide behind a button.
  */
 export function AppTabs({
   appId,
@@ -15,13 +14,12 @@ export function AppTabs({
 }: {
   appId: string;
   sessionsCount: number;
-  active: "connections" | "sessions" | "playground" | "deployments" | "secrets";
+  active: "overview" | "sessions" | "playground" | "secrets";
 }) {
   const tabs = [
-    { key: "connections" as const, label: "Connections", href: `/apps/${appId}`, count: null },
+    { key: "overview" as const, label: "Overview", href: `/apps/${appId}`, count: null },
     { key: "sessions" as const, label: "Sessions", href: `/apps/${appId}/sessions`, count: sessionsCount },
     { key: "playground" as const, label: "Playground", href: `/apps/${appId}/playground`, count: null },
-    { key: "deployments" as const, label: "Deployments", href: `/apps/${appId}/deployments`, count: null },
     { key: "secrets" as const, label: "Secrets", href: `/apps/${appId}/secrets`, count: null },
   ];
   return (

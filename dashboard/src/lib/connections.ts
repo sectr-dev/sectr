@@ -16,6 +16,8 @@ import { aguiUrl } from "./view.ts";
 
 /** The setup guide for running an agent on your own compute. */
 export const ENDPOINT_GUIDE = "https://docs.sectr.dev/guides/your-own-compute/";
+/** The HTTP API reference. */
+export const API_REFERENCE = "https://docs.sectr.dev/reference/api/";
 
 /** The server's endpoint error phrases (crates/sectr-common/src/endpoint.rs). */
 export const PHRASES = {
@@ -89,16 +91,16 @@ export function wakeHint(message: string, endpointUrl?: string | null): string |
     if (platform === "cloud-run") {
       return "The service must allow unauthenticated invocations (deploy it with --allow-unauthenticated).";
     }
-    return "The endpoint must accept requests without its own auth: Sectr's wake carries only the turn's token.";
+    return "Your compute endpoint must accept requests without its own auth: Sectr's wake carries only the turn's token.";
   }
   if (message.includes(PHRASES.PRIVATE_ADDRESS)) {
-    return "The server can only reach public endpoints.";
+    return "The server can only reach compute endpoints at public addresses.";
   }
   if (message.includes(PHRASES.COULD_NOT_CONNECT) || message.includes(PHRASES.NO_ANSWER_IN_TIME)) {
     return "Check the URL, and that the service is deployed and running.";
   }
   if (message.includes(PHRASES.WAKE_TIMEOUT)) {
-    return "The endpoint answered but never started the turn: its cold start may be too slow, or the image may not run `sectr-worker --serve`.";
+    return "Your compute endpoint answered but never started the turn: its cold start may be too slow, or the image may not run `sectr-worker --serve`.";
   }
   if (message.includes(PHRASES.WRONG_INGEST)) {
     // `sectr init`'s name for the platform; unknown without a URL.
@@ -146,6 +148,25 @@ export function activeDeployment(app: App): Deployment | null {
   return app.deployments.find((d) => d.active) ?? (app.latest_deployment.active ? app.latest_deployment : null);
 }
 
+/** A short name for where a project runs, for tight spaces (null with no
+ *  active version). */
+export function providerLabel(kind: RunsOnKind): string | null {
+  switch (kind) {
+    case "lambda":
+      return "AWS Lambda";
+    case "cloud-run":
+      return "Cloud Run";
+    case "endpoint":
+      return "Compute endpoint";
+    case "sectr":
+      return "Sectr Run";
+    case "local":
+      return "Your machine";
+    case "none":
+      return null;
+  }
+}
+
 /** The Runs on node for a project. `mode` is "dev" under `sectr dev`. */
 export function runsOnFor(app: App, mode: ConsoleMode): RunsOnNode {
   if (mode === "dev") {
@@ -177,7 +198,7 @@ export function runsOnFor(app: App, mode: ConsoleMode): RunsOnNode {
         ? "Your AWS Lambda"
         : platform === "cloud-run"
           ? "Your Google Cloud Run"
-          : "Your endpoint";
+          : "Your compute endpoint";
     return {
       kind: platform === "other" ? "endpoint" : platform,
       title,
@@ -189,17 +210,17 @@ export function runsOnFor(app: App, mode: ConsoleMode): RunsOnNode {
   }
   return {
     kind: "sectr",
-    title: "Sectr runners",
-    detail: "Sectr builds and runs each version",
+    title: "Sectr Run",
+    detail: "Managed by Sectr",
     url: null,
     version,
     healthDeploymentId: null,
   };
 }
 
-/** The project's diagram: two frontends per route (the invoke API and, for
- *  a non-empty path, the AG-UI endpoint), one agent per route, one Runs on
- *  node wired to every agent. `base` is the public server base. */
+/** The project's diagram: two frontends per route (the AG-UI endpoint, for
+ *  a non-empty path, then Sectr's HTTP API), one agent per route, one Runs
+ *  on node wired to every agent. `base` is the public server base. */
 export function deriveConnections(
   app: App,
   base: string,
@@ -209,20 +230,20 @@ export function deriveConnections(
     const http: FrontendNode = {
       id: `http:${r.path}`,
       kind: "http",
-      label: "HTTP API",
-      detail: `POST /sessions · ${r.path}`,
+      label: "Sectr HTTP API",
+      detail: "POST /sessions",
       route: r.path,
     };
     return aguiUrl(app, r.path, base)
       ? [
-          http,
           {
             id: `ag-ui:${r.path}`,
             kind: "ag-ui",
-            label: "AG-UI endpoint",
-            detail: `For CopilotKit and other AG-UI frontends · ${r.path}`,
+            label: "AG-UI",
+            detail: "CopilotKit and others",
             route: r.path,
           },
+          http,
         ]
       : [http];
   });

@@ -375,6 +375,50 @@ const sessT2Events = buildEvents(sessT2Id, TRIAGE_DEPLOYMENT, [
   { t: "NO_MORE_ACTIONS" },
 ], 95);
 
+// — meeting-notes: runs on the customer's own Cloud Run. Every turn woke.
+const NOTES_DEPLOYMENT = "dep-notes-0003";
+const NOTES_URL = "https://meeting-notes-x7k2qd9vba-uc.a.run.app/";
+const sessN1Id = "c8e2f4a7-5b19-4d3e-a6c0-2f8b71d9e453";
+const sessN1Events = buildEvents(sessN1Id, NOTES_DEPLOYMENT, [
+  { t: "SESSION_CREATED", app_id: "app-notes", route: "/summarize" },
+  {
+    t: "INVOCATION_STARTED",
+    invocation_id: "inv-n1",
+    route: "/summarize",
+    deployment_id: NOTES_DEPLOYMENT,
+    reason: { kind: "user_message", input: "Summarize the Q4 planning call transcript." },
+  },
+  { t: "MESSAGE_START", message_id: "msg_01" },
+  { t: "MESSAGE_DELTA", message_id: "msg_01", delta: "Three decisions: ship the EU region in January, freeze pricing until Q2, hire two support engineers. Owners and dates are in the action items." },
+  { t: "MESSAGE_END", message_id: "msg_01" },
+  { t: "NO_MORE_ACTIONS" },
+], 40);
+const sessN2Id = "1d7a9c3e-8f42-4b65-b9d1-e0c3a5f72b84";
+const sessN2Events = buildEvents(sessN2Id, NOTES_DEPLOYMENT, [
+  { t: "SESSION_CREATED", app_id: "app-notes", route: "/summarize" },
+  {
+    t: "INVOCATION_STARTED",
+    invocation_id: "inv-n2",
+    route: "/summarize",
+    deployment_id: NOTES_DEPLOYMENT,
+    reason: { kind: "user_message", input: "Action items from the design review, please." },
+  },
+  { t: "MESSAGE_START", message_id: "msg_01" },
+  { t: "MESSAGE_DELTA", message_id: "msg_01", delta: "1. Dana: revise the onboarding flow by Friday. 2. Sam: file the empty-state bug. 3. Everyone: review the new icon set." },
+  { t: "MESSAGE_END", message_id: "msg_01" },
+  { t: "NO_MORE_ACTIONS" },
+  { t: "INVOCATION_STARTED", invocation_id: "inv-n3", route: "/summarize", deployment_id: NOTES_DEPLOYMENT, reason: { kind: "user_message", input: "Who owns the icon review?" } },
+  { t: "MESSAGE_START", message_id: "msg_02" },
+  { t: "MESSAGE_DELTA", message_id: "msg_02", delta: "Nobody specific: it was assigned to the whole team." },
+  { t: "MESSAGE_END", message_id: "msg_02" },
+  { t: "NO_MORE_ACTIONS" },
+], 130, 6);
+
+// — docs-qa: runs on the customer's own container platform (Fly). Just
+// registered: no turns yet.
+const DOCS_QA_DEPLOYMENT = "dep-docsqa-0001";
+const DOCS_QA_URL = "https://docs-qa-agent.fly.dev/";
+
 /** The mock wakes summary per deployment (GET /deployments/{id}/wakes). */
 export const mockWakes: Record<string, WakeSummary> = {
   [TRIAGE_DEPLOYMENT]: {
@@ -387,6 +431,9 @@ export const mockWakes: Record<string, WakeSummary> = {
       created_at: sessT1Events[2].created_at,
     },
   },
+  // Three turns over two sessions, all woke.
+  [NOTES_DEPLOYMENT]: { turns: 3, failed: 0, latest_failure: null },
+  [DOCS_QA_DEPLOYMENT]: { turns: 0, failed: 0, latest_failure: null },
 };
 
 // ---------------------------------------------------------------------------
@@ -489,23 +536,54 @@ export const mockApps: App[] = [
     url: null,
     routes: [{ path: "/triage", description: "Triage a new ticket" }],
     sessions_count: 2,
-    latest_deployment: endpointDeployment(TRIAGE_DEPLOYMENT, 2, "active", 240, TRIAGE_URL, true),
+    latest_deployment: endpointDeployment(TRIAGE_DEPLOYMENT, "app-triage", 2, "active", 240, TRIAGE_URL, true),
     deployments: [
-      endpointDeployment(TRIAGE_DEPLOYMENT, 2, "active", 240, TRIAGE_URL, true),
-      endpointDeployment("dep-triage-0001", 1, "retired", 4320, TRIAGE_URL),
+      endpointDeployment(TRIAGE_DEPLOYMENT, "app-triage", 2, "active", 240, TRIAGE_URL, true),
+      endpointDeployment("dep-triage-0001", "app-triage", 1, "retired", 4320, TRIAGE_URL),
     ],
+  },
+  {
+    // Runs on the customer's own Cloud Run, healthy.
+    id: "app-notes",
+    name: "meeting-notes",
+    slug: "meeting-notes",
+    framework: "pydantic-ai",
+    description: "Summarizes meeting transcripts into decisions and action items. Runs on our Cloud Run.",
+    url: null,
+    routes: [{ path: "/summarize", description: "Summarize a transcript" }],
+    sessions_count: 2,
+    latest_deployment: endpointDeployment(NOTES_DEPLOYMENT, "app-notes", 3, "active", 300, NOTES_URL, true),
+    deployments: [
+      endpointDeployment(NOTES_DEPLOYMENT, "app-notes", 3, "active", 300, NOTES_URL, true),
+      endpointDeployment("dep-notes-0002", "app-notes", 2, "retired", 2880, NOTES_URL),
+      endpointDeployment("dep-notes-0001", "app-notes", 1, "retired", 7200, NOTES_URL),
+    ],
+  },
+  {
+    // Runs on the customer's own container platform (Fly), just registered.
+    id: "app-docsqa",
+    name: "docs-qa",
+    slug: "docs-qa",
+    framework: "langgraph",
+    description: "Answers questions from the internal handbook. Runs on our Fly.io account.",
+    url: null,
+    routes: [{ path: "/ask", description: "Ask the handbook" }],
+    sessions_count: 0,
+    latest_deployment: endpointDeployment(DOCS_QA_DEPLOYMENT, "app-docsqa", 1, "active", 12, DOCS_QA_URL, true),
+    deployments: [endpointDeployment(DOCS_QA_DEPLOYMENT, "app-docsqa", 1, "active", 12, DOCS_QA_URL, true)],
   },
 ];
 
 function endpointDeployment(
   id: string,
+  appId: string,
   version: number,
   status: Deployment["status"],
   minutesAgo: number,
   endpointUrl: string,
   active = false,
 ): Deployment {
-  return { ...deployment(id, "app-triage", version, status, minutesAgo, undefined, active), endpoint_url: endpointUrl };
+  return { ...deployment(id, appId, version, status, minutesAgo, undefined, active), endpoint_url: endpointUrl };
 }
 
 function session(
@@ -541,6 +619,8 @@ export const mockSessions: Session[] = [
   session("d20a9332-3b00-4df8-8a8b-e7621391b5d2", mockApps[2], "/review", "ended", sessV2Events),
   session(sessT1Id, mockApps[4], "/triage", "error", sessT1Events),
   session(sessT2Id, mockApps[4], "/triage", "ended", sessT2Events),
+  session(sessN1Id, mockApps[5], "/summarize", "ended", sessN1Events),
+  session(sessN2Id, mockApps[5], "/summarize", "ended", sessN2Events),
 ];
 
 export const mockEventsBySession: Record<string, SectrEvent[]> = {
@@ -554,6 +634,8 @@ export const mockEventsBySession: Record<string, SectrEvent[]> = {
   "d20a9332-3b00-4df8-8a8b-e7621391b5d2": sessV2Events,
   [sessT1Id]: sessT1Events,
   [sessT2Id]: sessT2Events,
+  [sessN1Id]: sessN1Events,
+  [sessN2Id]: sessN2Events,
 };
 
 export function getSessionContinuation(

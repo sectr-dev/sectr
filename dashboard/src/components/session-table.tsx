@@ -22,6 +22,7 @@ export function SessionTable({
   showOwner = false,
   showDeployment = false,
   deploymentLabel,
+  compact = false,
   emptyMessage = "No sessions.",
 }: {
   sessions: Session[];
@@ -30,6 +31,9 @@ export function SessionTable({
   showOwner?: boolean;
   showDeployment?: boolean;
   deploymentLabel?: (deploymentId: string) => string;
+  /** Leave out the Events and Started columns (the Overview's narrow
+   *  Recent sessions card). */
+  compact?: boolean;
   emptyMessage?: string;
 }) {
   const hasOwners = showOwner;
@@ -44,8 +48,8 @@ export function SessionTable({
           {hasOwners && <TableHead>Owner</TableHead>}
           {showDeployment && <TableHead>Deployment</TableHead>}
           <TableHead className="w-px">Status</TableHead>
-          <TableHead className="text-right">Events</TableHead>
-          <TableHead className="text-right">Started</TableHead>
+          {!compact && <TableHead className="text-right">Events</TableHead>}
+          {!compact && <TableHead className="text-right">Started</TableHead>}
           <TableHead className="text-right">Last event</TableHead>
         </TableRow>
       </TableHeader>
@@ -87,12 +91,16 @@ export function SessionTable({
               <LinkCell href={href}>
                 <SessionStatusBadge status={s.status} />
               </LinkCell>
-              <LinkCell href={href} className="text-right">
-                {s.event_count}
-              </LinkCell>
-              <LinkCell href={href} className="text-right" title={new Date(s.created_at).toLocaleString()}>
-                {formatRelative(s.created_at)}
-              </LinkCell>
+              {!compact && (
+                <LinkCell href={href} className="text-right">
+                  {s.event_count}
+                </LinkCell>
+              )}
+              {!compact && (
+                <LinkCell href={href} className="text-right" title={new Date(s.created_at).toLocaleString()}>
+                  {formatRelative(s.created_at)}
+                </LinkCell>
+              )}
               <LinkCell href={href} className="text-right">
                 {formatRelative(s.last_event_at)}
               </LinkCell>

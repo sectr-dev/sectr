@@ -7,9 +7,12 @@ import { BrandBackdrop } from "@/components/brand-backdrop";
 import { NewProjectGhostCard, NewProjectMenu } from "@/components/new-project-card";
 import { Welcome } from "@/components/welcome";
 import { PageHeader } from "@/components/page-header";
+import { RunsOnMark } from "@/components/platform-icons";
 import { DeploymentStatusBadge } from "@/components/status-badges";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { providerLabel, runsOnFor } from "@/lib/connections";
+import { CONSOLE_MODE } from "@/lib/console-mode";
 import { FRAMEWORK_LABEL } from "@/lib/events";
 import { deploymentVersionLabel } from "@/lib/view";
 import { refreshApps, useApprovals, useApps, useAsync, useSessions } from "@/lib/hooks";
@@ -112,6 +115,8 @@ export function OverviewView() {
           const live = sessions.filter(
             (s) => s.app_id === app.id && (s.status === "active" || s.status === "awaiting_approval"),
           ).length;
+          const runsOn = runsOnFor(app, CONSOLE_MODE);
+          const provider = providerLabel(runsOn.kind);
           return (
             <Link key={app.id} href={`/apps/${app.id}`} className="group rounded-xl outline-none">
               {/* Same orange hover/focus as the ghost card */}
@@ -137,11 +142,28 @@ export function OverviewView() {
                     {app.description}
                   </p>
                   <AgentChips paths={app.routes.map((r) => r.path)} />
-                  <div className="mt-3 flex items-center gap-3 border-t border-border pt-3 text-[11px] text-faint-foreground">
+                  <div className="mt-3 flex items-center gap-2 border-t border-border pt-3 text-[11px] text-faint-foreground">
                     {app.framework && (
                       <Badge variant="muted">{FRAMEWORK_LABEL[app.framework]}</Badge>
                     )}
-                    <span>{deploymentVersionLabel(app.latest_deployment)}</span>
+                    {provider && (
+                      <Badge
+                        variant="muted"
+                        className="min-w-0 shrink"
+                        title={runsOn.url ? `${provider} · ${runsOn.url}` : provider}
+                      >
+                        {/* Sectr's mark is dark on a light tile: here it drops the tile and
+                            inverts in dark mode, so it reads as a bare glyph like the others. */}
+                        <RunsOnMark
+                          kind={runsOn.kind}
+                          className="size-3.5 shrink-0 rounded-[3px] bg-transparent ring-0 dark:bg-transparent dark:ring-0 [&>img]:size-3.5 dark:[&>img]:invert"
+                        />
+                        <span className="truncate">{provider}</span>
+                      </Badge>
+                    )}
+                    <Badge variant="muted" className="font-mono">
+                      {deploymentVersionLabel(app.latest_deployment)}
+                    </Badge>
                     <span className="ml-auto">
                       {live > 0 ? (
                         <span className="flex items-center gap-1.5 text-success">

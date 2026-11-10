@@ -245,6 +245,13 @@
   background-size: 32px 32px;
 }
 
+/* Dotted canvas behind the connections diagram */
+.bg-dots {
+  background-color: var(--surface);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
 /* The brand dusk — an orange horizon glow rising from the bottom of the
    page (peach on light, ember on near-black, like the marketing site's
    hero). For the moments the console meets a human (login, empty states).
