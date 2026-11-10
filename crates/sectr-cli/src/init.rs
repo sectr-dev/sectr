@@ -13,7 +13,7 @@
 //! install` when there's a frontend → next steps.
 //!
 //! Where it runs: a third picker (or `--endpoint lambda|cloud-run|container`)
-//! chooses Sectr's runners or the developer's own platform. Choosing a
+//! chooses Sectr Run or the developer's own platform. Choosing a
 //! platform fetches the server's base image and ingest URL right after the
 //! pickers, before anything is written, and adds a `Dockerfile`, a
 //! `.dockerignore` and `[deploy] endpoint = ""` to the agent. In a directory
@@ -73,7 +73,7 @@ pub struct InitArgs {
   /// Adds a Dockerfile pinned to your server and `[deploy] endpoint` to
   /// sectr.toml; in an existing project (a sectr.toml here, no name), adds
   /// only those. Needs a server (`sectr auth login`, or --api).
-  /// Omitted → Sectr's runners with --template, else an interactive picker.
+  /// Omitted → Sectr Run with --template, else an interactive picker.
   #[arg(long)]
   pub endpoint: Option<String>,
   /// The server whose base image and ingest URL a compute endpoint's Dockerfile
@@ -346,7 +346,7 @@ impl Frontend {
 /// Where the agent runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunsOn {
-  /// `sectr deploy` builds it and Sectr's runners run it.
+  /// Sectr Run: `sectr deploy` builds it and Sectr runs it.
   Sectr,
   /// The developer's own platform; `sectr deploy` registers its URL.
   Endpoint(Platform),
@@ -358,7 +358,7 @@ impl RunsOn {
     &[
       (
         Some(RunsOn::Sectr),
-        "Sectr runs it (sectr deploy builds and runs it)",
+        "Sectr Run (sectr deploy builds and runs it)",
       ),
       (
         Some(RunsOn::Endpoint(Platform::Lambda)),
@@ -577,12 +577,12 @@ async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
 }
 
 /// `--api` and `--key` name the server an endpoint's Dockerfile pins, so
-/// they're refused for a project on Sectr's runners rather than ignored.
+/// they're refused for a project on Sectr Run rather than ignored.
 fn server_flags_fit(args: &InitArgs, runs_on: RunsOn) -> anyhow::Result<()> {
   if runs_on == RunsOn::Sectr && (args.api.is_some() || args.key.is_some()) {
     bail!(
       "--api and --key only apply to a project that runs on your own platform (--endpoint), \
-       whose Dockerfile pins that server; a project on Sectr's runners meets its server at \
+       whose Dockerfile pins that server; a project on Sectr Run meets its server at \
        `sectr deploy`, which takes them too"
     );
   }

@@ -1460,7 +1460,7 @@ components:
             - 'null'
           description: >-
             The customer's compute endpoint for an endpoint deployment, woken over HTTP for each
-            turn; `null` for a deployment Sectr built and runs.
+            turn; `null` for a Sectr Run deployment (Sectr builds and runs it).
     SecretMeta:
       type: object
       required:

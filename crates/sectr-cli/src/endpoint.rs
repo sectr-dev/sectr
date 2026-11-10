@@ -121,9 +121,7 @@ pub fn hint(message: &str, url: &str) -> Option<String> {
   }
   let platform = Platform::of_url(url);
   if message.contains(DISABLED) {
-    return Some(
-      "remove `[deploy] endpoint` from sectr.toml to deploy with Sectr's runners".into(),
-    );
+    return Some("remove `[deploy] endpoint` from sectr.toml to deploy to Sectr Run".into());
   }
   if message.contains(&format!("{ANSWERED_HTTP} 403")) {
     return match platform {

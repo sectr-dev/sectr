@@ -509,10 +509,10 @@ export function Segmented<T extends string>({
     );
 }
 
-/** Where the agent runs: Sectr's runners, or the developer's own platform
+/** Where the agent runs: Sectr Run, or the developer's own platform
  *  (`sectr init --endpoint <platform>`). */
 const RUNS_ON = [
-    { id: "sectr", label: "Sectr runs it" },
+    { id: "sectr", label: "Sectr Run" },
     { id: "lambda", label: "Your AWS Lambda" },
     { id: "cloud-run", label: "Your Cloud Run" },
     { id: "container", label: "Your container platform" },
