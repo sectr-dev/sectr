@@ -152,11 +152,10 @@ export function OverviewView() {
                         className="min-w-0 shrink"
                         title={runsOn.url ? `${provider} · ${runsOn.url}` : provider}
                       >
-                        {/* Sectr's mark is dark on a light tile: here it drops the tile and
-                            inverts in dark mode, so it reads as a bare glyph like the others. */}
                         <RunsOnMark
                           kind={runsOn.kind}
-                          className="size-3.5 shrink-0 rounded-[3px] bg-transparent ring-0 dark:bg-transparent dark:ring-0 [&>img]:size-3.5 dark:[&>img]:invert"
+                          bare
+                          className="size-3.5 shrink-0 rounded-[3px] [&>img]:size-3.5"
                         />
                         <span className="truncate">{provider}</span>
                       </Badge>
