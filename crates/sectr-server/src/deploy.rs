@@ -123,8 +123,10 @@ mod wakes;
 /// `error` is absent (not null) unless the build failed — the yaml schema
 /// keeps it optional to match.
 /// `endpoint_url` is always present: `null` for a managed deployment.
+/// The app routes (`GET /apps`, `GET /apps/{id}`) serialize their
+/// deployments with it too, so the two can't drift.
 #[derive(Serialize)]
-struct DeploymentDto {
+pub(crate) struct DeploymentDto {
   id: Uuid,
   app_id: Uuid,
   version: i64,
@@ -136,22 +138,30 @@ struct DeploymentDto {
   endpoint_url: Option<String>,
 }
 
+impl DeploymentDto {
+  /// `active`: whether this is the app's active deployment, which the
+  /// caller knows.
+  pub(crate) fn new(row: &Deployment, active: bool) -> Self {
+    DeploymentDto {
+      id: row.id,
+      app_id: row.app_id,
+      version: row.version,
+      status: row.status.clone(),
+      created_at: row.created_at.to_rfc3339(),
+      error: row.error.clone(),
+      active,
+      endpoint_url: row.endpoint_url.clone(),
+    }
+  }
+}
+
 async fn deployment_dto(row: Deployment, registry: &dyn Registry) -> Result<DeploymentDto, String> {
   let active = registry
     .active_deployment(row.app_id)
     .await
     .map_err(|e| e.to_string())?
     .is_some_and(|d| d.id == row.id);
-  Ok(DeploymentDto {
-    id: row.id,
-    app_id: row.app_id,
-    version: row.version,
-    status: row.status,
-    created_at: row.created_at.to_rfc3339(),
-    error: row.error,
-    active,
-    endpoint_url: row.endpoint_url,
-  })
+  Ok(DeploymentDto::new(&row, active))
 }
 
 // ---------------------------------------------------------------------------
