@@ -957,24 +957,6 @@ async fn registration_refuses_an_endpoint_that_isnt_a_serve_mode_sidecar() {
     assert!(body.contains(needle), "{body}");
     assert!(body.contains("sectr-worker --serve"), "{body}");
   }
-  // An identity over the probe's 64 KiB cap isn't read: refused like any
-  // other answer that isn't the sidecar's.
-  let fake = Fake::new(vec![], Step::Forward);
-  *fake.identity.lock().unwrap() = (
-    200,
-    json!({
-      "sectr_sidecar": {"version": "1", "mode": "serve"},
-      "padding": "x".repeat(65 * 1024),
-    }),
-  );
-  let url = start_fake(fake).await;
-  let (status, body) = register(&w, &url).await;
-  assert_eq!(
-    status,
-    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-    "{body}"
-  );
-  assert!(body.contains("not as a Sectr sidecar"), "{body}");
   // Nothing listening.
   let (status, body) = register(&w, &format!("http://127.0.0.1:{}", free_port())).await;
   assert_eq!(status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
@@ -1000,6 +982,31 @@ async fn registration_refuses_an_endpoint_that_isnt_a_serve_mode_sidecar() {
       .unwrap()
       .is_none()
   );
+}
+
+/// An identity over the probe's 64 KiB cap isn't read: refused like any
+/// other answer that isn't the sidecar's.
+#[tokio::test]
+async fn an_oversized_identity_is_refused() {
+  let Some(w) = registration_world().await else {
+    return;
+  };
+  let fake = Fake::new(vec![], Step::Forward);
+  *fake.identity.lock().unwrap() = (
+    200,
+    json!({
+      "sectr_sidecar": {"version": "1", "mode": "serve"},
+      "padding": "x".repeat(65 * 1024),
+    }),
+  );
+  let url = start_fake(fake).await;
+  let (status, body) = register(&w, &url).await;
+  assert_eq!(
+    status,
+    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+    "{body}"
+  );
+  assert!(body.contains("not as a Sectr sidecar"), "{body}");
 }
 
 #[tokio::test]
