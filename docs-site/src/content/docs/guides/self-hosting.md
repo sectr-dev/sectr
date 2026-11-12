@@ -103,8 +103,8 @@ These go in `.env`. Apply changes with `docker compose up -d`.
 | `COMPOSE_PROFILES` | `postgres` | Remove `postgres` when you use your own database |
 | `SECTR_SECRETS_MASTER_KEY` | Generated | Encrypts secrets at rest. If you lose it, stored secrets can't be read |
 | `SECTR_BOOTSTRAP_PLATFORM_KEY` | Generated | The first platform key |
-| `SECTR_MAX_CONCURRENT_SANDBOX_TURNS` | `10` | Turns running in runners on this machine at once. Set it to fit the machine. Formerly `SECTR_MAX_CONCURRENT_TURNS` |
-| `SECTR_MAX_CONCURRENT_SANDBOX_TURNS_PER_APP` | `0` | The same, per app. `0` turns it off. Formerly `SECTR_MAX_CONCURRENT_TURNS_PER_APP` |
+| `SECTR_MAX_CONCURRENT_SANDBOX_TURNS` | `10` | Turns running in runners on this machine at once. Set it to fit the machine |
+| `SECTR_MAX_CONCURRENT_SANDBOX_TURNS_PER_APP` | `0` | The same, per app. `0` turns it off |
 | `SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP` | `0` | An app's turns on its own compute endpoint at once. They run elsewhere, so the limits above don't count them. `0` turns it off |
 | `SECTR_RUNNER_CPU_COUNT` | `1` | CPUs per runner. May be fractional |
 | `SECTR_RUNNER_MEMORY_MB` | `1024` | Memory per runner |
