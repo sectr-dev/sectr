@@ -1490,6 +1490,75 @@ async fn app_cap_rejects_create_with_429_and_leaves_no_session_row() {
   create_ok(&w, &w.platform_key, "app-a").await;
 }
 
+/// An app whose active deployment runs on a compute endpoint gets the
+/// endpoint per-app cap, for new sessions and for turns on them.
+#[tokio::test]
+async fn an_endpoint_app_gets_the_endpoint_cap() {
+  let Some(w) = world_with_limits(|_, _| crate::limits::LimitsConfig {
+    max_endpoint_turns_per_app: 2,
+    ..limits(1, 0)
+  })
+  .await
+  else {
+    eprintln!("skipping: no test Postgres (initdb not on PATH)");
+    return;
+  };
+  let registry = w.state.registry();
+  let endpoint = registry
+    .create_deployment(NewDeployment {
+      endpoint_url: Some("https://app-b-xyz.a.run.app/".into()),
+      app_id: w.app_b,
+      version: 2,
+      manifest: json!({"routes": [{"path": "/test"}]}),
+    })
+    .await
+    .unwrap();
+  registry
+    .set_deployment_status(endpoint.id, DeploymentStatus::Active)
+    .await
+    .unwrap();
+
+  w.dispatcher.set(Mode::Hold);
+  // app-a, on Sectr Run: one turn at a time.
+  create_ok(&w, &w.platform_key, "app-a").await;
+  let (status, body) = create_session(&w.app, &w.platform_key, new_session_body("app-a")).await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+  // app-b, on an endpoint: two.
+  create_ok(&w, &w.platform_key, "app-b").await;
+  let second = create_ok(&w, &w.platform_key, "app-b").await;
+  let (status, body) = create_session(&w.app, &w.platform_key, new_session_body("app-b")).await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+  assert!(
+    body["error"]
+      .as_str()
+      .unwrap()
+      .contains("maximum of 2 turns"),
+    "{body}"
+  );
+
+  // A follow-up turn on an endpoint session is held to the same cap.
+  release_slot(&w, second).await;
+  w.dispatcher.set(Mode::Hold);
+  let (status, body, _) = req_retry_after(
+    &w.app,
+    "POST",
+    &format!("/sessions/{second}/input"),
+    &w.platform_key,
+    json!({"input": "again"}),
+  )
+  .await;
+  assert!(status.is_success(), "{status} {body}");
+  let (status, body, _) = req_retry_after(
+    &w.app,
+    "POST",
+    "/sessions",
+    &w.platform_key,
+    new_session_body("app-b"),
+  )
+  .await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+}
+
 #[tokio::test]
 async fn input_at_cap_is_429_and_the_journal_is_untouched() {
   let Some(w) = world_with_limits(|_, _| limits(1, 0)).await else {
