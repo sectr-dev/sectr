@@ -171,6 +171,12 @@ impl EndpointPlatform {
         "your compute endpoint at {url} answered, but not as a Sectr sidecar in serve mode. Check that \
          the image's CMD is `sectr-worker --serve`."
       )),
+      // The platform refused the call before it reached the image, so
+      // the image's CMD isn't the problem.
+      (code @ (401 | 403), _) => Err(format!(
+        "your compute endpoint at {url} {ANSWERED_HTTP} {code}: it refused the request. Sectr calls \
+         it without credentials, so it must allow unauthenticated calls."
+      )),
       (code, _) => Err(format!(
         "your compute endpoint at {url} {ANSWERED_HTTP} {code}, not a Sectr sidecar in serve mode. Check \
          that the image's CMD is `sectr-worker --serve`."

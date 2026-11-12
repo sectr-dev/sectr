@@ -957,6 +957,24 @@ async fn registration_refuses_an_endpoint_that_isnt_a_serve_mode_sidecar() {
     assert!(body.contains(needle), "{body}");
     assert!(body.contains("sectr-worker --serve"), "{body}");
   }
+  // A refusal is the platform's, before the image runs: no CMD advice.
+  for code in [401, 403] {
+    let fake = Fake::new(vec![], Step::Forward);
+    *fake.identity.lock().unwrap() = (code, json!({}));
+    let url = start_fake(fake).await;
+    let (status, body) = register(&w, &url).await;
+    assert_eq!(
+      status,
+      axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+      "{body}"
+    );
+    assert!(
+      body.contains(&format!("answered HTTP {code}: it refused the request")),
+      "{body}"
+    );
+    assert!(body.contains("unauthenticated"), "{body}");
+    assert!(!body.contains("CMD"), "{body}");
+  }
   // Nothing listening.
   let (status, body) = register(&w, &format!("http://127.0.0.1:{}", free_port())).await;
   assert_eq!(status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);

@@ -754,8 +754,8 @@ mod tests {
   #[tokio::test]
   async fn a_refused_registration_shows_the_message_and_its_hint() {
     let refused = format!(
-      "your compute endpoint at {LAMBDA_URL} {} 403, not a Sectr sidecar in serve mode. Check that the \
-       image's CMD is `sectr-worker --serve`.",
+      "your compute endpoint at {LAMBDA_URL} {} 403: it refused the request. Sectr calls it \
+       without credentials, so it must allow unauthenticated calls.",
       sectr_common::endpoint::ANSWERED_HTTP
     );
     let target = endpoint_stub(

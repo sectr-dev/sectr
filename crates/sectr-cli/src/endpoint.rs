@@ -529,9 +529,8 @@ pub(crate) mod tests {
   /// phrases, each with the hint expected per platform.
   #[test]
   fn each_server_error_gets_its_hint() {
-    let forbidden = format!(
-      "your compute endpoint at {LAMBDA} {ANSWERED_HTTP} 403, not a Sectr sidecar in serve mode."
-    );
+    let forbidden =
+      format!("your compute endpoint at {LAMBDA} {ANSWERED_HTTP} 403: it refused the request.");
     let lambda = hint(&forbidden, LAMBDA).unwrap();
     assert!(lambda.contains("auth type NONE"), "{lambda}");
     let run = hint(&forbidden, RUN).unwrap();
