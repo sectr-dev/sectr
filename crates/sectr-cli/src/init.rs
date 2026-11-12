@@ -550,12 +550,16 @@ async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
   match frontend {
     Frontend::None => {
       println!("  cd {name}");
-      println!("  sectr dev          # run locally (dashboard opens; mock model — no key needed)");
-      println!("  sectr deploy       # ship it (needs `sectr auth login` first)");
+      println!("  sectr dev          # run locally (dashboard opens; mock model, no key needed)");
+      // An endpoint project deploys on its platform first: its steps
+      // below end with `sectr deploy`.
+      if endpoint.is_none() {
+        println!("  sectr deploy       # ship it (needs `sectr auth login` first)");
+      }
     }
     Frontend::CopilotKit => {
       println!("  cd {agent_cd}");
-      println!("  sectr dev          # run the agent locally (mock model — no key needed)");
+      println!("  sectr dev          # run the agent locally (mock model, no key needed)");
       println!();
       println!("  # then, in a second terminal:");
       println!("  cd {name}");
@@ -566,12 +570,9 @@ async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
   }
   if let Some((platform, _)) = endpoint {
     println!();
-    println!(
-      "It runs on {}: `sectr deploy` registers it once it's deployed.",
-      platform.name()
-    );
-    println!("From {agent_cd}:");
-    crate::endpoint::print_next_steps(platform, &name);
+    // Without a frontend, "Next steps" already moved into the agent.
+    let from = (frontend == Frontend::CopilotKit).then_some(agent_cd.as_str());
+    crate::endpoint::print_next_steps(platform, &name, from);
   }
   Ok(())
 }
@@ -632,7 +633,7 @@ async fn add_endpoint_to_existing(
     .or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
     .unwrap_or_else(|| DEFAULT_NAME.to_owned());
   let name = normalize_name(&name).unwrap_or_else(|_| DEFAULT_NAME.to_owned());
-  crate::endpoint::print_next_steps(platform, &name);
+  crate::endpoint::print_next_steps(platform, &name, None);
   Ok(())
 }
 
