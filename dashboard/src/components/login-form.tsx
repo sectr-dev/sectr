@@ -212,6 +212,10 @@ function ClerkLogin() {
         strategy,
         redirectUrl: "/sso-callback",
         redirectUrlComplete: "/login",
+        // Google skips its account chooser when the browser has one Google
+        // account, or after the first consent, so signing out of Sectr
+        // signed straight back in as the same account. Always ask.
+        ...(strategy === "oauth_google" && { oidcPrompt: "select_account" }),
       })
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : "Couldn't start sign-in."),
