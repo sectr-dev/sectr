@@ -73,10 +73,6 @@ const MANIFEST_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long a torn-down turn's wake request may still take to be answered.
 const TEARDOWN_GRACE: Duration = Duration::from_secs(10);
 
-/// How long after a wake ends mid-turn the server waits before ending the
-/// turn itself, so events the sidecar sent just before can land.
-const ENDED_GRACE: Duration = Duration::from_secs(2);
-
 /// Response bodies are read up to this much (the manifest is capped at
 /// 16 MiB by the sidecar; everything else is tiny).
 const BODY_CAP: usize = 17 * 1024 * 1024;
@@ -515,6 +511,10 @@ async fn wake_task(task: WakeTask) {
   fail(failure);
   break_done(&inflight, &handle);
 }
+
+/// How long after a wake ends mid-turn the server waits before ending the
+/// turn itself, so events the sidecar sent just before can land.
+const ENDED_GRACE: Duration = Duration::from_secs(2);
 
 /// A wake that ended after delivery ended the turn's request, and with it,
 /// on a serverless platform, the instance: end the turn now rather than at
