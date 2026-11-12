@@ -3,15 +3,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleAlert,
+  CircleX,
   Hammer,
   Minimize2,
   ShieldAlert,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { isWakeFailure, wakeHint } from "@/lib/connections";
 import { EVENT_META, formatTimeMs, shortId, deltaText } from "@/lib/events";
 import type { EventMeta } from "@/lib/events";
 import type { JournalEvent } from "@/lib/transport/types";
+import { failedTurnEnds } from "@/lib/turns";
 import type { InvocationStartedPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -90,7 +93,7 @@ function summarize(e: JournalEvent): { main: string; sub?: string } {
 // ---------------------------------------------------------------------------
 
 type ChatItem =
-  | { kind: "divider"; key: string; icon?: React.ReactNode; text: string }
+  | { kind: "divider"; key: string; icon?: React.ReactNode; text: string; failed?: boolean }
   | { kind: "user"; key: string; event: JournalEvent; text: string }
   | { kind: "agent"; key: string; event: JournalEvent; text: string }
   | {
@@ -116,6 +119,7 @@ type ChatItem =
 
 function buildChatItems(events: JournalEvent[]): ChatItem[] {
   const items: ChatItem[] = [];
+  const failedEnds = failedTurnEnds(events);
   // Messages still open (no MESSAGE_END yet) render as in-flight partial
   // text — that's what makes the chat appear to stream with the journal.
   const textByMessage = new Map<
@@ -242,11 +246,11 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
         });
         break;
       case "NO_MORE_ACTIONS":
-        items.push({
-          kind: "divider",
-          key: `n-${e.seq}`,
-          text: "turn complete",
-        });
+        items.push(
+          failedEnds.has(e.seq)
+            ? { kind: "divider", key: `n-${e.seq}`, text: "turn failed", failed: true }
+            : { kind: "divider", key: `n-${e.seq}`, text: "turn complete" },
+        );
         break;
       default:
         break;
@@ -283,7 +287,12 @@ function ChatNode({
     return (
       <div className={cn("flex items-center gap-3", anim)}>
         <span className="h-px flex-1 bg-border" />
-        <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-faint-foreground">
+        <span
+          className={cn(
+            "flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider",
+            item.failed ? "text-danger" : "text-faint-foreground",
+          )}
+        >
           {item.icon}
           {item.text}
         </span>
@@ -630,10 +639,19 @@ function groupDeltas(events: JournalEvent[]): Row[] {
   return rows;
 }
 
+/** A `NO_MORE_ACTIONS` row that ends a failed turn. */
+const FAILED_TURN_END = {
+  labelOverride: "Turn failed",
+  colorOverride: "text-danger",
+  iconOverride: CircleX,
+  summaryOverride: { main: "turn ended by an error" },
+};
+
 function LogRow({
   event,
   labelOverride,
   colorOverride,
+  iconOverride,
   summaryOverride,
   selected,
   onSelect,
@@ -642,6 +660,7 @@ function LogRow({
   event: JournalEvent;
   labelOverride?: string;
   colorOverride?: string;
+  iconOverride?: LucideIcon;
   summaryOverride?: { main: string; sub?: string };
   selected: boolean;
   onSelect?: (e: JournalEvent) => void;
@@ -649,7 +668,7 @@ function LogRow({
 }) {
   const meta = EVENT_META[event.type];
   const s = summaryOverride ?? summarize(event);
-  const Icon = meta.icon;
+  const Icon = iconOverride ?? meta.icon;
   return (
     <button
       type="button"
@@ -706,6 +725,9 @@ export function JournalLog({
     () => new Set(FILTERS.map((f) => f.key)),
   );
 
+  // From every event, so a filter that hides the error still shows the
+  // turn as failed.
+  const failedEnds = useMemo(() => failedTurnEnds(events), [events]);
   const rows = useMemo(() => {
     const filtered = events.filter((e) => activeFilters.has(EVENT_META[e.type].group));
     return raw ? filtered.map((e) => ({ kind: "event" as const, event: e })) : groupDeltas(filtered);
@@ -775,6 +797,7 @@ export function JournalLog({
             <LogRow
               key={row.event.seq}
               event={row.event}
+              {...(failedEnds.has(row.event.seq) && FAILED_TURN_END)}
               selected={selected?.seq === row.event.seq}
               onSelect={onSelect}
               entered={entered}
