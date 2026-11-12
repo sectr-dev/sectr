@@ -25,6 +25,12 @@
 //! failed:`, and the existing dispatch path journals it as the turn's
 //! `SESSION_ERROR` and releases the lease.
 //!
+//! After delivery the held request is the turn's lifetime on the platform.
+//! If it ends before the turn does (a broken connection, or an error answer
+//! such as Lambda's at its timeout), the task ends the turn through
+//! [`IngestHub::end_endpoint_turn`], with a message naming the platform's
+//! limit, instead of leaving it to the lease's expiry.
+//!
 //! Registration uses [`EndpointPlatform::probe`] and
 //! [`EndpointPlatform::fetch_manifest`]. Every request goes through one
 //! client with the address guard ([`guard`]).
@@ -42,7 +48,8 @@ use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use sectr_common::endpoint::{
-  ANSWERED_HTTP, COULD_NOT_CONNECT, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, WAKE_TIMEOUT, WRONG_INGEST,
+  ANSWERED_HTTP, COULD_NOT_CONNECT, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, Platform as Host,
+  WAKE_TIMEOUT, WRONG_INGEST, platform_of,
 };
 
 use crate::config::EndpointConfig;
@@ -65,6 +72,10 @@ const MANIFEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// How long a torn-down turn's wake request may still take to be answered.
 const TEARDOWN_GRACE: Duration = Duration::from_secs(10);
+
+/// How long after a wake ends mid-turn the server waits before ending the
+/// turn itself, so events the sidecar sent just before can land.
+const ENDED_GRACE: Duration = Duration::from_secs(2);
 
 /// Response bodies are read up to this much (the manifest is capped at
 /// 16 MiB by the sidecar; everything else is tiny).
@@ -258,6 +269,9 @@ impl EndpointPlatform {
     // the backoff says why. Cleared whenever a request goes out.
     let last_retryable = Arc::new(Mutex::new(None::<WakeFailure>));
     let task = tokio::spawn(wake_task(WakeTask {
+      hub: Arc::downgrade(&hub),
+      session,
+      invocation_id,
       client: self.client.clone(),
       url: url.clone(),
       token: token.to_owned(),
@@ -326,6 +340,9 @@ impl EndpointPlatform {
 }
 
 struct WakeTask {
+  hub: Weak<IngestHub>,
+  session: Uuid,
+  invocation_id: Uuid,
   client: reqwest::Client,
   url: Url,
   token: String,
@@ -343,6 +360,9 @@ struct WakeTask {
 /// at a time, always.
 async fn wake_task(task: WakeTask) {
   let WakeTask {
+    hub,
+    session,
+    invocation_id,
     client,
     url,
     token,
@@ -386,8 +406,10 @@ async fn wake_task(task: WakeTask) {
       }
       Err(e) if was_delivered => {
         record("broken_after_delivery");
-        tracing::warn!(error = %e, "the endpoint's wake request broke mid-turn; the lease covers the turn");
+        tracing::warn!(error = %e, "the endpoint's wake request broke mid-turn");
         break_done(&inflight, &handle);
+        let how = format!("its connection closed ({})", source_text(&e));
+        end_turn(&hub, session, invocation_id, &host, &how).await;
         return;
       }
       Err(e) if e.is_connect() => WakeFailure {
@@ -454,6 +476,8 @@ async fn wake_task(task: WakeTask) {
             "your compute endpoint's wake answered an error after the turn started"
           );
           break_done(&inflight, &handle);
+          let how = format!("it answered HTTP {status}");
+          end_turn(&hub, session, invocation_id, &host, &how).await;
           return;
         }
         if matches!(status, 409 | 429 | 500 | 503) {
@@ -490,6 +514,41 @@ async fn wake_task(task: WakeTask) {
   };
   fail(failure);
   break_done(&inflight, &handle);
+}
+
+/// A wake that ended after delivery ended the turn's request, and with it,
+/// on a serverless platform, the instance: end the turn now rather than at
+/// its lease's expiry, saying why. A turn that already ended (the sidecar's
+/// final batch beat the answer) is left alone.
+async fn end_turn(
+  hub: &Weak<IngestHub>,
+  session: Uuid,
+  invocation_id: Uuid,
+  host: &str,
+  how: &str,
+) {
+  tokio::time::sleep(ENDED_GRACE).await;
+  let Some(hub) = hub.upgrade() else {
+    return;
+  };
+  hub
+    .end_endpoint_turn(session, invocation_id, &ended_message(host, how))
+    .await;
+}
+
+/// Why a turn ended when its wake did: `how` the request ended, and the
+/// platform's time limit when the host names one.
+fn ended_message(host: &str, how: &str) -> String {
+  let limit = match platform_of(host) {
+    Host::Lambda => {
+      " AWS Lambda ends an invocation at the function's timeout (15 minutes at most)."
+    }
+    Host::CloudRun => {
+      " Google Cloud Run ends a request at the service's request timeout (60 minutes at most)."
+    }
+    Host::Other => "",
+  };
+  format!("your compute endpoint stopped before the turn finished: {how}.{limit}")
 }
 
 /// A wake task's own end: forget its abort handle.
@@ -608,6 +667,21 @@ mod tests {
         "{base}"
       );
     }
+  }
+
+  #[test]
+  fn an_ended_turn_names_the_platforms_limit() {
+    let lambda = ended_message("abc.lambda-url.us-east-1.on.aws", "it answered HTTP 502");
+    assert_eq!(
+      lambda,
+      "your compute endpoint stopped before the turn finished: it answered HTTP 502. AWS Lambda \
+       ends an invocation at the function's timeout (15 minutes at most)."
+    );
+    assert!(ended_message("agent-xyz-uc.a.run.app", "x").contains("Google Cloud Run"));
+    assert_eq!(
+      ended_message("agent.example.com", "its connection closed (reset)"),
+      "your compute endpoint stopped before the turn finished: its connection closed (reset)."
+    );
   }
 
   #[test]

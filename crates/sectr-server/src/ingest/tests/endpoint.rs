@@ -43,6 +43,9 @@ enum Step {
   /// Dial ingest with the token like a sidecar, take the assignment, then
   /// break the request (the instance died mid-turn).
   BreakAfterDelivery,
+  /// Dial and take the assignment like `BreakAfterDelivery`, then answer
+  /// with this status (a platform's time limit ended the request).
+  StatusAfterDelivery(u16),
   /// A 307 elsewhere (must not be followed).
   Redirect,
 }
@@ -144,7 +147,7 @@ async fn fake_wake(State(fake): State<Arc<Fake>>, body: Bytes) -> axum::response
     Step::Redirect => {
       axum::response::Redirect::temporary("http://169.254.169.254/").into_response()
     }
-    Step::BreakAfterDelivery => {
+    Step::BreakAfterDelivery | Step::StatusAfterDelivery(_) => {
       let token = serde_json::from_slice::<Value>(&body).unwrap()["ingest_token"]
         .as_str()
         .unwrap()
@@ -158,6 +161,13 @@ async fn fake_wake(State(fake): State<Arc<Fake>>, body: Bytes) -> axum::response
       );
       let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
       let _assignment = ws.next().await;
+      if let Step::StatusAfterDelivery(code) = step {
+        return (
+          axum::http::StatusCode::from_u16(code).unwrap(),
+          "Internal Server Error",
+        )
+          .into_response();
+      }
       // The instance dies: the connection breaks without an answer.
       panic!("the fake endpoint's instance died mid-turn (expected in this test)");
     }
@@ -493,29 +503,46 @@ async fn a_slow_endpoint_gets_no_second_request() {
   e.wait_stopped().await;
 }
 
+/// A wake that ends after delivery ends the turn at once, saying why,
+/// rather than at the lease's expiry. Never re-sent.
 #[tokio::test]
-async fn a_request_that_breaks_after_delivery_is_left_to_the_lease() {
-  let mut options = Options::new(vec![], Step::BreakAfterDelivery);
-  options.lease_ttl_secs = 1;
-  let Some(e) = endpoint_world(options).await else {
-    return;
-  };
-  // Delivered: the spawn succeeded, so no SESSION_ERROR from the wake.
-  assert_eq!(session_error(&e.w).await, None);
-  tokio::time::sleep(Duration::from_millis(1500)).await;
-  assert_eq!(e.fake.requests(), 1, "never re-sent after delivery");
-  let reconciler = Reconciler::new(
-    e.w.registry.clone(),
-    e.w.journal.clone(),
-    Duration::from_secs(15),
-  )
-  .with_aborter(Arc::new(crate::ingest::HubAbort(e.w.hub.clone())));
-  assert_eq!(reconciler.scan_once().await.unwrap().len(), 1);
-  assert!(
-    journal_types(&e.w)
-      .await
-      .ends_with(&[EventType::SessionError, EventType::NoMoreActions])
-  );
+async fn a_wake_that_ends_after_delivery_ends_the_turn() {
+  for (step, how) in [
+    (Step::BreakAfterDelivery, "its connection closed"),
+    (Step::StatusAfterDelivery(502), "it answered HTTP 502"),
+  ] {
+    let Some(e) = endpoint_world(Options::new(vec![], step.clone())).await else {
+      return;
+    };
+    wait_for_tail(&e.w, &[EventType::SessionError, EventType::NoMoreActions]).await;
+    let message = session_error(&e.w).await.expect("the turn failed");
+    assert!(
+      message.starts_with("your compute endpoint stopped before the turn finished: "),
+      "{message}"
+    );
+    assert!(message.contains(how), "{step:?}: {message}");
+    // Not a wake failure: the turn started.
+    assert!(!message.starts_with("endpoint wake failed:"), "{message}");
+    assert!(
+      e.w
+        .registry
+        .live_lease(e.w.session)
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(e.fake.requests(), 1, "never re-sent after delivery");
+    // One end, not two.
+    let types = journal_types(&e.w).await;
+    assert_eq!(
+      types
+        .iter()
+        .filter(|t| **t == EventType::NoMoreActions)
+        .count(),
+      1,
+      "{types:?}"
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

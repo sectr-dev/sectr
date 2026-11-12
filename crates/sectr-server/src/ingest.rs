@@ -716,6 +716,43 @@ impl IngestHub {
   }
 }
 
+impl IngestHub {
+  /// An endpoint's wake request ended mid-turn (a platform time limit, a
+  /// dead instance): end the turn now with `message`, rather than at its
+  /// lease's expiry, and stop its sidecar. Does nothing when the turn has
+  /// already ended or moved on (see [`sectr_common::reconcile::end_turn_now`]).
+  pub async fn end_endpoint_turn(&self, session: Uuid, invocation_id: Uuid, message: &str) {
+    match sectr_common::reconcile::end_turn_now(
+      self.registry.as_ref(),
+      self.journal.as_ref(),
+      session,
+      invocation_id,
+      message,
+    )
+    .await
+    {
+      Ok(Some(_)) => {
+        crate::metrics::TURNS.add(1, &[opentelemetry::KeyValue::new("outcome", "wake_ended")]);
+        crate::metrics::SESSION_ERRORS.add(1, &[opentelemetry::KeyValue::new("source", "wake")]);
+        tracing::warn!(%session, %invocation_id, %message, "ended an endpoint turn whose wake ended mid-turn");
+        self
+          .push(
+            session,
+            ServerFrame::Abort {
+              reason: message.to_owned(),
+            },
+          )
+          .await;
+        self.teardown_session(session).await;
+      }
+      Ok(None) => {}
+      Err(e) => {
+        tracing::warn!(%session, error = %e, "could not end an endpoint turn; the lease covers it");
+      }
+    }
+  }
+}
+
 /// The reconciler's turn-holder abort (the [`ReclaimAbort`] hook): tell the
 /// sidecar its turn is gone and close the connection (its in-flight append
 /// fails and the engine task exits via IngestFailed). Fire-and-forget — the

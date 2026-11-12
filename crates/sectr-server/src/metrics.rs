@@ -57,9 +57,11 @@ pub static TURNS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 ///
 /// Attr `source` says who journaled it: `runner` (the agent
 /// threw — noisy, high alert threshold), `dispatch` (the platform could not
-/// start the turn: an E2B outage or capacity error), or `reclaim` (the
-/// reconciler abandoned an expired lease). `dispatch` and `reclaim` are
-/// platform health, not user code, so alerts treat them differently.
+/// start the turn: an E2B outage or capacity error), `reclaim` (the
+/// reconciler abandoned an expired lease), or `wake` (a compute endpoint's
+/// wake request ended mid-turn, so the server ended the turn). `dispatch`
+/// and `reclaim` are platform health, not user code, so alerts treat them
+/// differently; `wake` is the customer's platform.
 pub static SESSION_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
   meter()
     .u64_counter("sectr.session_errors")

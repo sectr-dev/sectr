@@ -26,6 +26,10 @@
 //!    reconciled lease is gone, the engine's next append fails on the
 //!    refresh gate).
 //!
+//! [`end_turn_now`] applies the same release and synthesis to a live turn,
+//! for a caller that learns sooner than the lease expiry that the holder is
+//! gone (prod: an endpoint whose wake request ended mid-turn).
+//!
 //! Session status is NOT touched: a failed turn does not end a session.
 //! Liveness: a healthy turn never appears here — its events ARE the
 //! heartbeat (ingest traffic refreshes the lease server-side).
@@ -104,52 +108,7 @@ impl Reconciler {
 
     // 2. Synthesize the abandoned turn's end unless the journal already
     //    has it (final batch raced the expiry).
-    let last = self.journal.fetch(lease.session_id, None).await.ok();
-    let already_ended = matches!(
-      last
-        .as_ref()
-        .and_then(|events| events.last().map(|e| e.event_type)),
-      Some(EventType::NoMoreActions | EventType::ToolApprovalRequired)
-    );
-    if !already_ended {
-      let deployment_id = match last
-        .as_ref()
-        .and_then(|events| events.last().map(|e| e.deployment_id))
-      {
-        Some(d) => d,
-        None => {
-          tracing::warn!(
-              lease_id = %lease.id,
-              session = %lease.session_id,
-              "abandoned lease has no journal events; cannot synthesize turn end"
-          );
-          return;
-        }
-      };
-      if let Err(e) = self
-        .journal
-        .append(
-          lease.session_id,
-          deployment_id,
-          vec![
-            NewEvent::new(EventPayload::SessionError(SessionError {
-              message: "turn abandoned: lease expired".into(),
-              extra: Default::default(),
-            })),
-            NewEvent::new(EventPayload::NoMoreActions(NoMoreActions {
-              extra: Default::default(),
-            })),
-          ],
-        )
-        .await
-      {
-        tracing::warn!(
-            session = %lease.session_id,
-            error = %e,
-            "failed to journal the abandoned turn's end"
-        );
-      }
-    }
+    journal_turn_end(self.journal.as_ref(), &lease, LEASE_EXPIRED).await;
 
     // 3. Abort the turn holder.
     if let Some(hook) = &self.aborter {
@@ -180,6 +139,84 @@ impl Reconciler {
       }
     }
   }
+}
+
+/// The message of a turn the reconciler ended.
+const LEASE_EXPIRED: &str = "turn abandoned: lease expired";
+
+/// Journal a released turn's end, `SESSION_ERROR` (`message`) then
+/// `NO_MORE_ACTIONS`, unless the journal already shows the turn ended
+/// (its last event is `NO_MORE_ACTIONS` or `TOOL_APPROVAL_REQUIRED`: the
+/// holder's final batch raced the release).
+async fn journal_turn_end(journal: &dyn Journal, lease: &crate::registry::Lease, message: &str) {
+  let last = journal.fetch(lease.session_id, None).await.ok();
+  let last = last.as_ref().and_then(|events| events.last());
+  if matches!(
+    last.map(|e| e.event_type),
+    Some(EventType::NoMoreActions | EventType::ToolApprovalRequired)
+  ) {
+    return;
+  }
+  let Some(deployment_id) = last.map(|e| e.deployment_id) else {
+    tracing::warn!(
+        lease_id = %lease.id,
+        session = %lease.session_id,
+        "abandoned lease has no journal events; cannot synthesize turn end"
+    );
+    return;
+  };
+  if let Err(e) = journal
+    .append(
+      lease.session_id,
+      deployment_id,
+      vec![
+        NewEvent::new(EventPayload::SessionError(SessionError {
+          message: message.into(),
+          extra: Default::default(),
+        })),
+        NewEvent::new(EventPayload::NoMoreActions(NoMoreActions {
+          extra: Default::default(),
+        })),
+      ],
+    )
+    .await
+  {
+    tracing::warn!(
+        session = %lease.session_id,
+        error = %e,
+        "failed to journal the abandoned turn's end"
+    );
+  }
+}
+
+/// End a live turn now, the way the reconciler ends one at its lease's
+/// expiry, for a caller that learns sooner that the turn's holder is gone
+/// (an endpoint whose wake request ended mid-turn). Releases the session's
+/// live lease only if it is still `invocation_id`'s, so it never ends a
+/// later turn, then journals the end with `message` unless the turn has
+/// one. Returns the released lease, so the caller can abort its holder;
+/// `None` when the turn had already ended or moved on.
+pub async fn end_turn_now(
+  registry: &dyn crate::registry::Registry,
+  journal: &dyn Journal,
+  session: Uuid,
+  invocation_id: Uuid,
+  message: &str,
+) -> crate::registry::Result<Option<crate::registry::Lease>> {
+  let Some(lease) = registry.live_lease(session).await? else {
+    return Ok(None);
+  };
+  if lease.invocation_id != Some(invocation_id) {
+    return Ok(None);
+  }
+  // Released by the holder meanwhile: its own turn end won.
+  match registry.release_lease(lease.id).await {
+    Ok(()) => {}
+    Err(crate::registry::RegistryError::NotFound(_)) => return Ok(None),
+    Err(e) => return Err(e),
+  }
+  journal_turn_end(journal, &lease, message).await;
+  Ok(Some(lease))
 }
 
 #[cfg(test)]
@@ -430,5 +467,111 @@ mod tests {
       .unwrap();
     assert_eq!(events.len(), 2, "no duplicate sentinel synthesized");
     assert_eq!(*aborts.0.lock().unwrap(), vec![(w.session, lease.id)]);
+  }
+
+  /// `end_turn_now` ends only the live turn it names, once.
+  #[tokio::test]
+  async fn ending_a_turn_now_ends_only_that_turn_once() {
+    let w = world().await;
+    abandoned_turn(&w).await;
+    // A live lease for one invocation.
+    let lease = w.registry.live_lease(w.session).await.unwrap();
+    assert!(lease.is_none(), "the zero-TTL lease isn't live");
+    let invocation = uuid::Uuid::now_v7();
+    let lease = w
+      .registry
+      .claim_lease(
+        w.session,
+        "sectr-server",
+        Some(invocation),
+        chrono::Duration::seconds(30),
+      )
+      .await
+      .unwrap();
+    let types = async || -> Vec<EventType> {
+      JournalReader::fetch(&w.journal, w.session, None)
+        .await
+        .unwrap()
+        .iter()
+        .map(|e| e.event_type)
+        .collect()
+    };
+
+    // Another invocation's end: nothing.
+    let other = end_turn_now(&w.registry, &w.journal, w.session, Uuid::now_v7(), "x")
+      .await
+      .unwrap();
+    assert!(other.is_none());
+    assert!(w.registry.live_lease(w.session).await.unwrap().is_some());
+    assert_eq!(types().await, [EventType::SessionCreated]);
+
+    // This one: released, and the end journaled with the message.
+    let ended = end_turn_now(&w.registry, &w.journal, w.session, invocation, "it stopped")
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(ended.id, lease.id);
+    assert!(w.registry.live_lease(w.session).await.unwrap().is_none());
+    assert_eq!(
+      types().await,
+      [
+        EventType::SessionCreated,
+        EventType::SessionError,
+        EventType::NoMoreActions
+      ]
+    );
+    let events = JournalReader::fetch(&w.journal, w.session, None)
+      .await
+      .unwrap();
+    assert!(matches!(
+      &events[1].payload,
+      EventPayload::SessionError(e) if e.message == "it stopped"
+    ));
+
+    // Again: already ended.
+    assert!(
+      end_turn_now(&w.registry, &w.journal, w.session, invocation, "x")
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(types().await.len(), 3);
+  }
+
+  /// A turn whose holder journaled its end just before is released without
+  /// a second end.
+  #[tokio::test]
+  async fn ending_a_turn_that_has_its_end_adds_none() {
+    let w = world().await;
+    abandoned_turn(&w).await;
+    let invocation = uuid::Uuid::now_v7();
+    w.registry
+      .claim_lease(
+        w.session,
+        "sectr-server",
+        Some(invocation),
+        chrono::Duration::seconds(30),
+      )
+      .await
+      .unwrap();
+    w.journal
+      .append_platform_event(
+        w.session,
+        w.deployment,
+        EventPayload::NoMoreActions(NoMoreActions::default()),
+      )
+      .await
+      .unwrap();
+    assert!(
+      end_turn_now(&w.registry, &w.journal, w.session, invocation, "x")
+        .await
+        .unwrap()
+        .is_some()
+    );
+    let events = JournalReader::fetch(&w.journal, w.session, None)
+      .await
+      .unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].event_type, EventType::NoMoreActions);
   }
 }
