@@ -99,8 +99,14 @@ type ChatItem =
       event: JournalEvent;
       name: string;
       args?: unknown;
+      /** Set once its TOOL_RESULT is journaled (the result may be null). */
+      answered?: boolean;
       result?: unknown;
       toolCallId: string;
+      /** Unanswered when its turn ended: the turn was killed mid-call
+       *  (interrupted), or its approval was denied. The journal never
+       *  invents a result, so the view says why there's none. */
+      unanswered?: "interrupted" | "denied";
     }
   | {
       kind: "approval";
@@ -123,6 +129,20 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
     { text: string; lastEvent: JournalEvent }
   >();
   let turn = 0;
+  // The turn's tool calls still waiting for a result.
+  let openTools: Extract<ChatItem, { kind: "tool" }>[] = [];
+  // The turn ended (or a new one began): what's still open never got its
+  // result.
+  const closeTools = () => {
+    for (const tool of openTools) {
+      if (tool.answered) continue;
+      const denied = items.some(
+        (i) => i.kind === "approval" && i.toolCallId === tool.toolCallId && i.status === "denied",
+      );
+      tool.unanswered = denied ? "denied" : "interrupted";
+    }
+    openTools = [];
+  };
 
   for (const e of events) {
     const p = e.payload as Record<string, unknown>;
@@ -130,6 +150,7 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
       case "INVOCATION_STARTED": {
         const reason = p.reason as InvocationStartedPayload["reason"];
         if (reason.kind === "user_message") {
+          closeTools();
           turn += 1;
           items.push({
             kind: "divider",
@@ -182,21 +203,25 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
         textByMessage.delete(id);
         break;
       }
-      case "TOOL_CALL":
-        items.push({
+      case "TOOL_CALL": {
+        const tool: Extract<ChatItem, { kind: "tool" }> = {
           kind: "tool",
           key: `tc-${e.seq}`,
           event: e,
           name: String(p.name),
           args: p.arguments,
           toolCallId: String(p.tool_call_id),
-        });
+        };
+        items.push(tool);
+        openTools.push(tool);
         break;
+      }
       case "TOOL_RESULT": {
         const item = [...items]
           .reverse()
           .find((i) => i.kind === "tool" && i.toolCallId === String(p.tool_call_id));
         if (item && item.kind === "tool") {
+          item.answered = true;
           item.result = p.result;
         }
         break;
@@ -233,6 +258,7 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
         break;
       case "ERROR":
       case "SESSION_ERROR":
+        closeTools();
         items.push({
           kind: "error",
           key: `e-${e.seq}`,
@@ -242,6 +268,7 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
         });
         break;
       case "NO_MORE_ACTIONS":
+        closeTools();
         items.push({
           kind: "divider",
           key: `n-${e.seq}`,
@@ -338,6 +365,13 @@ function ChatNode({
         </div>
       );
     case "tool": {
+      const pill = item.answered
+        ? { label: "done", cls: "border-success/30 bg-success/10 text-success" }
+        : item.unanswered === "interrupted"
+          ? { label: "interrupted", cls: "border-danger/30 bg-danger/10 text-danger" }
+          : item.unanswered === "denied"
+            ? { label: "not run", cls: "border-border bg-muted text-muted-foreground" }
+            : { label: "running", cls: "border-warning/30 bg-warning/10 text-warning" };
       return (
         <div className={cn("pl-8", anim)}>
           <button
@@ -359,18 +393,18 @@ function ChatNode({
                 seq {item.event.seq}
               </span>
               <span
-                className={cn(
-                  "rounded-full border px-1.5 py-px text-[10px]",
-                  item.result != null
-                    ? "border-success/30 bg-success/10 text-success"
-                    : "border-warning/30 bg-warning/10 text-warning",
-                )}
+                className={cn("rounded-full border px-1.5 py-px text-[10px]", pill.cls)}
+                title={
+                  item.unanswered === "interrupted"
+                    ? "The turn ended before this tool call returned, so no result was recorded."
+                    : undefined
+                }
               >
-                {item.result != null ? "done" : "running"}
+                {pill.label}
               </span>
             </span>
           </button>
-          {item.result != null && (
+          {item.answered && (
             <div className="mt-1 pl-4 font-mono text-[11px] text-muted-foreground">
               <span className="text-faint-foreground">→ </span>
               {excerpt(stringify(item.result), 160)}
