@@ -146,6 +146,10 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
 
   for (const e of events) {
     const p = e.payload as Record<string, unknown>;
+    // Errors end the turn, as does the sentinel.
+    if (e.type === "ERROR" || e.type === "SESSION_ERROR" || e.type === "NO_MORE_ACTIONS") {
+      closeTools();
+    }
     switch (e.type) {
       case "INVOCATION_STARTED": {
         const reason = p.reason as InvocationStartedPayload["reason"];
@@ -258,7 +262,6 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
         break;
       case "ERROR":
       case "SESSION_ERROR":
-        closeTools();
         items.push({
           kind: "error",
           key: `e-${e.seq}`,
@@ -268,7 +271,6 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
         });
         break;
       case "NO_MORE_ACTIONS":
-        closeTools();
         items.push({
           kind: "divider",
           key: `n-${e.seq}`,
