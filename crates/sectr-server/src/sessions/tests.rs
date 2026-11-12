@@ -791,10 +791,24 @@ async fn dispatch_failure_journals_session_error_and_frees_the_session() {
   assert_eq!(status, StatusCode::CREATED);
   let session: Uuid = body["session_id"].as_str().unwrap().parse().unwrap();
 
-  // The tail shows the well-formed turn end (SESSION_ERROR), the lease
-  // was released, and the errored session accepts a retry turn.
+  // The tail shows the well-formed turn end (SESSION_ERROR, then the
+  // sentinel), the session shows the error, the lease was released, and
+  // the errored session accepts a retry turn.
   let events = w.journal.fetch(session, None).await.unwrap();
-  assert_eq!(events.last().unwrap().event_type, EventType::SessionError);
+  let types: Vec<EventType> = events.iter().map(|e| e.event_type).collect();
+  assert_eq!(
+    types[types.len() - 2..],
+    [EventType::SessionError, EventType::NoMoreActions]
+  );
+  let (_, body) = req(
+    &w.app,
+    "GET",
+    &format!("/sessions/{session}"),
+    Some(&w.platform_key),
+    None,
+  )
+  .await;
+  assert_eq!(body["status"], "error", "{body}");
 
   w.dispatcher.set(Mode::Complete);
   let (status, _) = req(
@@ -812,6 +826,16 @@ async fn dispatch_failure_journals_session_error_and_frees_the_session() {
     types[types.len() - 2..],
     [EventType::InvocationStarted, EventType::NoMoreActions]
   );
+  // The turn that worked recovers the session.
+  let (_, body) = req(
+    &w.app,
+    "GET",
+    &format!("/sessions/{session}"),
+    Some(&w.platform_key),
+    None,
+  )
+  .await;
+  assert_eq!(body["status"], "active", "{body}");
 }
 
 #[tokio::test]

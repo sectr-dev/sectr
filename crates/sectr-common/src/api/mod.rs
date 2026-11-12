@@ -781,22 +781,40 @@ async fn pending_approvals(
 // Derivation — journal → the API view (shared by dev and prod services)
 // ---------------------------------------------------------------------------
 
-/// Derive the session's API status from its journal tail. The journal is
-/// the source of truth; rules (last event decides):
+/// Derive the session's API status from its journal. The journal is the
+/// source of truth; the rules:
 ///
-/// - `SESSION_ERROR` → `error`
 /// - journal ENDS on `TOOL_APPROVAL_REQUIRED` (suspended — no decision
 ///   journaled after it) → `awaiting_approval`
+/// - the last turn (from its `user_message` invocation on) holds an `ERROR`
+///   or a `SESSION_ERROR` → `error`. Errors end the turn, so the session
+///   takes a new one, and once that starts it's `active` again.
 /// - otherwise → `active` (mid-turn, idle between turns, or turn ended)
 ///
 /// `ended` is never derived: it's an explicit session-lifecycle state
 /// (registry-driven; nothing sets it in MVP).
 pub fn derive_session_status(events: &[crate::events::Event]) -> SessionStatus {
-  use crate::events::EventType::*;
-  match events.last().map(|e| e.event_type) {
-    Some(SessionError) => SessionStatus::Error,
-    Some(ToolApprovalRequired) => SessionStatus::AwaitingApproval,
-    _ => SessionStatus::Active,
+  use crate::events::{EventPayload, EventType, InvocationReason};
+  if events.last().map(|e| e.event_type) == Some(EventType::ToolApprovalRequired) {
+    return SessionStatus::AwaitingApproval;
+  }
+  let turn_start = events
+    .iter()
+    .rposition(|e| {
+      matches!(
+        &e.payload,
+        EventPayload::InvocationStarted(inv)
+          if matches!(inv.reason, InvocationReason::UserMessage { .. })
+      )
+    })
+    .unwrap_or(0);
+  let failed = events[turn_start..]
+    .iter()
+    .any(|e| matches!(e.event_type, EventType::Error | EventType::SessionError));
+  if failed {
+    SessionStatus::Error
+  } else {
+    SessionStatus::Active
   }
 }
 
@@ -842,6 +860,115 @@ pub fn derive_session_title(events: &[crate::events::Event]) -> Option<String> {
 mod tests {
   use super::*;
   use crate::events::{EventPayload, SessionCreated};
+
+  mod status {
+    use super::*;
+    use crate::events::{
+      ApprovalDecision, Error, Event, InvocationReason, InvocationStarted, NoMoreActions,
+      SessionError, ToolApprovalRequired,
+    };
+
+    fn journal(payloads: Vec<EventPayload>) -> Vec<Event> {
+      payloads
+        .into_iter()
+        .enumerate()
+        .map(|(seq, payload)| {
+          Event::new(
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::nil(),
+            uuid::Uuid::nil(),
+            seq as i64,
+            chrono::Utc::now(),
+            payload,
+          )
+        })
+        .collect()
+    }
+
+    fn started(reason: InvocationReason) -> EventPayload {
+      EventPayload::InvocationStarted(InvocationStarted {
+        invocation_id: uuid::Uuid::now_v7(),
+        route: "/chat".into(),
+        deployment_id: uuid::Uuid::nil(),
+        reason,
+        extra: Default::default(),
+      })
+    }
+    fn user() -> EventPayload {
+      started(InvocationReason::UserMessage {
+        input: "hi".to_string().try_into().unwrap(),
+        extra: Default::default(),
+      })
+    }
+    fn resume() -> EventPayload {
+      started(InvocationReason::ApprovalDecision {
+        decision: ApprovalDecision {
+          approved: true,
+          approver: None,
+          extra: Default::default(),
+        },
+        extra: Default::default(),
+      })
+    }
+    fn end() -> EventPayload {
+      EventPayload::NoMoreActions(NoMoreActions::default())
+    }
+    fn session_error() -> EventPayload {
+      EventPayload::SessionError(SessionError {
+        message: "endpoint wake failed: …".into(),
+        extra: Default::default(),
+      })
+    }
+    fn runner_error() -> EventPayload {
+      EventPayload::Error(Error {
+        message: "status_code: 401".into(),
+        code: None,
+        transient: None,
+        extra: Default::default(),
+      })
+    }
+    fn approval() -> EventPayload {
+      EventPayload::ToolApprovalRequired(ToolApprovalRequired {
+        tool_call_id: "c1".into(),
+        name: "refund".into(),
+        arguments: serde_json::Value::Null,
+        reason: None,
+        extra: Default::default(),
+      })
+    }
+
+    #[test]
+    fn the_last_turn_decides() {
+      use SessionStatus::*;
+      let cases: Vec<(Vec<EventPayload>, SessionStatus)> = vec![
+        (vec![], Active),
+        (vec![user()], Active),
+        (vec![user(), end()], Active),
+        (vec![user(), approval()], AwaitingApproval),
+        // A turn that failed, whichever way, ends in error.
+        (vec![user(), session_error(), end()], Error),
+        (vec![user(), runner_error(), end()], Error),
+        (vec![user(), session_error()], Error),
+        (
+          vec![user(), approval(), resume(), session_error(), end()],
+          Error,
+        ),
+        // A new turn after a failed one recovers the session, from its
+        // start.
+        (vec![user(), session_error(), end(), user()], Active),
+        (vec![user(), session_error(), end(), user(), end()], Active),
+        // An earlier turn's error doesn't follow an approval pause.
+        (
+          vec![user(), runner_error(), end(), user(), approval()],
+          AwaitingApproval,
+        ),
+      ];
+      for (payloads, want) in cases {
+        let types: Vec<_> = payloads.iter().map(|p| p.event_type()).collect();
+        assert_eq!(derive_session_status(&journal(payloads)), want, "{types:?}");
+      }
+    }
+  }
   use axum::body::Body;
   use axum::http::{Request, StatusCode};
   use futures::stream;
