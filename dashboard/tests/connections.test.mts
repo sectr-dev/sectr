@@ -106,6 +106,8 @@ test("runs on reflects the active deployment", () => {
 test("wake failures get the fix for their platform", () => {
   const forbidden = `${PHRASES.WAKE_FAILED} abc.lambda-url.us-east-1.on.aws ${PHRASES.ANSWERED_HTTP} 403: Forbidden`;
   assert.match(wakeHint(forbidden, LAMBDA) ?? "", /auth type NONE/);
+  // lambda:InvokeFunction for anyone, but only through the function URL.
+  assert.match(wakeHint(forbidden, LAMBDA) ?? "", /--invoked-via-function-url/);
   assert.match(wakeHint(forbidden, RUN) ?? "", /--allow-unauthenticated/);
   assert.match(wakeHint(forbidden, OTHER) ?? "", /without its own auth/);
   assert.equal(wakeHint(`${PHRASES.WAKE_FAILED} x ${PHRASES.ANSWERED_HTTP} 502: Bad Gateway`, LAMBDA), null);
