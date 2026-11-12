@@ -491,6 +491,7 @@ async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
   if let Some((platform, pins)) = &endpoint {
     let agent = agent_dir(&target, frontend);
     crate::endpoint::write_files(&agent, *platform, pins, false)?;
+    endpoint_readmes(&target, frontend, *platform, &name)?;
     let prefix = agent.strip_prefix(&target).unwrap_or(Path::new(""));
     written.push(prefix.join("Dockerfile"));
     written.push(prefix.join(".dockerignore"));
@@ -955,6 +956,84 @@ fn scaffold(
   Ok(written)
 }
 
+/// The frontend README's agent deploy commands, for Sectr Run.
+const FRONTEND_DEPLOY: &str = "```sh
+cd agent
+sectr deploy                      # prints the deployed AG-UI URL
+sectr secrets set OPENAI_API_KEY  # optional: use a real model in the cloud
+```
+";
+
+/// Point a fresh scaffold's READMEs at the endpoint flow: the templates
+/// describe Sectr Run, where `sectr deploy` ships the agent. The agent
+/// README's "Ship it" section is replaced; with a frontend, so are the
+/// agent's commands under the frontend README's "Deploy".
+fn endpoint_readmes(
+  target: &Path,
+  frontend: Frontend,
+  platform: Platform,
+  app_name: &str,
+) -> anyhow::Result<()> {
+  let steps = platform.next_steps(app_name);
+  let (guide, steps) = steps.split_last().expect("the steps end with the guide");
+  let block = format!("```text\n{}\n```\n\n{guide}\n", steps.join("\n"));
+  let rewrite = |path: &Path, edit: &dyn Fn(&str) -> Option<String>| {
+    let text =
+      std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    // A template that no longer has the section is a bug, caught by the
+    // tests: the README stays as it was.
+    if let Some(text) = edit(&text) {
+      std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
+    }
+    anyhow::Ok(())
+  };
+
+  let ship_it = format!(
+    "## Ship it
+
+This agent runs on {platform_name}, in your own account: you deploy its image \
+there, and Sectr wakes it for each turn. The steps, from this directory:
+
+{block}
+For a real model in the cloud, set its key as a project secret (values are \
+write-only: they can be set, never read back). Sectr hands it to the agent \
+at the start of each turn:
+
+```bash
+sectr secrets set OPENAI_API_KEY
+```
+
+Or set it on {platform_name} with its own secrets: the agent sees the \
+environment it runs in.
+
+",
+    platform_name = platform.name(),
+  );
+  rewrite(&agent_dir(target, frontend).join("README.md"), &|text| {
+    let start = text.find("## Ship it\n")?;
+    let end = start + text[start..].find("\n## ")? + 1;
+    Some(format!("{}{ship_it}{}", &text[..start], &text[end..]))
+  })?;
+
+  if frontend == Frontend::CopilotKit {
+    let deploy = format!(
+      "The agent runs on {}, in your own account. From `{AGENT_DIR}/`:
+
+{block}
+`sectr deploy` prints the deployed AG-UI URL. For a real model in the cloud, \
+`sectr secrets set OPENAI_API_KEY` in `{AGENT_DIR}/`.
+",
+      platform.name(),
+    );
+    rewrite(&target.join("README.md"), &|text| {
+      text
+        .contains(FRONTEND_DEPLOY)
+        .then(|| text.replacen(FRONTEND_DEPLOY, &deploy, 1))
+    })?;
+  }
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1253,6 +1332,53 @@ mod tests {
         assert!(!target.join("Dockerfile").exists());
       }
     }
+  }
+
+  /// An endpoint project's READMEs give the platform's steps, not Sectr
+  /// Run's, for every template and frontend.
+  #[test]
+  fn an_endpoint_scaffolds_readmes_give_the_platforms_steps() {
+    for template in TEMPLATES {
+      for frontend in [Frontend::None, Frontend::CopilotKit] {
+        let case = format!("{template:?}/{frontend:?}");
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("my-agent");
+        ensure_target_dir(&target, false).unwrap();
+        scaffold(&target, template, frontend, "my-agent").unwrap();
+        endpoint_readmes(&target, frontend, Platform::CloudRun, "my-agent").unwrap();
+
+        let agent =
+          std::fs::read_to_string(agent_dir(&target, frontend).join("README.md")).unwrap();
+        assert!(
+          !agent.contains("becomes an HTTPS endpoint"),
+          "{case}: {agent}"
+        );
+        assert_eq!(agent.matches("## Ship it\n").count(), 1, "{case}");
+        for expected in [
+          "runs on Google Cloud Run",
+          "1. gcloud run deploy my-agent",
+          ". sectr deploy ",
+          crate::endpoint::GUIDE,
+          "sectr secrets set OPENAI_API_KEY",
+          "\n## Files\n",
+        ] {
+          assert!(agent.contains(expected), "{case}: {expected}\n{agent}");
+        }
+        if frontend == Frontend::CopilotKit {
+          let root = std::fs::read_to_string(target.join("README.md")).unwrap();
+          assert!(!root.contains(FRONTEND_DEPLOY), "{case}");
+          assert!(root.contains("1. gcloud run deploy my-agent"), "{case}");
+          assert!(root.contains("AG-UI URL"), "{case}");
+        }
+      }
+    }
+  }
+
+  /// The section a Sectr Run project keeps is in every template, so the
+  /// rewrite above has something to replace.
+  #[test]
+  fn the_frontend_readme_has_the_agent_deploy_commands() {
+    assert!(include_str!("../templates/copilotkit/README.md").contains(FRONTEND_DEPLOY));
   }
 
   fn endpoint_args(name: Option<&str>, template: Option<&str>, api: &str) -> InitArgs {
