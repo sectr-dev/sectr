@@ -237,8 +237,8 @@ impl Registry for EncryptedRegistry {
       .claim_lease_capped(session, runner_id, invocation_id, ttl, caps)
       .await
   }
-  async fn count_live_turns(&self, app_id: Uuid) -> Result<(u64, u64)> {
-    self.inner.count_live_turns(app_id).await
+  async fn count_live_turns(&self, app_id: Uuid, on_endpoint: bool) -> Result<(u64, u64)> {
+    self.inner.count_live_turns(app_id, on_endpoint).await
   }
   async fn heartbeat_lease(&self, lease_id: Uuid, ttl: chrono::Duration) -> Result<Lease> {
     self.inner.heartbeat_lease(lease_id, ttl).await

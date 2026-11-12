@@ -72,11 +72,16 @@ impl std::fmt::Display for CapScope {
 
 /// Concurrency caps enforced atomically at lease claim. A "live
 /// turn" is a live lease (`released_at IS NULL AND expires_at > now`);
-/// `None` = unlimited.
+/// `None` = unlimited. Both counts take only turns of the claim's own kind
+/// (`on_endpoint`): a turn in a Sectr Run sandbox never counts against an
+/// endpoint cap, nor the reverse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaseCaps {
   /// The app the claiming session belongs to (the per-app count's key).
   pub app_id: Uuid,
+  /// Whether the claiming session's deployment runs on a compute endpoint
+  /// (its `endpoint_url` is set) rather than in a Sectr Run sandbox.
+  pub on_endpoint: bool,
   pub per_app: Option<u32>,
   pub global: Option<u32>,
 }
@@ -626,10 +631,11 @@ pub trait Registry: Send + Sync {
     ttl: chrono::Duration,
     caps: &LeaseCaps,
   ) -> Result<Lease>;
-  /// Live turns `(for app_id, platform-wide)` — live leases joined to
-  /// `sessions.app_id`. A non-atomic read for admission pre-checks; the
+  /// Live turns `(for app_id, platform-wide)` of one kind (`on_endpoint`,
+  /// see [`LeaseCaps`]) — live leases joined to their session and its
+  /// deployment. A non-atomic read for admission pre-checks; the
   /// authoritative check is [`Self::claim_lease_capped`].
-  async fn count_live_turns(&self, app_id: Uuid) -> Result<(u64, u64)>;
+  async fn count_live_turns(&self, app_id: Uuid, on_endpoint: bool) -> Result<(u64, u64)>;
   /// Extend a live lease: stamps `heartbeat_at` and pushes `expires_at`
   /// out by `ttl`. Fails if the lease was released or never existed.
   async fn heartbeat_lease(&self, lease_id: Uuid, ttl: chrono::Duration) -> Result<Lease>;

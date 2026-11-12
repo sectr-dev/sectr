@@ -70,6 +70,7 @@ async fn claim(
 fn caps(app: &App, per_app: Option<u32>, global: Option<u32>) -> LeaseCaps {
   LeaseCaps {
     app_id: app.id,
+    on_endpoint: false,
     per_app,
     global,
   }
@@ -106,7 +107,10 @@ pub(crate) async fn per_app_cap(registry: &dyn Registry, org: OrgId) {
   // A released lease frees the slot.
   registry.release_lease(first.id).await.unwrap();
   claim(registry, &a3, &a_caps, ttl).await.unwrap();
-  assert_eq!(registry.count_live_turns(a.id).await.unwrap(), (2, 3));
+  assert_eq!(
+    registry.count_live_turns(a.id, false).await.unwrap(),
+    (2, 3)
+  );
 }
 
 /// The platform-wide cap spans apps and reports `Platform`.
@@ -131,8 +135,14 @@ pub(crate) async fn global_cap_across_apps(registry: &dyn Registry, org: OrgId) 
     }
     other => panic!("expected CapExceeded{{Platform}}, got {other:?}"),
   }
-  assert_eq!(registry.count_live_turns(a.id).await.unwrap(), (1, 2));
-  assert_eq!(registry.count_live_turns(b.id).await.unwrap(), (1, 2));
+  assert_eq!(
+    registry.count_live_turns(a.id, false).await.unwrap(),
+    (1, 2)
+  );
+  assert_eq!(
+    registry.count_live_turns(b.id, false).await.unwrap(),
+    (1, 2)
+  );
 
   // When both caps trip, the tenant is told about its own limit first.
   let both = caps(&b, Some(1), Some(2));
@@ -156,7 +166,10 @@ pub(crate) async fn expired_and_released_leases_do_not_count(registry: &dyn Regi
     .await
     .unwrap();
   tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-  assert_eq!(registry.count_live_turns(a.id).await.unwrap(), (0, 0));
+  assert_eq!(
+    registry.count_live_turns(a.id, false).await.unwrap(),
+    (0, 0)
+  );
 
   let live = claim(registry, &s2, &one, chrono::Duration::seconds(TTL))
     .await
@@ -167,7 +180,10 @@ pub(crate) async fn expired_and_released_leases_do_not_count(registry: &dyn Regi
   ));
 
   registry.release_lease(live.id).await.unwrap();
-  assert_eq!(registry.count_live_turns(a.id).await.unwrap(), (0, 0));
+  assert_eq!(
+    registry.count_live_turns(a.id, false).await.unwrap(),
+    (0, 0)
+  );
   claim(registry, &s3, &one, chrono::Duration::seconds(TTL))
     .await
     .unwrap();
@@ -197,7 +213,10 @@ pub(crate) async fn uncapped_and_conflict_semantics(registry: &dyn Registry, org
     let s = session_of(registry, &a, &dep).await;
     claim(registry, &s, &none, ttl).await.unwrap();
   }
-  assert_eq!(registry.count_live_turns(a.id).await.unwrap(), (6, 6));
+  assert_eq!(
+    registry.count_live_turns(a.id, false).await.unwrap(),
+    (6, 6)
+  );
 }
 
 /// 16 concurrent claims against a cap of 3 → exactly 3 win (proves the
@@ -226,5 +245,56 @@ pub(crate) async fn concurrent_claims_respect_cap(registry: Arc<dyn Registry>, o
   }
   assert_eq!(won, 3, "exactly the cap's worth of claims win");
   assert_eq!(capped, 13);
-  assert_eq!(registry.count_live_turns(a.id).await.unwrap(), (3, 3));
+  assert_eq!(
+    registry.count_live_turns(a.id, false).await.unwrap(),
+    (3, 3)
+  );
+}
+
+/// Sandbox turns and endpoint turns are counted apart: a claim counts only
+/// turns of its own kind, for the app and platform-wide.
+pub(crate) async fn kinds_are_counted_apart(registry: &dyn Registry, org: OrgId) {
+  let (a, sandbox) = app_with_deployment(registry, org, "app-a").await;
+  let endpoint = registry
+    .create_deployment(NewDeployment {
+      endpoint_url: Some("https://app-a-xyz.a.run.app/".into()),
+      app_id: a.id,
+      version: 2,
+      manifest: json!({"routes": [{"path": "/test"}]}),
+    })
+    .await
+    .unwrap();
+  let ttl = chrono::Duration::seconds(TTL);
+  let sandbox_caps = caps(&a, Some(1), Some(1));
+  let endpoint_caps = LeaseCaps {
+    on_endpoint: true,
+    ..caps(&a, Some(2), None)
+  };
+
+  // The sandbox turn fills both sandbox caps...
+  let s1 = session_of(registry, &a, &sandbox).await;
+  claim(registry, &s1, &sandbox_caps, ttl).await.unwrap();
+  let s2 = session_of(registry, &a, &sandbox).await;
+  assert!(matches!(
+    claim(registry, &s2, &sandbox_caps, ttl).await,
+    Err(RegistryError::CapExceeded { .. })
+  ));
+  // ...and none of the endpoint's.
+  let e1 = session_of(registry, &a, &endpoint).await;
+  let e2 = session_of(registry, &a, &endpoint).await;
+  let e3 = session_of(registry, &a, &endpoint).await;
+  claim(registry, &e1, &endpoint_caps, ttl).await.unwrap();
+  claim(registry, &e2, &endpoint_caps, ttl).await.unwrap();
+  match claim(registry, &e3, &endpoint_caps, ttl).await {
+    Err(RegistryError::CapExceeded { scope, limit }) => {
+      assert_eq!(scope, CapScope::App);
+      assert_eq!(limit, 2);
+    }
+    other => panic!("expected CapExceeded{{App}}, got {other:?}"),
+  }
+  assert_eq!(
+    registry.count_live_turns(a.id, false).await.unwrap(),
+    (1, 1)
+  );
+  assert_eq!(registry.count_live_turns(a.id, true).await.unwrap(), (2, 2));
 }

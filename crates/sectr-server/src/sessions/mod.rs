@@ -228,7 +228,7 @@ impl ProdSessionService {
     if caps.any() {
       let (app_live, total_live) = self
         .registry
-        .count_live_turns(app_id)
+        .count_live_turns(app_id, caps.on_endpoint)
         .await
         .map_err(internal)?;
       if let Some((cap_scope, limit)) = caps.exceeded(app_live, total_live) {

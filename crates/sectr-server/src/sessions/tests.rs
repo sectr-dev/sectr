@@ -1410,8 +1410,8 @@ async fn mint_rate_limit_is_enforced_per_user() {
 
 fn limits(per_app: u32, global: u32) -> crate::limits::LimitsConfig {
   crate::limits::LimitsConfig {
-    max_turns_per_app: per_app,
-    max_turns: global,
+    max_sandbox_turns_per_app: per_app,
+    max_sandbox_turns: global,
     ..crate::limits::LimitsConfig::none()
   }
 }
@@ -1491,12 +1491,13 @@ async fn app_cap_rejects_create_with_429_and_leaves_no_session_row() {
 }
 
 /// An app whose active deployment runs on a compute endpoint gets the
-/// endpoint per-app cap, for new sessions and for turns on them.
+/// endpoint per-app cap, for new sessions and for turns on them, and the
+/// platform-wide cap (the sandboxes') doesn't count its turns.
 #[tokio::test]
 async fn an_endpoint_app_gets_the_endpoint_cap() {
   let Some(w) = world_with_limits(|_, _| crate::limits::LimitsConfig {
     max_endpoint_turns_per_app: 2,
-    ..limits(1, 0)
+    ..limits(1, 1)
   })
   .await
   else {
@@ -1519,11 +1520,12 @@ async fn an_endpoint_app_gets_the_endpoint_cap() {
     .unwrap();
 
   w.dispatcher.set(Mode::Hold);
-  // app-a, on Sectr Run: one turn at a time.
+  // app-a, on Sectr Run: one turn at a time, which also fills the
+  // platform's one sandbox.
   create_ok(&w, &w.platform_key, "app-a").await;
   let (status, body) = create_session(&w.app, &w.platform_key, new_session_body("app-a")).await;
   assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
-  // app-b, on an endpoint: two.
+  // app-b, on an endpoint: two, with the sandboxes full.
   create_ok(&w, &w.platform_key, "app-b").await;
   let second = create_ok(&w, &w.platform_key, "app-b").await;
   let (status, body) = create_session(&w.app, &w.platform_key, new_session_body("app-b")).await;

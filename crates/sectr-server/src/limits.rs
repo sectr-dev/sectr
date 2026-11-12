@@ -40,17 +40,23 @@ const SWEEP_ABOVE: usize = 10_000;
 /// become "unlimited"). `0` on a cap / rate means unlimited / off.
 #[derive(Debug, Clone)]
 pub struct LimitsConfig {
-  /// `SECTR_MAX_CONCURRENT_TURNS_PER_APP`, default 3: turns on Sectr Run.
-  pub max_turns_per_app: u32,
-  /// `SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP`, default 20: turns of a
-  /// deployment on the customer's own compute endpoint. Those run on the
-  /// customer's compute, and cost the server only a held request, the
-  /// sidecar's connection and journal writes.
+  /// `SECTR_MAX_CONCURRENT_SANDBOX_TURNS_PER_APP` (formerly
+  /// `SECTR_MAX_CONCURRENT_TURNS_PER_APP`), default 3: an app's turns in
+  /// Sectr Run sandboxes, which bound our sandbox spend.
+  pub max_sandbox_turns_per_app: u32,
+  /// `SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP`, default 20: an app's
+  /// turns on its own compute endpoint. Those run on the customer's
+  /// compute, and cost the server only a held request, the sidecar's
+  /// connection and journal writes.
   pub max_endpoint_turns_per_app: u32,
-  /// `SECTR_MAX_CONCURRENT_TURNS` (platform-wide), default 0 = unlimited.
-  pub max_turns: u32,
+  /// `SECTR_MAX_CONCURRENT_SANDBOX_TURNS` (formerly
+  /// `SECTR_MAX_CONCURRENT_TURNS`), default 0 = unlimited: turns in Sectr
+  /// Run sandboxes platform-wide, the sandbox platform's capacity. Endpoint
+  /// turns have no platform-wide cap.
+  pub max_sandbox_turns: u32,
   /// `SECTR_APP_TURN_LIMIT_OVERRIDES` = `<app-uuid>=<n>,…` (n = 0 lifts the
-  /// per-app cap for that app).
+  /// per-app cap for that app). An override is the app's per-app cap for
+  /// both kinds of turn.
   pub app_turn_limit_overrides: HashMap<Uuid, u32>,
   /// `SECTR_SESSION_RATE_PER_USER_HOUR`, default 60 (burst 10).
   pub session_rate_per_user_hour: u32,
@@ -67,9 +73,9 @@ impl LimitsConfig {
   /// this so existing tests are unaffected.
   pub fn none() -> Self {
     LimitsConfig {
-      max_turns_per_app: 0,
+      max_sandbox_turns_per_app: 0,
       max_endpoint_turns_per_app: 0,
-      max_turns: 0,
+      max_sandbox_turns: 0,
       app_turn_limit_overrides: HashMap::new(),
       session_rate_per_user_hour: 0,
       session_rate_per_app_hour: 0,
@@ -97,11 +103,43 @@ impl LimitsConfig {
           .map_err(|_| anyhow::anyhow!("{key}={v:?} is not a non-negative integer")),
       }
     }
+    // A renamed knob still reads its old name, so an existing env file
+    // keeps its cap rather than silently losing it. Both set differently
+    // is refused: which one was meant can't be told.
+    fn renamed(
+      get: &impl Fn(&str) -> Option<String>,
+      key: &str,
+      old: &str,
+    ) -> anyhow::Result<Option<u32>> {
+      match (number(get, key)?, number(get, old)?) {
+        (Some(new), Some(was)) if new != was => {
+          anyhow::bail!(
+            "{old}={was} and {key}={new} are set: {old} is {key}'s old name, so set only {key}"
+          )
+        }
+        (Some(new), _) => Ok(Some(new)),
+        (None, Some(was)) => {
+          tracing::warn!("{old} is deprecated: rename it to {key}");
+          Ok(Some(was))
+        }
+        (None, None) => Ok(None),
+      }
+    }
     Ok(LimitsConfig {
-      max_turns_per_app: number(&get, "SECTR_MAX_CONCURRENT_TURNS_PER_APP")?.unwrap_or(3),
+      max_sandbox_turns_per_app: renamed(
+        &get,
+        "SECTR_MAX_CONCURRENT_SANDBOX_TURNS_PER_APP",
+        "SECTR_MAX_CONCURRENT_TURNS_PER_APP",
+      )?
+      .unwrap_or(3),
       max_endpoint_turns_per_app: number(&get, "SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP")?
         .unwrap_or(20),
-      max_turns: number(&get, "SECTR_MAX_CONCURRENT_TURNS")?.unwrap_or(0),
+      max_sandbox_turns: renamed(
+        &get,
+        "SECTR_MAX_CONCURRENT_SANDBOX_TURNS",
+        "SECTR_MAX_CONCURRENT_TURNS",
+      )?
+      .unwrap_or(0),
       app_turn_limit_overrides: match value(&get, "SECTR_APP_TURN_LIMIT_OVERRIDES") {
         Some(v) => parse_overrides(&v)?,
         None => HashMap::new(),
@@ -143,7 +181,7 @@ fn parse_overrides(raw: &str) -> anyhow::Result<HashMap<Uuid, u32>> {
 // ---------------------------------------------------------------------------
 
 /// Resolved cap policy: per-app defaults (by where the turn runs) +
-/// per-app overrides + platform cap.
+/// per-app overrides + the platform-wide sandbox cap.
 #[derive(Debug, Clone, Default)]
 pub struct TurnCapsConfig {
   per_app_default: Option<u32>,
@@ -162,29 +200,32 @@ impl TurnCapsConfig {
   pub fn from_config(limits: &LimitsConfig) -> Self {
     let cap = |n: u32| (n > 0).then_some(n);
     TurnCapsConfig {
-      per_app_default: cap(limits.max_turns_per_app),
+      per_app_default: cap(limits.max_sandbox_turns_per_app),
       endpoint_per_app_default: cap(limits.max_endpoint_turns_per_app),
       overrides: limits
         .app_turn_limit_overrides
         .iter()
         .map(|(app, n)| (*app, cap(*n)))
         .collect(),
-      global: cap(limits.max_turns),
+      global: cap(limits.max_sandbox_turns),
     }
   }
 
   /// The caps that apply to a claim for `app_id`, whose turn runs on a
-  /// compute endpoint when `on_endpoint`. An app's override applies to
-  /// both kinds.
+  /// compute endpoint when `on_endpoint` and in a Sectr Run sandbox
+  /// otherwise. Each cap counts only turns of the claim's kind. An app's
+  /// override applies to both kinds; the platform-wide cap only to
+  /// sandboxes.
   pub fn caps_for(&self, app_id: Uuid, on_endpoint: bool) -> LeaseCaps {
     LeaseCaps {
       app_id,
+      on_endpoint,
       per_app: match self.overrides.get(&app_id) {
         Some(over) => *over,
         None if on_endpoint => self.endpoint_per_app_default,
         None => self.per_app_default,
       },
-      global: self.global,
+      global: (!on_endpoint).then_some(self.global).flatten(),
     }
   }
 }
@@ -484,20 +525,23 @@ mod tests {
     let unlimited = Uuid::now_v7();
     let other = Uuid::now_v7();
     let limits = LimitsConfig {
-      max_turns_per_app: 3,
+      max_sandbox_turns_per_app: 3,
       max_endpoint_turns_per_app: 20,
-      max_turns: 8,
+      max_sandbox_turns: 8,
       app_turn_limit_overrides: HashMap::from([(vip, 6), (unlimited, 0)]),
       ..LimitsConfig::none()
     };
     let caps = TurnCapsConfig::from_config(&limits);
     assert_eq!(caps.caps_for(other, false).per_app, Some(3));
     assert_eq!(caps.caps_for(other, true).per_app, Some(20));
+    // The platform-wide cap is the sandbox platform's.
+    assert_eq!(caps.caps_for(other, false).global, Some(8));
+    assert_eq!(caps.caps_for(other, true).global, None);
     // An override is the app's, wherever its turns run.
     for on_endpoint in [false, true] {
       assert_eq!(caps.caps_for(vip, on_endpoint).per_app, Some(6));
       assert_eq!(caps.caps_for(unlimited, on_endpoint).per_app, None);
-      assert_eq!(caps.caps_for(other, on_endpoint).global, Some(8));
+      assert_eq!(caps.caps_for(other, on_endpoint).on_endpoint, on_endpoint);
       assert_eq!(
         TurnCapsConfig::unlimited()
           .caps_for(other, on_endpoint)
@@ -519,9 +563,9 @@ mod tests {
   #[test]
   fn env_defaults() {
     let l = LimitsConfig::from_lookup(lookup(&[])).unwrap();
-    assert_eq!(l.max_turns_per_app, 3);
+    assert_eq!(l.max_sandbox_turns_per_app, 3);
     assert_eq!(l.max_endpoint_turns_per_app, 20);
-    assert_eq!(l.max_turns, 0);
+    assert_eq!(l.max_sandbox_turns, 0);
     assert!(l.app_turn_limit_overrides.is_empty());
     assert_eq!(l.session_rate_per_user_hour, 60);
     assert_eq!(l.session_rate_per_app_hour, 600);
@@ -532,9 +576,9 @@ mod tests {
   #[test]
   fn env_parses_every_knob() {
     let l = LimitsConfig::from_lookup(lookup(&[
-      ("SECTR_MAX_CONCURRENT_TURNS_PER_APP", "4"),
+      ("SECTR_MAX_CONCURRENT_SANDBOX_TURNS_PER_APP", "4"),
       ("SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP", "0"),
-      ("SECTR_MAX_CONCURRENT_TURNS", "8"),
+      ("SECTR_MAX_CONCURRENT_SANDBOX_TURNS", "8"),
       (
         "SECTR_APP_TURN_LIMIT_OVERRIDES",
         "11111111-1111-1111-1111-111111111111=6, 22222222-2222-2222-2222-222222222222=0",
@@ -545,9 +589,9 @@ mod tests {
       ("SECTR_RUNNER_REAPER", "dry-run"),
     ]))
     .unwrap();
-    assert_eq!(l.max_turns_per_app, 4);
+    assert_eq!(l.max_sandbox_turns_per_app, 4);
     assert_eq!(l.max_endpoint_turns_per_app, 0);
-    assert_eq!(l.max_turns, 8);
+    assert_eq!(l.max_sandbox_turns, 8);
     assert_eq!(l.app_turn_limit_overrides.len(), 2);
     assert_eq!(l.session_rate_per_user_hour, 30);
     assert_eq!(l.session_rate_per_app_hour, 300);
@@ -555,9 +599,42 @@ mod tests {
     assert_eq!(l.reaper, ReaperMode::DryRun);
   }
 
+  /// An env file from before the rename keeps its caps.
+  #[test]
+  fn the_old_names_still_set_the_sandbox_caps() {
+    let l = LimitsConfig::from_lookup(lookup(&[
+      ("SECTR_MAX_CONCURRENT_TURNS_PER_APP", "0"),
+      ("SECTR_MAX_CONCURRENT_TURNS", "10"),
+    ]))
+    .unwrap();
+    assert_eq!(l.max_sandbox_turns_per_app, 0);
+    assert_eq!(l.max_sandbox_turns, 10);
+    // Both names, the same value: fine.
+    let l = LimitsConfig::from_lookup(lookup(&[
+      ("SECTR_MAX_CONCURRENT_TURNS", "8"),
+      ("SECTR_MAX_CONCURRENT_SANDBOX_TURNS", "8"),
+    ]))
+    .unwrap();
+    assert_eq!(l.max_sandbox_turns, 8);
+    // Different values: refused.
+    let err = LimitsConfig::from_lookup(lookup(&[
+      ("SECTR_MAX_CONCURRENT_TURNS", "8"),
+      ("SECTR_MAX_CONCURRENT_SANDBOX_TURNS", "10"),
+    ]))
+    .unwrap_err()
+    .to_string();
+    assert!(
+      err.contains("set only SECTR_MAX_CONCURRENT_SANDBOX_TURNS"),
+      "{err}"
+    );
+  }
+
   #[test]
   fn env_malformed_values_fail_startup() {
     for bad in [
+      ("SECTR_MAX_CONCURRENT_SANDBOX_TURNS", "eight"),
+      ("SECTR_MAX_CONCURRENT_SANDBOX_TURNS_PER_APP", "-1"),
+      // The old names are still checked.
       ("SECTR_MAX_CONCURRENT_TURNS", "eight"),
       ("SECTR_MAX_CONCURRENT_TURNS_PER_APP", "-1"),
       ("SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP", "lots"),
@@ -586,12 +663,12 @@ mod tests {
   fn empty_env_values_are_unset() {
     let l = LimitsConfig::from_lookup(lookup(&[
       ("SECTR_SIGNUP_CAP", ""),
-      ("SECTR_MAX_CONCURRENT_TURNS", "  "),
+      ("SECTR_MAX_CONCURRENT_SANDBOX_TURNS", "  "),
       ("SECTR_RUNNER_REAPER", ""),
     ]))
     .unwrap();
     assert_eq!(l.signup_cap, None);
-    assert_eq!(l.max_turns, 0);
+    assert_eq!(l.max_sandbox_turns, 0);
     assert_eq!(l.reaper, ReaperMode::On);
   }
 }
