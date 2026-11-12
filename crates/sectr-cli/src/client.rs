@@ -1,6 +1,7 @@
 //! [`GatewayClient`] — the CLI's HTTP client of a **sectr gateway**
 //! (local `sectr dev` today; a cloud gateway later). Deliberately dumb:
-//! a base URL + reqwest and the protocol methods — no retries, no token
+//! a base URL + reqwest and the protocol methods — no retries beyond a
+//! busy app's `429`, no token
 //! lifecycle, no endpoint catalog (that's what would make it an SDK
 //! `Client`; this stays a thin wrapper).
 //!
@@ -227,6 +228,7 @@ impl GatewayClient {
     json: bool,
   ) -> anyhow::Result<()> {
     let url = format!("{}/sessions/{sid}/events", self.base);
+    let mut renderer = Renderer::default();
     let mut last_id: Option<String> = None;
     let mut reconnects = 0u32;
     loop {
@@ -254,7 +256,7 @@ impl GatewayClient {
           if let Some((id, data)) = sse.feed(line) {
             last_id = id;
             got_frame = true;
-            match print_event(&data, baseline, json)? {
+            match print_event(&data, baseline, json, &mut renderer)? {
               Step::Continue => {}
               Step::TurnEnded => {
                 if mode == StreamMode::Run {
@@ -265,13 +267,13 @@ impl GatewayClient {
                 if mode == StreamMode::Run {
                   if !json {
                     eprintln!(
-                      "\n⏸  awaiting approval: {tool} — decide with \
-                                             `sectr send --approve|--deny --session {sid}`"
+                      "⏸  awaiting approval: {tool} — decide with \
+                       `sectr send --approve|--deny --session {sid}`"
                     );
                   }
                   return Ok(());
                 } else if !json {
-                  eprintln!("\n⏸  approval required: {tool} (still following)");
+                  eprintln!("⏸  approval required: {tool} (still following)");
                 }
               }
             }
@@ -298,15 +300,40 @@ impl GatewayClient {
   }
 
   /// POST a JSON body to a gateway path; maps error statuses to a
-  /// readable message.
+  /// readable message. A `429` (the app is at its concurrent-turn limit)
+  /// is retried after its `Retry-After`, saying so on stderr: the server
+  /// leaves nothing behind when it refuses, so a retry is safe.
   async fn post(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let resp = self
-      .request(reqwest::Method::POST, &format!("{}{path}", self.base))
-      .json(body)
-      .send()
-      .await?;
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    let mut retries = 0;
+    let (status, text) = loop {
+      let resp = self
+        .request(reqwest::Method::POST, &format!("{}{path}", self.base))
+        .json(body)
+        .send()
+        .await?;
+      let status = resp.status();
+      let retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+      let text = resp.text().await.unwrap_or_default();
+      let wait = Duration::from_secs(retry_after.unwrap_or(5).max(1));
+      if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        && retries < BUSY_RETRIES
+        && wait <= MAX_BUSY_WAIT
+      {
+        retries += 1;
+        eprintln!(
+          "{}; retrying in {}s ({retries}/{BUSY_RETRIES})",
+          server_error(&text).unwrap_or_else(|| "the server is busy".into()),
+          wait.as_secs()
+        );
+        tokio::time::sleep(wait).await;
+        continue;
+      }
+      break (status, text);
+    };
     if !status.is_success() {
       bail!("{status}: {text}");
     }
@@ -317,6 +344,19 @@ impl GatewayClient {
     serde_json::from_str(&text)
       .with_context(|| format!("unexpected gateway response from {path}: {text}"))
   }
+}
+
+/// How many times a `429` is retried before giving up.
+const BUSY_RETRIES: u32 = 6;
+
+/// A `429` that asks for a longer wait than this (a rate limit, rather
+/// than a turn finishing) isn't retried.
+const MAX_BUSY_WAIT: Duration = Duration::from_secs(30);
+
+/// The `error` of a server's JSON error body.
+fn server_error(text: &str) -> Option<String> {
+  let value: serde_json::Value = serde_json::from_str(text).ok()?;
+  value.get("error")?.as_str().map(str::to_owned)
 }
 
 /// What the streaming loop does when the journal shows a turn boundary.
@@ -371,7 +411,12 @@ impl SseParser {
 /// Parse one SSE `data:` payload as a journal event envelope and render
 /// it. Events below `baseline` (already-seen) are skipped silently; with
 /// `json`, the raw envelope prints instead of the human renderer.
-fn print_event(data: &str, baseline: i64, json: bool) -> anyhow::Result<Step> {
+fn print_event(
+  data: &str,
+  baseline: i64,
+  json: bool,
+  renderer: &mut Renderer,
+) -> anyhow::Result<Step> {
   let event: Event =
     serde_json::from_str(data).with_context(|| format!("unparseable event frame: {data}"))?;
   if event.seq < baseline {
@@ -379,47 +424,100 @@ fn print_event(data: &str, baseline: i64, json: bool) -> anyhow::Result<Step> {
   }
   if json {
     println!("{data}");
-    return Ok(render_step(&event));
+  } else {
+    print!("{}", renderer.render(&event));
+    std::io::stdout().flush().ok();
   }
-  match &event.payload {
-    EventPayload::MessageDelta(d) => match &d.delta {
-      sectr_common::events::TypedDelta::Text { text, .. } => {
-        print!("{text}");
-        std::io::stdout().flush().ok();
+  Ok(render_step(&event))
+}
+
+/// The human renderer. It keeps track of the cursor, so every line other
+/// than message text starts on a line of its own, and turns are separated
+/// by exactly one blank line.
+#[derive(Default)]
+pub(crate) struct Renderer {
+  /// Anything printed yet (no blank line before the first turn).
+  printed: bool,
+  /// The cursor is mid-line (message text without its newline yet).
+  mid_line: bool,
+}
+
+impl Renderer {
+  /// What to print for `event`, possibly nothing.
+  pub(crate) fn render(&mut self, event: &Event) -> String {
+    use sectr_common::events::{InvocationReason, TypedDelta};
+    let mut out = String::new();
+    match &event.payload {
+      EventPayload::MessageDelta(d) => match &d.delta {
+        TypedDelta::Text { text, .. } if !text.is_empty() => {
+          out.push_str(text);
+          self.printed = true;
+          self.mid_line = !text.ends_with('\n');
+        }
+        // Reasoning deltas stay out of the way for now.
+        _ => {}
+      },
+      // A message without text (only tool calls) prints nothing.
+      EventPayload::MessageEnd(_) => self.end_line(&mut out),
+      EventPayload::MessageStart(_) | EventPayload::SessionCreated(_) => {}
+      EventPayload::InvocationStarted(s) => match &s.reason {
+        InvocationReason::UserMessage { input, .. } => {
+          self.end_line(&mut out);
+          if self.printed {
+            out.push('\n');
+          }
+          let text = input.as_str().trim().replace('\n', "\n  ");
+          self.line(&mut out, &format!("› {text}"));
+        }
+        InvocationReason::ApprovalDecision { decision, .. } => {
+          let what = if decision.approved {
+            "approved"
+          } else {
+            "denied"
+          };
+          let line = match &decision.approver {
+            Some(by) => format!("· resumed: {what} by {by}"),
+            None => format!("· resumed: {what}"),
+          };
+          self.line(&mut out, &line);
+        }
+        InvocationReason::ToolResult { .. } => {
+          self.line(&mut out, "· resumed with a tool result");
+        }
+      },
+      EventPayload::ToolCall(c) => {
+        self.line(&mut out, &format!("→ {} {}", c.name, trunc(&c.arguments)));
       }
-      // Reasoning deltas stay out of the way for now.
-      sectr_common::events::TypedDelta::Reasoning { .. } => {}
-    },
-    EventPayload::MessageEnd(_) => println!(),
-    EventPayload::MessageStart(_) => {}
-    EventPayload::ToolCall(c) => println!("\n→ {} {}", c.name, trunc(&c.arguments)),
-    EventPayload::ToolResult(r) => println!("← {}", trunc(&r.result)),
-    EventPayload::ToolApprovalRequired(a) => {
-      return Ok(Step::Suspended {
-        tool: a.name.clone(),
-      });
+      EventPayload::ToolResult(r) => self.line(&mut out, &format!("← {}", trunc(&r.result))),
+      // The stream loop says it's paused, on stderr.
+      EventPayload::ToolApprovalRequired(_) => self.end_line(&mut out),
+      EventPayload::ToolApprovalGranted(_) => self.line(&mut out, "✓ approved"),
+      EventPayload::ToolApprovalDenied(_) => self.line(&mut out, "✗ denied"),
+      EventPayload::Error(e) => self.line(&mut out, &format!("✗ runner error: {}", e.message)),
+      EventPayload::SessionError(e) => {
+        self.line(&mut out, &format!("✗ session error: {}", e.message));
+      }
+      EventPayload::NoMoreActions(_) => self.line(&mut out, "✓ turn complete"),
+      EventPayload::TranscriptCompacted(_) => self.line(&mut out, "[context compacted]"),
     }
-    EventPayload::ToolApprovalGranted(_) => println!("✓ approved"),
-    EventPayload::ToolApprovalDenied(_) => println!("✗ denied"),
-    EventPayload::Error(e) => {
-      println!("\n✗ runner error: {}", e.message);
-      return Ok(Step::TurnEnded);
-    }
-    EventPayload::SessionError(e) => {
-      println!("\n✗ session error: {}", e.message);
-      return Ok(Step::TurnEnded);
-    }
-    EventPayload::NoMoreActions(_) => {
-      println!("\n✓ turn complete");
-      return Ok(Step::TurnEnded);
-    }
-    EventPayload::InvocationStarted(s) => {
-      println!("\n· turn {} ({:?})", s.invocation_id, s.reason);
-    }
-    EventPayload::SessionCreated(_) => {}
-    EventPayload::TranscriptCompacted(_) => println!("[context compacted]"),
+    out
   }
-  Ok(Step::Continue)
+
+  /// Finish a line of message text, if one is open.
+  fn end_line(&mut self, out: &mut String) {
+    if self.mid_line {
+      out.push('\n');
+      self.mid_line = false;
+    }
+  }
+
+  /// A line of its own.
+  fn line(&mut self, out: &mut String, text: &str) {
+    self.end_line(out);
+    out.push_str(text);
+    out.push('\n');
+    self.printed = true;
+  }
 }
 
 /// The turn-boundary classification, independent of rendering.
@@ -489,11 +587,11 @@ mod tests {
   fn baseline_skips_old_events_in_both_modes() {
     let data = envelope(3, delta("old"));
     assert!(matches!(
-      print_event(&data, 4, false).unwrap(),
+      print_event(&data, 4, false, &mut Renderer::default()).unwrap(),
       Step::Continue
     ));
     assert!(matches!(
-      print_event(&data, 4, true).unwrap(),
+      print_event(&data, 4, true, &mut Renderer::default()).unwrap(),
       Step::Continue
     ));
   }
@@ -518,8 +616,8 @@ mod tests {
     ];
     for (payload, expected) in cases {
       let data = envelope(0, payload);
-      let human = print_event(&data, 0, false).unwrap();
-      let json = print_event(&data, 0, true).unwrap();
+      let human = print_event(&data, 0, false, &mut Renderer::default()).unwrap();
+      let json = print_event(&data, 0, true, &mut Renderer::default()).unwrap();
       assert_eq!(step_name(&human), step_name(&expected));
       assert_eq!(step_name(&json), step_name(&expected));
       assert_eq!(
@@ -528,6 +626,217 @@ mod tests {
         "json mode diverged from human mode"
       );
     }
+  }
+
+  /// Two turns, the second paused for an approval and resumed: the
+  /// layout a person reads.
+  #[test]
+  fn the_human_renderer_lays_turns_out_cleanly() {
+    use sectr_common::events::{
+      ApprovalDecision, InvocationReason, InvocationStarted, MessageEnd, MessageStart,
+      ToolApprovalDecision, ToolCall, ToolResult,
+    };
+    let user = |text: &str| {
+      EventPayload::InvocationStarted(InvocationStarted {
+        invocation_id: uuid::Uuid::now_v7(),
+        route: "/chat".into(),
+        deployment_id: uuid::Uuid::nil(),
+        reason: InvocationReason::UserMessage {
+          input: text.to_string().try_into().unwrap(),
+          extra: Default::default(),
+        },
+        extra: Default::default(),
+      })
+    };
+    let start = || {
+      EventPayload::MessageStart(MessageStart {
+        role: "assistant".into(),
+        message_id: "m1".into(),
+        extra: Default::default(),
+      })
+    };
+    let end = || {
+      EventPayload::MessageEnd(MessageEnd {
+        message_id: "m1".into(),
+        finish_reason: None,
+        framework_state: None,
+        extra: Default::default(),
+      })
+    };
+    let call = |name: &str, args: serde_json::Value| {
+      EventPayload::ToolCall(ToolCall {
+        tool_call_id: "c1".into(),
+        name: name.into(),
+        arguments: args,
+        extra: Default::default(),
+      })
+    };
+    let result = |value: serde_json::Value| {
+      EventPayload::ToolResult(ToolResult {
+        tool_call_id: "c1".into(),
+        result: value,
+        extra: Default::default(),
+      })
+    };
+    let done = || EventPayload::NoMoreActions(NoMoreActions::default());
+    let journal = vec![
+      user("where is order 42?"),
+      start(),
+      delta("Let me check "),
+      delta("that order."),
+      end(),
+      start(),
+      end(),
+      call("lookup_order", serde_json::json!({"order_id": "42"})),
+      result(serde_json::json!({"status": "shipped"})),
+      start(),
+      delta("It shipped."),
+      end(),
+      done(),
+      user("please refund it"),
+      // A response with only a tool call: no text, no blank lines.
+      start(),
+      end(),
+      call("refund", serde_json::json!({"order_id": "42"})),
+      approval(),
+      EventPayload::ToolApprovalGranted(ToolApprovalDecision {
+        tool_call_id: "c1".into(),
+        approver: Some("sectr send".into()),
+        extra: Default::default(),
+      }),
+      EventPayload::InvocationStarted(InvocationStarted {
+        invocation_id: uuid::Uuid::now_v7(),
+        route: "/chat".into(),
+        deployment_id: uuid::Uuid::nil(),
+        reason: InvocationReason::ApprovalDecision {
+          decision: ApprovalDecision {
+            approved: true,
+            approver: Some("sectr send".into()),
+            extra: Default::default(),
+          },
+          extra: Default::default(),
+        },
+        extra: Default::default(),
+      }),
+      result(serde_json::json!("refunded")),
+      start(),
+      // Text without a trailing newline, then the turn's end.
+      delta("Refunded."),
+      done(),
+    ];
+    let mut renderer = Renderer::default();
+    let out: String = journal
+      .into_iter()
+      .enumerate()
+      .map(|(seq, payload)| {
+        let event: Event = serde_json::from_str(&envelope(seq as i64, payload)).unwrap();
+        renderer.render(&event)
+      })
+      .collect();
+    assert_eq!(
+      out,
+      "› where is order 42?
+Let me check that order.
+→ lookup_order {\"order_id\":\"42\"}
+← {\"status\":\"shipped\"}
+It shipped.
+✓ turn complete
+
+› please refund it
+→ refund {\"order_id\":\"42\"}
+✓ approved
+· resumed: approved by sectr send
+← \"refunded\"
+Refunded.
+✓ turn complete
+"
+    );
+  }
+
+  /// A stub `POST /sessions` answering each request from `answers` in
+  /// turn: (status, Retry-After, body).
+  async fn sessions_stub(
+    answers: Vec<(u16, Option<&'static str>, serde_json::Value)>,
+  ) -> (
+    GatewayClient,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+  ) {
+    use axum::response::IntoResponse as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let app = axum::Router::new().route(
+      "/sessions",
+      axum::routing::post(move || {
+        let n = seen.fetch_add(1, Ordering::SeqCst);
+        let (status, retry_after, body) = answers[n.min(answers.len() - 1)].clone();
+        async move {
+          let mut response = (
+            axum::http::StatusCode::from_u16(status).unwrap(),
+            axum::Json(body),
+          )
+            .into_response();
+          if let Some(after) = retry_after {
+            response
+              .headers_mut()
+              .insert("retry-after", after.parse().unwrap());
+          }
+          response
+        }
+      }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (
+      GatewayClient::for_cloud(&format!("http://{addr}"), "skp_x"),
+      calls,
+    )
+  }
+
+  fn busy() -> serde_json::Value {
+    serde_json::json!({
+      "code": "concurrency_limit",
+      "error": "this app is running its maximum of 3 turns at once",
+    })
+  }
+
+  #[tokio::test]
+  async fn a_busy_app_is_retried_after_its_retry_after() {
+    let sid = uuid::Uuid::now_v7();
+    let (client, calls) = sessions_stub(vec![
+      (429, Some("1"), busy()),
+      (201, None, serde_json::json!({"session_id": sid})),
+    ])
+    .await;
+    let got = client
+      .create_session("a", "/chat", serde_json::json!("hi"))
+      .await
+      .unwrap();
+    assert_eq!(got, sid);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+  }
+
+  #[tokio::test]
+  async fn a_long_retry_after_is_not_waited_for() {
+    let (client, calls) = sessions_stub(vec![(429, Some("3600"), busy())]).await;
+    let err = client
+      .create_session("a", "/chat", serde_json::json!("hi"))
+      .await
+      .unwrap_err()
+      .to_string();
+    assert!(err.starts_with("429"), "{err}");
+    assert!(err.contains("maximum of 3 turns"), "{err}");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn the_servers_error_text_is_read_from_its_body() {
+    assert_eq!(
+      server_error(&busy().to_string()).as_deref(),
+      Some("this app is running its maximum of 3 turns at once")
+    );
+    assert_eq!(server_error("not json"), None);
   }
 
   fn step_name(s: &Step) -> &'static str {
