@@ -79,9 +79,15 @@ const MANIFEST_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long a torn-down turn's wake request may still take to be answered.
 const TEARDOWN_GRACE: Duration = Duration::from_secs(10);
 
-/// Response bodies are read up to this much (the manifest is capped at
-/// 16 MiB by the sidecar; everything else is tiny).
-const BODY_CAP: usize = 17 * 1024 * 1024;
+/// The manifest answer is read up to this much: the sidecar caps the
+/// manifest at 16 MiB.
+const MANIFEST_BODY_CAP: usize = 17 * 1024 * 1024;
+
+/// Every other answer (the probe's identity, a wake's outcome) is tiny, and
+/// is read up to this much. A wake's answer may take the whole turn to
+/// arrive, so a bigger cap would let an endpoint make the server hold that
+/// much for every running turn.
+const BODY_CAP: usize = 64 * 1024;
 
 /// Errors quote at most this much of an endpoint's response body.
 const BODY_QUOTE: usize = 300;
@@ -166,7 +172,7 @@ impl EndpointPlatform {
       .await
       .map_err(|e| request_failure(url, &e))?;
     let status = response.status();
-    let body = read_capped(response).await.unwrap_or_default();
+    let body = read_capped(response, BODY_CAP).await.unwrap_or_default();
     let identity = serde_json::from_slice::<Value>(&body).ok();
     let sidecar = identity
       .as_ref()
@@ -215,7 +221,7 @@ impl EndpointPlatform {
         }
       })?;
     let status = response.status().as_u16();
-    let body = read_capped(response)
+    let body = read_capped(response, MANIFEST_BODY_CAP)
       .await
       .map_err(|e| format!("reading your compute endpoint's manifest answer: {e}"))?;
     if status != 200 {
@@ -438,7 +444,7 @@ async fn wake_task(task: WakeTask) {
       }
       Ok(response) => {
         let status = response.status().as_u16();
-        let body = read_capped(response).await.unwrap_or_default();
+        let body = read_capped(response, BODY_CAP).await.unwrap_or_default();
         if status == 200 {
           let outcome = serde_json::from_slice::<Value>(&body)
             .ok()
@@ -666,11 +672,12 @@ fn quote(body: &[u8]) -> String {
     .collect()
 }
 
-async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+/// A response's body, refused once it's over `cap` bytes.
+async fn read_capped(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, String> {
   let mut body = Vec::new();
   while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-    if body.len() + chunk.len() > BODY_CAP {
-      return Err(format!("the answer is over {BODY_CAP} bytes"));
+    if body.len() + chunk.len() > cap {
+      return Err(format!("the answer is over {cap} bytes"));
     }
     body.extend_from_slice(&chunk);
   }
