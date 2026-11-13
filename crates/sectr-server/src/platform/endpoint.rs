@@ -25,6 +25,18 @@
 //! failed:`, and the existing dispatch path journals it as the turn's
 //! `SESSION_ERROR` and releases the lease.
 //!
+//! After delivery the held request is the turn's lifetime on a platform
+//! that runs an instance only while a request is open (Lambda, or Cloud Run
+//! with CPU only during requests). If it ends before the turn does (a
+//! broken connection, an error answer such as Lambda's at its timeout, or
+//! this server's own `turn_timeout`), the task checks whether the sidecar
+//! is still there, since the request can also end while the sidecar keeps
+//! running: an idle timeout on a proxy in between, or a container platform
+//! that keeps the instance. The sidecar keeps a turn running after its
+//! request is dropped. If the sidecar doesn't answer a ping, the task ends
+//! the turn through [`IngestHub::end_endpoint_turn`], saying why, instead
+//! of leaving it to the lease's expiry. If it answers, the turn goes on.
+//!
 //! Registration uses [`EndpointPlatform::probe`] and
 //! [`EndpointPlatform::fetch_manifest`]. Every request goes through one
 //! client with the address guard ([`guard`]).
@@ -42,7 +54,8 @@ use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use sectr_common::endpoint::{
-  ANSWERED_HTTP, COULD_NOT_CONNECT, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, WAKE_TIMEOUT, WRONG_INGEST,
+  ANSWERED_HTTP, COULD_NOT_CONNECT, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, Platform as Host,
+  WAKE_TIMEOUT, WRONG_INGEST, platform_of,
 };
 
 use crate::config::EndpointConfig;
@@ -258,6 +271,9 @@ impl EndpointPlatform {
     // the backoff says why. Cleared whenever a request goes out.
     let last_retryable = Arc::new(Mutex::new(None::<WakeFailure>));
     let task = tokio::spawn(wake_task(WakeTask {
+      hub: Arc::downgrade(&hub),
+      session,
+      invocation_id,
       client: self.client.clone(),
       url: url.clone(),
       token: token.to_owned(),
@@ -326,6 +342,9 @@ impl EndpointPlatform {
 }
 
 struct WakeTask {
+  hub: Weak<IngestHub>,
+  session: Uuid,
+  invocation_id: Uuid,
   client: reqwest::Client,
   url: Url,
   token: String,
@@ -343,6 +362,9 @@ struct WakeTask {
 /// at a time, always.
 async fn wake_task(task: WakeTask) {
   let WakeTask {
+    hub,
+    session,
+    invocation_id,
     client,
     url,
     token,
@@ -385,9 +407,17 @@ async fn wake_task(task: WakeTask) {
         };
       }
       Err(e) if was_delivered => {
-        record("broken_after_delivery");
-        tracing::warn!(error = %e, "the endpoint's wake request broke mid-turn; the lease covers the turn");
+        let ended = if e.is_timeout() {
+          record("timed_out_after_delivery");
+          tracing::warn!("the endpoint's wake request reached this server's turn timeout");
+          WakeEnded::TurnTimeout(turn_timeout)
+        } else {
+          record("broken_after_delivery");
+          tracing::warn!(error = %e, "the endpoint's wake request broke mid-turn");
+          WakeEnded::Closed(source_text(&e))
+        };
         break_done(&inflight, &handle);
+        end_turn(&hub, session, invocation_id, &host, ended).await;
         return;
       }
       Err(e) if e.is_connect() => WakeFailure {
@@ -454,6 +484,14 @@ async fn wake_task(task: WakeTask) {
             "your compute endpoint's wake answered an error after the turn started"
           );
           break_done(&inflight, &handle);
+          end_turn(
+            &hub,
+            session,
+            invocation_id,
+            &host,
+            WakeEnded::Status(status),
+          )
+          .await;
           return;
         }
         if matches!(status, 409 | 429 | 500 | 503) {
@@ -490,6 +528,90 @@ async fn wake_task(task: WakeTask) {
   };
   fail(failure);
   break_done(&inflight, &handle);
+}
+
+/// How long after a wake ends mid-turn the server waits before checking
+/// on the sidecar, so events it sent just before can land.
+const ENDED_GRACE: Duration = if cfg!(test) {
+  Duration::from_millis(200)
+} else {
+  Duration::from_secs(2)
+};
+
+/// How long the sidecar then has to answer a ping (or, if it isn't
+/// connected, to reconnect and answer one) before the server ends its turn.
+const ANSWER_WITHIN: Duration = if cfg!(test) {
+  Duration::from_secs(1)
+} else {
+  Duration::from_secs(5)
+};
+
+/// How a wake request ended after delivery, before the turn did.
+#[derive(Debug)]
+enum WakeEnded {
+  /// The connection closed or broke (this text says how).
+  Closed(String),
+  /// An error answer.
+  Status(u16),
+  /// This server's own limit on a wake request (`turn_timeout`).
+  TurnTimeout(Duration),
+}
+
+/// A wake that ended after delivery may have taken the turn's instance with
+/// it (see the module docs): unless the sidecar still answers, end the turn
+/// now rather than at its lease's expiry, saying why. A turn that already
+/// ended (the sidecar's final batch beat the answer) is left alone.
+async fn end_turn(
+  hub: &Weak<IngestHub>,
+  session: Uuid,
+  invocation_id: Uuid,
+  host: &str,
+  ended: WakeEnded,
+) {
+  tokio::time::sleep(ENDED_GRACE).await;
+  let Some(hub) = hub.upgrade() else {
+    return;
+  };
+  if hub.sidecar_answers(session, ANSWER_WITHIN).await {
+    tracing::info!(
+      ?ended,
+      "the wake request ended mid-turn, but the sidecar still answers; the turn goes on"
+    );
+    return;
+  }
+  hub
+    .end_endpoint_turn(session, invocation_id, &ended_message(host, &ended))
+    .await;
+}
+
+/// Why a turn ended when its wake did and its sidecar stopped answering:
+/// how the request ended, and, when the endpoint's platform ended it, that
+/// platform's time limit as a likely cause.
+fn ended_message(host: &str, ended: &WakeEnded) -> String {
+  const STOPPED: &str = "your compute endpoint stopped before the turn finished";
+  let how = match ended {
+    WakeEnded::Closed(how) => format!("the wake request's connection closed ({how})"),
+    WakeEnded::Status(status) => format!("the wake request ended with HTTP {status}"),
+    WakeEnded::TurnTimeout(limit) => {
+      return format!(
+        "{STOPPED}: Sectr closed the wake request at its {}-second limit on a turn, \
+         and the endpoint's sidecar stopped with it.",
+        limit.as_secs()
+      );
+    }
+  };
+  let limit = match platform_of(host) {
+    Host::Lambda => {
+      " If the turn ran as long as the function's timeout, AWS Lambda ended it there \
+       (15 minutes at most)."
+    }
+    Host::CloudRun => {
+      " If the turn ran as long as the service's request timeout, Google Cloud Run ended it \
+       there (60 minutes at most)."
+    }
+    Host::Other => "",
+  };
+  format!("{STOPPED}: {how}.{limit}")
 }
 
 /// A wake task's own end: forget its abort handle.
@@ -608,6 +730,34 @@ mod tests {
         "{base}"
       );
     }
+  }
+
+  #[test]
+  fn an_ended_turn_says_whose_limit_may_have_ended_it() {
+    let lambda = ended_message("abc.lambda-url.us-east-1.on.aws", &WakeEnded::Status(502));
+    assert_eq!(
+      lambda,
+      "your compute endpoint stopped before the turn finished: the wake request ended with HTTP \
+       502. If the turn ran as long as the function's timeout, AWS Lambda ended it there (15 \
+       minutes at most)."
+    );
+    let cloud_run = ended_message("agent-xyz-uc.a.run.app", &WakeEnded::Closed("reset".into()));
+    assert!(cloud_run.contains("Google Cloud Run"), "{cloud_run}");
+    assert_eq!(
+      ended_message("agent.example.com", &WakeEnded::Closed("reset".into())),
+      "your compute endpoint stopped before the turn finished: the wake request's connection \
+       closed (reset)."
+    );
+    // This server's own limit: named, and no platform's blamed.
+    let ours = ended_message(
+      "abc.lambda-url.us-east-1.on.aws",
+      &WakeEnded::TurnTimeout(Duration::from_secs(3600)),
+    );
+    assert_eq!(
+      ours,
+      "your compute endpoint stopped before the turn finished: Sectr closed the wake request at \
+       its 3600-second limit on a turn, and the endpoint's sidecar stopped with it."
+    );
   }
 
   #[test]
