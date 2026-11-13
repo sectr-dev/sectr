@@ -1525,7 +1525,7 @@ async fn platform_sse_is_still_the_session_tail_path() {
 #[tokio::test]
 async fn new_thread_at_the_concurrency_cap_is_a_429_before_the_stream() {
   let Some(w) = world_limited(crate::limits::LimitsConfig {
-    max_turns_per_app: 1,
+    max_sandbox_turns_per_app: 1,
     ..crate::limits::LimitsConfig::none()
   })
   .await

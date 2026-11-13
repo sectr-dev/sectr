@@ -114,6 +114,14 @@ impl ProdSessionService {
       .map_err(not_found)?;
     let deployment_id = row.deployment_id;
     let invocation_id = Uuid::now_v7();
+    // The per-app cap depends on where the session's deployment runs.
+    let on_endpoint = self
+      .registry
+      .get_deployment(deployment_id)
+      .await
+      .map_err(internal)?
+      .endpoint_url
+      .is_some();
 
     // 1. Claim the lease FIRST — a conflict (409) or a reached
     //    concurrency cap (429) must leave the journal exactly as
@@ -128,7 +136,7 @@ impl ProdSessionService {
         "sectr-server",
         Some(invocation_id),
         self.lease_ttl,
-        &self.turn_caps.caps_for(row.app_id),
+        &self.turn_caps.caps_for(row.app_id, on_endpoint),
       )
       .await
       .map_err(|e| match e {
@@ -211,13 +219,16 @@ impl ProdSessionService {
   async fn admit_new_session(
     &self,
     app_id: Uuid,
+    deployment: &Deployment,
     scope: &RequestScope,
   ) -> Result<(), ServiceError> {
-    let caps = self.turn_caps.caps_for(app_id);
+    let caps = self
+      .turn_caps
+      .caps_for(app_id, deployment.endpoint_url.is_some());
     if caps.any() {
       let (app_live, total_live) = self
         .registry
-        .count_live_turns(app_id)
+        .count_live_turns(app_id, caps.on_endpoint)
         .await
         .map_err(internal)?;
       if let Some((cap_scope, limit)) = caps.exceeded(app_live, total_live) {
@@ -594,7 +605,7 @@ impl SessionService for ProdSessionService {
       )));
     }
 
-    self.admit_new_session(app.id, &scope).await?;
+    self.admit_new_session(app.id, &deployment, &scope).await?;
     let session = self
       .open_session(&app, &deployment, &req.route, &scope, None)
       .await?;
@@ -769,7 +780,7 @@ impl SessionService for ProdSessionService {
       ),
       None => {
         req.intent.check_creates_thread(req.thread_id)?;
-        self.admit_new_session(app.id, &scope).await?;
+        self.admit_new_session(app.id, &deployment, &scope).await?;
         match self
           .open_session(&app, &deployment, &req.route, &scope, Some(req.thread_id))
           .await

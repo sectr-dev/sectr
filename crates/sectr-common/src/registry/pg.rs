@@ -918,8 +918,8 @@ impl Registry for PgRegistry {
       .await
   }
 
-  async fn count_live_turns(&self, app_id: Uuid) -> Result<(u64, u64)> {
-    count_live_turns_on(&self.pool, app_id).await
+  async fn count_live_turns(&self, app_id: Uuid, on_endpoint: bool) -> Result<(u64, u64)> {
+    count_live_turns_on(&self.pool, app_id, on_endpoint).await
   }
 
   async fn heartbeat_lease(&self, lease_id: Uuid, ttl: chrono::Duration) -> Result<Lease> {
@@ -1031,16 +1031,23 @@ impl Registry for PgRegistry {
 const LEASE_CAPS_LOCK: (i32, i32) = (0x5EC7_0075, 1);
 
 /// `(live leases of app_id, live leases platform-wide)`.
-async fn count_live_turns_on<'e, E>(executor: E, app_id: Uuid) -> Result<(u64, u64)>
+async fn count_live_turns_on<'e, E>(
+  executor: E,
+  app_id: Uuid,
+  on_endpoint: bool,
+) -> Result<(u64, u64)>
 where
   E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
   let (app, total): (i64, i64) = sqlx::query_as(
     "SELECT count(*) FILTER (WHERE s.app_id = $1), count(*) \
          FROM leases l JOIN sessions s ON s.id = l.session_id \
-         WHERE l.released_at IS NULL AND l.expires_at > now()",
+         JOIN deployments d ON d.id = s.deployment_id \
+         WHERE l.released_at IS NULL AND l.expires_at > now() \
+         AND (d.endpoint_url IS NOT NULL) = $2",
   )
   .bind(app_id)
+  .bind(on_endpoint)
   .fetch_one(executor)
   .await?;
   Ok((app.max(0) as u64, total.max(0) as u64))
@@ -1076,7 +1083,8 @@ async fn claim_tx(
       .bind(LEASE_CAPS_LOCK.1)
       .execute(&mut *tx)
       .await?;
-    let (app_live, total_live) = count_live_turns_on(&mut *tx, caps.app_id).await?;
+    let (app_live, total_live) =
+      count_live_turns_on(&mut *tx, caps.app_id, caps.on_endpoint).await?;
     if let Some((scope, limit)) = caps.exceeded(app_live, total_live) {
       return Err(RegistryError::CapExceeded { scope, limit });
     }
@@ -2157,6 +2165,15 @@ mod tests {
       return;
     };
     crate::registry::cap_suite::expired_and_released_leases_do_not_count(&registry, org.id).await;
+  }
+
+  #[tokio::test]
+  async fn lease_cap_counts_kinds_apart() {
+    let Some((registry, org, ..)) = registry().await else {
+      eprintln!("skipping: no test Postgres (initdb not on PATH)");
+      return;
+    };
+    crate::registry::cap_suite::kinds_are_counted_apart(&registry, org.id).await;
   }
 
   #[tokio::test]

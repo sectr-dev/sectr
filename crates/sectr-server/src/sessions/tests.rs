@@ -1410,8 +1410,8 @@ async fn mint_rate_limit_is_enforced_per_user() {
 
 fn limits(per_app: u32, global: u32) -> crate::limits::LimitsConfig {
   crate::limits::LimitsConfig {
-    max_turns_per_app: per_app,
-    max_turns: global,
+    max_sandbox_turns_per_app: per_app,
+    max_sandbox_turns: global,
     ..crate::limits::LimitsConfig::none()
   }
 }
@@ -1488,6 +1488,124 @@ async fn app_cap_rejects_create_with_429_and_leaves_no_session_row() {
   // A finishing turn frees the slot.
   release_slot(&w, second).await;
   create_ok(&w, &w.platform_key, "app-a").await;
+}
+
+/// An app whose active deployment runs on a compute endpoint gets the
+/// endpoint per-app cap, for new sessions and for turns on them, and the
+/// platform-wide cap (the sandboxes') doesn't count its turns.
+#[tokio::test]
+async fn an_endpoint_app_gets_the_endpoint_cap() {
+  let Some(w) = world_with_limits(|_, _| crate::limits::LimitsConfig {
+    max_endpoint_turns_per_app: 2,
+    ..limits(1, 1)
+  })
+  .await
+  else {
+    eprintln!("skipping: no test Postgres (initdb not on PATH)");
+    return;
+  };
+  let registry = w.state.registry();
+  let endpoint = registry
+    .create_deployment(NewDeployment {
+      endpoint_url: Some("https://app-b-xyz.a.run.app/".into()),
+      app_id: w.app_b,
+      version: 2,
+      manifest: json!({"routes": [{"path": "/test"}]}),
+    })
+    .await
+    .unwrap();
+  registry
+    .set_deployment_status(endpoint.id, DeploymentStatus::Active)
+    .await
+    .unwrap();
+
+  w.dispatcher.set(Mode::Hold);
+  // app-a, on Sectr Run: one turn at a time, which also fills the
+  // platform's one sandbox.
+  create_ok(&w, &w.platform_key, "app-a").await;
+  let (status, body) = create_session(&w.app, &w.platform_key, new_session_body("app-a")).await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+  // app-b, on an endpoint: two, with the sandboxes full.
+  create_ok(&w, &w.platform_key, "app-b").await;
+  let second = create_ok(&w, &w.platform_key, "app-b").await;
+  let (status, body) = create_session(&w.app, &w.platform_key, new_session_body("app-b")).await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+  assert!(
+    body["error"]
+      .as_str()
+      .unwrap()
+      .contains("maximum of 2 turns"),
+    "{body}"
+  );
+
+  // A follow-up turn on an endpoint session is held to the same cap.
+  release_slot(&w, second).await;
+  w.dispatcher.set(Mode::Hold);
+  let (status, body, _) = req_retry_after(
+    &w.app,
+    "POST",
+    &format!("/sessions/{second}/input"),
+    &w.platform_key,
+    json!({"input": "again"}),
+  )
+  .await;
+  assert!(status.is_success(), "{status} {body}");
+  let (status, body, _) = req_retry_after(
+    &w.app,
+    "POST",
+    "/sessions",
+    &w.platform_key,
+    new_session_body("app-b"),
+  )
+  .await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+}
+
+/// The platform-wide endpoint cap spans apps, and refuses with
+/// `platform_capacity` like the sandbox one.
+#[tokio::test]
+async fn the_endpoint_cap_spans_apps() {
+  let Some(w) = world_with_limits(|_, _| crate::limits::LimitsConfig {
+    max_endpoint_turns_per_app: 5,
+    max_endpoint_turns: 2,
+    ..limits(0, 0)
+  })
+  .await
+  else {
+    eprintln!("skipping: no test Postgres (initdb not on PATH)");
+    return;
+  };
+  let registry = w.state.registry();
+  for (app, host) in [(w.app_a, "app-a"), (w.app_b, "app-b")] {
+    let endpoint = registry
+      .create_deployment(NewDeployment {
+        endpoint_url: Some(format!("https://{host}-xyz.a.run.app/")),
+        app_id: app,
+        version: 2,
+        manifest: json!({"routes": [{"path": "/test"}]}),
+      })
+      .await
+      .unwrap();
+    registry
+      .set_deployment_status(endpoint.id, DeploymentStatus::Active)
+      .await
+      .unwrap();
+  }
+
+  w.dispatcher.set(Mode::Hold);
+  create_ok(&w, &w.platform_key, "app-a").await;
+  create_ok(&w, &w.platform_key, "app-b").await;
+  let (status, body, retry_after) = req_retry_after(
+    &w.app,
+    "POST",
+    "/sessions",
+    &w.platform_key,
+    new_session_body("app-a"),
+  )
+  .await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+  assert_eq!(body["code"], "platform_capacity");
+  assert!(retry_after.is_some());
 }
 
 #[tokio::test]
