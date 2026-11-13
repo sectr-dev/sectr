@@ -79,34 +79,65 @@ impl Platform {
     }
   }
 
-  /// How to build and deploy the image on this platform: printed by `init`.
+  /// How to run a project on this platform, in the order you do it: build
+  /// and deploy the image, then register it. Numbered lines (a step's own
+  /// notes indented under it), then the guide. Printed by `init`.
   pub fn next_steps(&self, app_name: &str) -> Vec<String> {
-    let mut steps = match self {
+    let deploy: Vec<Vec<String>> = match self {
       Platform::Lambda => vec![
-        format!("1. docker build --platform linux/amd64 --provenance=false -t {app_name} ."),
-        "2. push it to ECR, then create a Lambda function from the image".to_owned(),
-        "3. give it a function URL with auth type NONE (the console also adds the public \
-         invoke permissions; with the AWS CLI, add both lambda:InvokeFunctionUrl and \
-         lambda:InvokeFunction for principal *)"
-          .to_owned(),
-        "   The function needs: timeout 900 s · memory 1024 MB or more".to_owned(),
+        vec![format!(
+          "docker build --platform linux/amd64 --provenance=false -t {app_name} ."
+        )],
+        vec![
+          "push the image to Amazon ECR and create a Lambda function from it, with timeout \
+           900 s and memory 1024 MB or more"
+            .to_owned(),
+        ],
+        vec![
+          "add a function URL with auth type NONE".to_owned(),
+          "(the guide has the AWS CLI commands for steps 2 and 3, with the permissions the \
+           URL needs)"
+            .to_owned(),
+        ],
       ],
-      Platform::CloudRun => vec![format!(
-        "1. gcloud run deploy {app_name} --source . --allow-unauthenticated \
+      Platform::CloudRun => vec![vec![format!(
+        "gcloud run deploy {app_name} --source . --allow-unauthenticated \
            --timeout 3600 --concurrency 1"
-      )],
+      )]],
       Platform::Container => vec![
         // Without --platform, an Apple Silicon Mac builds arm64, which an
         // amd64 host can't run.
-        format!("1. docker build --platform linux/amd64 -t {app_name} ."),
-        "   (--platform linux/arm64 instead if your platform runs on Arm)".to_owned(),
-        "2. run it with its port published and PORT set (8080 by default), behind HTTPS, \
-         with requests allowed to last as long as a turn"
-          .to_owned(),
+        vec![
+          format!("docker build --platform linux/amd64 -t {app_name} ."),
+          "(--platform linux/arm64 instead if your platform runs on Arm)".to_owned(),
+        ],
+        vec![
+          "run it with its port published and PORT set (8080 by default), behind HTTPS, \
+           with requests allowed to last as long as a turn"
+            .to_owned(),
+        ],
       ],
     };
-    steps.push(format!("Full guide: {GUIDE}"));
-    steps
+    let url = match self {
+      Platform::CloudRun => format!("{} it prints", self.url_name()),
+      _ => self.url_name().to_owned(),
+    };
+    let register = [
+      vec![format!("put {url} in sectr.toml ([deploy] endpoint)")],
+      vec!["sectr deploy    # registers it with Sectr (needs `sectr auth login` first)".to_owned()],
+    ];
+    let mut lines = Vec::new();
+    for (i, step) in deploy.into_iter().chain(register).enumerate() {
+      for (j, line) in step.into_iter().enumerate() {
+        lines.push(if j == 0 {
+          format!("{}. {line}", i + 1)
+        } else {
+          format!("   {line}")
+        });
+      }
+    }
+    lines.push(format!("Guide: {GUIDE}"));
+    lines
   }
 }
 
@@ -333,20 +364,17 @@ pub fn app_name(dir: &Path) -> Option<String> {
   table.get("app")?.get("name")?.as_str().map(str::to_owned)
 }
 
-/// The lines `init` prints after writing the endpoint files: the platform's
-/// steps, then registering.
-pub fn print_next_steps(platform: Platform, app_name: &str) {
-  println!(
-    "Next: build the image and deploy it on {}:",
-    platform.name()
-  );
+/// The lines `init` prints after writing the endpoint files: the steps to
+/// run it on the platform, run from `dir` when it isn't where the developer
+/// is about to be.
+pub fn print_next_steps(platform: Platform, app_name: &str, dir: Option<&str>) {
+  match dir {
+    Some(dir) => println!("To run it on {}, from {dir}:", platform.name()),
+    None => println!("To run it on {}:", platform.name()),
+  }
   for step in platform.next_steps(app_name) {
     println!("  {step}");
   }
-  println!(
-    "Then put {} in sectr.toml ([deploy] endpoint) and run `sectr deploy`.",
-    platform.url_name()
-  );
 }
 
 #[cfg(test)]
@@ -617,19 +645,43 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn every_platforms_steps_end_with_the_guide() {
+  fn every_platforms_steps_end_by_registering_then_the_guide() {
     for platform in [Platform::Lambda, Platform::CloudRun, Platform::Container] {
       let steps = platform.next_steps("support-agent");
-      assert_eq!(steps.last().unwrap(), &format!("Full guide: {GUIDE}"));
-      assert!(steps[0].contains("support-agent"), "{platform:?}");
+      let n = steps.len();
+      assert_eq!(steps[n - 1], format!("Guide: {GUIDE}"));
+      assert!(steps[n - 2].contains(". sectr deploy "), "{platform:?}");
+      assert!(steps[n - 3].contains("[deploy] endpoint"), "{platform:?}");
+      assert!(steps[0].starts_with("1. ") && steps[0].contains("support-agent"));
+      // Numbered in order, with notes indented under their step.
+      let numbers: Vec<usize> = steps[..n - 1]
+        .iter()
+        .filter_map(|s| s.split_once(". ")?.0.parse().ok())
+        .collect();
+      assert_eq!(
+        numbers,
+        (1..=numbers.len()).collect::<Vec<_>>(),
+        "{steps:?}"
+      );
+      for line in &steps[..n - 1] {
+        assert!(
+          line.starts_with("   (") || line.split_once(". ").is_some(),
+          "{line}"
+        );
+      }
     }
     let lambda = Platform::Lambda.next_steps("a").join("\n");
     assert!(lambda.contains("--platform linux/amd64 --provenance=false"));
-    assert!(lambda.contains("lambda:InvokeFunction "), "{lambda}");
     assert!(lambda.contains("timeout 900 s"));
+    assert!(lambda.contains("auth type NONE"));
+    assert!(lambda.contains("put the function URL in sectr.toml"));
     let container = Platform::Container.next_steps("a").join("\n");
     assert!(container.contains("--platform linux/amd64"), "{container}");
     let run = Platform::CloudRun.next_steps("a").join("\n");
     assert!(run.contains("--timeout 3600 --concurrency 1"));
+    assert!(
+      run.contains("2. put the service URL it prints in sectr.toml"),
+      "{run}"
+    );
   }
 }
