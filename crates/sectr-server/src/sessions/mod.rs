@@ -30,8 +30,8 @@ use sectr_common::api::{
   derive_session_title, plan_run,
 };
 use sectr_common::events::{
-  Event, EventPayload, Extra, InvocationReason, InvocationStarted, SessionError,
-  ToolApprovalDecision,
+  Event, EventPayload, Extra, InvocationReason, InvocationStarted, NewEvent, NoMoreActions,
+  SessionError, ToolApprovalDecision,
 };
 use sectr_common::journal::{Journal, SessionId, awaiting_approval};
 use sectr_common::registry::{
@@ -186,15 +186,20 @@ impl ProdSessionService {
     {
       tracing::warn!(%session, %invocation_id, "turn dispatch failed: {e}");
       crate::metrics::SESSION_ERRORS.add(1, &[opentelemetry::KeyValue::new("source", "dispatch")]);
+      // The error and the sentinel in one append, like every other error
+      // path ("Errors end the turn" in schema/README.md).
       let _ = self
         .journal
-        .append_platform_event(
+        .append(
           session,
           deployment_id,
-          EventPayload::SessionError(SessionError {
-            message: e.to_string(),
-            extra: Default::default(),
-          }),
+          vec![
+            NewEvent::new(EventPayload::SessionError(SessionError {
+              message: e.to_string(),
+              extra: Default::default(),
+            })),
+            NewEvent::new(EventPayload::NoMoreActions(NoMoreActions::default())),
+          ],
         )
         .await;
       let _ = self.registry.release_lease(lease.id).await;

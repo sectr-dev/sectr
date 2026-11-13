@@ -18,6 +18,7 @@ import type {
   ToolApprovalRequiredPayload,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { lastTurnFailed } from "@/lib/session-status";
 
 type Decision = "pending" | "approved" | "denied";
 
@@ -212,11 +213,15 @@ export function SessionInspector({ session }: { session: Session }) {
     if (!railOpen) setRailPrefs({ open: true });
   }, [railOpen, setRailPrefs]);
 
+  // Follows the tail, by the server's rules: the summary's status can be
+  // older than the events.
   const status = approvalPending
     ? ("awaiting_approval" as const)
-    : last && (last.type === "ERROR" || last.type === "SESSION_ERROR")
-      ? ("error" as const)
-      : session.status;
+    : events.length === 0 || session.status === "ended"
+      ? session.status
+      : lastTurnFailed(events)
+        ? ("error" as const)
+        : ("active" as const);
 
   const railContent = (
     <>

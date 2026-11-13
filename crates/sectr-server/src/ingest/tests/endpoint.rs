@@ -459,9 +459,11 @@ async fn other_answers_fail_the_turn_at_once() {
         .unwrap()
         .is_none()
     );
+    // The error ends the turn.
+    let types = journal_types(&e.w).await;
     assert_eq!(
-      journal_types(&e.w).await.last(),
-      Some(&EventType::SessionError)
+      types[types.len() - 2..],
+      [EventType::SessionError, EventType::NoMoreActions]
     );
   }
 }
