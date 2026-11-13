@@ -1,14 +1,4 @@
-/** The least of a journal event this module reads. */
-interface EventLike {
-  type: string;
-  payload: unknown;
-}
-
-function startsATurn(e: EventLike): boolean {
-  if (e.type !== "INVOCATION_STARTED") return false;
-  const reason = (e.payload as { reason?: { kind?: string } } | null)?.reason;
-  return reason?.kind === "user_message";
-}
+import { type EventLike, isTurnError, startsATurn } from "./turns.ts";
 
 /**
  * Whether the session's last turn failed: it holds an `ERROR` or a
@@ -24,5 +14,5 @@ export function lastTurnFailed(events: readonly EventLike[]): boolean {
       break;
     }
   }
-  return events.slice(start).some((e) => e.type === "ERROR" || e.type === "SESSION_ERROR");
+  return events.slice(start).some(isTurnError);
 }
