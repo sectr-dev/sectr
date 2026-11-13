@@ -1,9 +1,4 @@
-/** The least of a journal event this module reads. */
-interface EventLike {
-  type: string;
-  seq: number;
-  payload: unknown;
-}
+import { type SeqEventLike, startsATurn } from "./turns.ts";
 
 /**
  * Where a tool call stands:
@@ -21,13 +16,8 @@ interface EventLike {
  */
 export type ToolCallStatus = "running" | "done" | "interrupted" | "not_run";
 
-function field(e: EventLike, name: string): unknown {
+function field(e: SeqEventLike, name: string): unknown {
   return (e.payload as Record<string, unknown> | null)?.[name];
-}
-
-function startsATurn(e: EventLike): boolean {
-  if (e.type !== "INVOCATION_STARTED") return false;
-  return (field(e, "reason") as { kind?: string } | undefined)?.kind === "user_message";
 }
 
 /**
@@ -37,7 +27,7 @@ function startsATurn(e: EventLike): boolean {
  * abandons a call still waiting on its approval). An approval pause doesn't
  * end the turn: the call stays open across the resume.
  */
-export function toolCallStatuses(events: readonly EventLike[]): Map<number, ToolCallStatus> {
+export function toolCallStatuses(events: readonly SeqEventLike[]): Map<number, ToolCallStatus> {
   const statuses = new Map<number, ToolCallStatus>();
   // The turn's calls still waiting for a result, by tool_call_id (a later
   // call with the same id replaces an earlier one).
