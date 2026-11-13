@@ -147,15 +147,19 @@ const LEASE_EXPIRED: &str = "turn abandoned: lease expired";
 /// Journal a released turn's end, `SESSION_ERROR` (`message`) then
 /// `NO_MORE_ACTIONS`, unless the journal already shows the turn ended
 /// (its last event is `NO_MORE_ACTIONS` or `TOOL_APPROVAL_REQUIRED`: the
-/// holder's final batch raced the release).
-async fn journal_turn_end(journal: &dyn Journal, lease: &crate::registry::Lease, message: &str) {
+/// holder's final batch raced the release). True when it journaled the end.
+async fn journal_turn_end(
+  journal: &dyn Journal,
+  lease: &crate::registry::Lease,
+  message: &str,
+) -> bool {
   let last = journal.fetch(lease.session_id, None).await.ok();
   let last = last.as_ref().and_then(|events| events.last());
   if matches!(
     last.map(|e| e.event_type),
     Some(EventType::NoMoreActions | EventType::ToolApprovalRequired)
   ) {
-    return;
+    return false;
   }
   let Some(deployment_id) = last.map(|e| e.deployment_id) else {
     tracing::warn!(
@@ -163,9 +167,9 @@ async fn journal_turn_end(journal: &dyn Journal, lease: &crate::registry::Lease,
         session = %lease.session_id,
         "abandoned lease has no journal events; cannot synthesize turn end"
     );
-    return;
+    return false;
   };
-  if let Err(e) = journal
+  match journal
     .append(
       lease.session_id,
       deployment_id,
@@ -181,11 +185,15 @@ async fn journal_turn_end(journal: &dyn Journal, lease: &crate::registry::Lease,
     )
     .await
   {
-    tracing::warn!(
-        session = %lease.session_id,
-        error = %e,
-        "failed to journal the abandoned turn's end"
-    );
+    Ok(_) => true,
+    Err(e) => {
+      tracing::warn!(
+          session = %lease.session_id,
+          error = %e,
+          "failed to journal the abandoned turn's end"
+      );
+      false
+    }
   }
 }
 
@@ -194,8 +202,10 @@ async fn journal_turn_end(journal: &dyn Journal, lease: &crate::registry::Lease,
 /// (an endpoint whose wake request ended mid-turn). Releases the session's
 /// live lease only if it is still `invocation_id`'s, so it never ends a
 /// later turn, then journals the end with `message` unless the turn has
-/// one. Returns the released lease, so the caller can abort its holder;
-/// `None` when the turn had already ended or moved on.
+/// one. Returns the released lease when this call ended the turn (it
+/// journaled the end), so the caller can abort its holder; `None` when the
+/// turn had already ended or moved on, including a turn whose holder
+/// journaled its end but hadn't released the lease yet.
 pub async fn end_turn_now(
   registry: &dyn crate::registry::Registry,
   journal: &dyn Journal,
@@ -215,8 +225,11 @@ pub async fn end_turn_now(
     Err(crate::registry::RegistryError::NotFound(_)) => return Ok(None),
     Err(e) => return Err(e),
   }
-  journal_turn_end(journal, &lease, message).await;
-  Ok(Some(lease))
+  Ok(
+    journal_turn_end(journal, &lease, message)
+      .await
+      .then_some(lease),
+  )
 }
 
 #[cfg(test)]
@@ -539,7 +552,7 @@ mod tests {
   }
 
   /// A turn whose holder journaled its end just before is released without
-  /// a second end.
+  /// a second end, and doesn't count as ended by this call.
   #[tokio::test]
   async fn ending_a_turn_that_has_its_end_adds_none() {
     let w = world().await;
@@ -566,8 +579,9 @@ mod tests {
       end_turn_now(&w.registry, &w.journal, w.session, invocation, "x")
         .await
         .unwrap()
-        .is_some()
+        .is_none()
     );
+    assert!(w.registry.live_lease(w.session).await.unwrap().is_none());
     let events = JournalReader::fetch(&w.journal, w.session, None)
       .await
       .unwrap();

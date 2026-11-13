@@ -44,10 +44,25 @@ enum Step {
   /// break the request (the instance died mid-turn).
   BreakAfterDelivery,
   /// Dial and take the assignment like `BreakAfterDelivery`, then answer
-  /// with this status (a platform's time limit ended the request).
-  StatusAfterDelivery(u16),
+  /// with this status (a platform's time limit, or a proxy's idle timeout,
+  /// ended the request), leaving the sidecar as `After` says.
+  StatusAfterDelivery(u16, After),
+  /// Dial and take the assignment, keep reading the connection (so pings
+  /// are answered), and never answer the request.
+  HoldAfterDelivery,
   /// A 307 elsewhere (must not be followed).
   Redirect,
+}
+
+/// What became of the fake's sidecar once its wake request ended.
+#[derive(Clone, Copy, Debug)]
+enum After {
+  /// Gone with the request: its connection closes.
+  Gone,
+  /// Still running: its connection stays open and answers pings.
+  Running,
+  /// Frozen: its connection stays open, but nothing reads it.
+  Frozen,
 }
 
 struct Fake {
@@ -147,7 +162,7 @@ async fn fake_wake(State(fake): State<Arc<Fake>>, body: Bytes) -> axum::response
     Step::Redirect => {
       axum::response::Redirect::temporary("http://169.254.169.254/").into_response()
     }
-    Step::BreakAfterDelivery | Step::StatusAfterDelivery(_) => {
+    Step::BreakAfterDelivery | Step::StatusAfterDelivery(..) | Step::HoldAfterDelivery => {
       let token = serde_json::from_slice::<Value>(&body).unwrap()["ingest_token"]
         .as_str()
         .unwrap()
@@ -161,7 +176,29 @@ async fn fake_wake(State(fake): State<Arc<Fake>>, body: Bytes) -> axum::response
       );
       let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
       let _assignment = ws.next().await;
-      if let Step::StatusAfterDelivery(code) = step {
+      let after = match step {
+        Step::StatusAfterDelivery(_, after) => after,
+        Step::HoldAfterDelivery => After::Running,
+        _ => After::Gone,
+      };
+      match after {
+        After::Gone => {}
+        // Reading answers pings (tungstenite queues the pong and sends it
+        // on the next read).
+        After::Running => {
+          tokio::spawn(async move { while let Some(Ok(_)) = ws.next().await {} });
+        }
+        After::Frozen => {
+          tokio::spawn(async move {
+            let _held = ws;
+            std::future::pending::<()>().await;
+          });
+        }
+      }
+      if let Step::HoldAfterDelivery = step {
+        std::future::pending::<()>().await;
+      }
+      if let Step::StatusAfterDelivery(code, _) = step {
         return (
           axum::http::StatusCode::from_u16(code).unwrap(),
           "Internal Server Error",
@@ -216,12 +253,12 @@ struct EndpointWorld {
   sidecar: String,
 }
 
-fn endpoint_config(wake_deadline: Duration) -> EndpointConfig {
+fn endpoint_config(wake_deadline: Duration, turn_timeout: Duration) -> EndpointConfig {
   EndpointConfig {
     ingest_url: None, // world_full fills in this server's own
     allow_private: true,
     wake_deadline,
-    turn_timeout: Duration::from_secs(60),
+    turn_timeout,
   }
 }
 
@@ -231,6 +268,8 @@ struct Options {
   steps: Vec<Step>,
   then: Step,
   wake_deadline: Duration,
+  /// This server's limit on a wake request.
+  turn_timeout: Duration,
   /// The agent waits this long before serving.
   runner_delay_secs: u32,
   /// The endpoint only starts listening after this long.
@@ -248,6 +287,7 @@ impl Options {
       steps,
       then,
       wake_deadline: Duration::from_secs(10),
+      turn_timeout: Duration::from_secs(60),
       runner_delay_secs: 0,
       bind_after: None,
     }
@@ -307,7 +347,7 @@ async fn endpoint_world(options: Options) -> Option<EndpointWorld> {
   let w = world_full(WorldSetup {
     lease_ttl_secs: options.lease_ttl_secs,
     manifest: fake_runner_manifest(&frames, &pids, options.runner_delay_secs),
-    endpoints: Some(endpoint_config(options.wake_deadline)),
+    endpoints: Some(endpoint_config(options.wake_deadline, options.turn_timeout)),
     endpoint_url: Some(make),
   })
   .await?;
@@ -503,13 +543,25 @@ async fn a_slow_endpoint_gets_no_second_request() {
   e.wait_stopped().await;
 }
 
-/// A wake that ends after delivery ends the turn at once, saying why,
-/// rather than at the lease's expiry. Never re-sent.
+/// A wake that ends after delivery, taking its sidecar with it, ends the
+/// turn within seconds, saying why, rather than at the lease's expiry.
+/// Never re-sent.
 #[tokio::test]
-async fn a_wake_that_ends_after_delivery_ends_the_turn() {
+async fn a_wake_that_ends_after_delivery_with_its_sidecar_ends_the_turn() {
   for (step, how) in [
-    (Step::BreakAfterDelivery, "its connection closed"),
-    (Step::StatusAfterDelivery(502), "it answered HTTP 502"),
+    (
+      Step::BreakAfterDelivery,
+      "the wake request's connection closed",
+    ),
+    (
+      Step::StatusAfterDelivery(502, After::Gone),
+      "the wake request ended with HTTP 502",
+    ),
+    // A connection left open with nothing behind it (a frozen instance).
+    (
+      Step::StatusAfterDelivery(502, After::Frozen),
+      "the wake request ended with HTTP 502",
+    ),
   ] {
     let Some(e) = endpoint_world(Options::new(vec![], step.clone())).await else {
       return;
@@ -543,6 +595,49 @@ async fn a_wake_that_ends_after_delivery_ends_the_turn() {
       "{types:?}"
     );
   }
+}
+
+/// A wake request that ends while its sidecar keeps running (a proxy's idle
+/// timeout in between, a container platform that keeps the instance)
+/// leaves the turn alone: the sidecar runs it to the end.
+#[tokio::test]
+async fn a_wake_that_ends_while_its_sidecar_runs_leaves_the_turn() {
+  let Some(e) = endpoint_world(Options::new(
+    vec![],
+    Step::StatusAfterDelivery(504, After::Running),
+  ))
+  .await
+  else {
+    return;
+  };
+  still_running(&e).await;
+}
+
+/// The same for this server's own limit on a wake request.
+#[tokio::test]
+async fn a_wake_past_this_servers_timeout_leaves_a_running_turn() {
+  let mut options = Options::new(vec![], Step::HoldAfterDelivery);
+  options.turn_timeout = Duration::from_secs(1);
+  let Some(e) = endpoint_world(options).await else {
+    return;
+  };
+  still_running(&e).await;
+}
+
+/// Past the wake request's end, its check on the sidecar, and then some,
+/// the turn is still live and not failed, and nothing was re-sent.
+async fn still_running(e: &EndpointWorld) {
+  tokio::time::sleep(Duration::from_secs(3)).await;
+  assert_eq!(session_error(&e.w).await, None);
+  assert!(
+    e.w
+      .registry
+      .live_lease(e.w.session)
+      .await
+      .unwrap()
+      .is_some()
+  );
+  assert_eq!(e.fake.requests(), 1, "never re-sent after delivery");
 }
 
 // ---------------------------------------------------------------------------
@@ -734,6 +829,7 @@ async fn the_routing_platform_sends_each_kind_to_its_backend() {
   let managed = Arc::new(RecordingPlatform::default());
   let endpoint = Arc::new(crate::platform::EndpointPlatform::new(endpoint_config(
     Duration::from_secs(5),
+    Duration::from_secs(60),
   )));
   let routing = crate::platform::RoutingPlatform::new(managed.clone(), endpoint, registry);
 
@@ -789,7 +885,10 @@ const SECTR_TOML: &str = "[app]\nname = \"edge-agent\"\n\n[agent]\nentry = \"age
 /// A world with endpoint deployments on (its own deployment is managed).
 async fn registration_world() -> Option<World> {
   world_full(WorldSetup {
-    endpoints: Some(endpoint_config(Duration::from_secs(10))),
+    endpoints: Some(endpoint_config(
+      Duration::from_secs(10),
+      Duration::from_secs(60),
+    )),
     ..WorldSetup::managed(
       30,
       json!({"routes": [{"path": "/assist"}], "runner": {"command": ["python3", "-m", "agent"]}}),

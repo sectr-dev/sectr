@@ -59,7 +59,8 @@ pub static TURNS: LazyLock<Counter<u64>> = LazyLock::new(|| {
 /// threw — noisy, high alert threshold), `dispatch` (the platform could not
 /// start the turn: an E2B outage or capacity error), `reclaim` (the
 /// reconciler abandoned an expired lease), or `wake` (a compute endpoint's
-/// wake request ended mid-turn, so the server ended the turn). `dispatch`
+/// wake request ended mid-turn and its sidecar stopped answering, so the
+/// server ended the turn). `dispatch`
 /// and `reclaim` are platform health, not user code, so alerts treat them
 /// differently; `wake` is the customer's platform.
 pub static SESSION_ERRORS: LazyLock<Counter<u64>> = LazyLock::new(|| {
@@ -86,7 +87,8 @@ pub static INGEST_FAILURES: LazyLock<Counter<u64>> = LazyLock::new(|| {
 /// `delivered` (the sidecar took the turn), `connect_error`,
 /// `http_error`, `deadline`, `blocked` (the address guard), and once a
 /// delivered wake's request ends, `turn_ended`, `token_rejected`,
-/// `http_error` or `broken_after_delivery`. A delivered wake is counted
+/// `http_error`, `broken_after_delivery` or `timed_out_after_delivery`
+/// (this server's `turn_timeout`). A delivered wake is counted
 /// twice (`delivered`, then how its request ended), so the sum over
 /// `outcome` is not the number of wakes: count wakes as `delivered` plus
 /// the failures before delivery. URLs and hosts are never attributes.

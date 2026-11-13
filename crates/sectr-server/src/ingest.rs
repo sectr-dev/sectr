@@ -87,8 +87,8 @@ struct HubInner {
   /// lease (None between turns), and an undelivered assignment.
   grants: HashMap<Uuid, Grant>,
   by_token: HashMap<String, Uuid>,
-  /// Live sidecar connections (the handler's inbound frame queue).
-  conns: HashMap<Uuid, mpsc::Sender<ServerFrame>>,
+  /// Live sidecar connections (the handler's outbound queue).
+  conns: HashMap<Uuid, mpsc::Sender<Outbound>>,
   /// session → (event id → stamped seq): reconnect-replay fast path.
   acked: HashMap<Uuid, HashMap<Uuid, i64>>,
   /// Per-session ingest serialization (batch order guarantee).
@@ -96,6 +96,15 @@ struct HubInner {
   /// Registration tokens (token hash → probe): single-use, short-lived,
   /// belonging to no session. See [`IngestHub::register_probe`].
   probes: HashMap<String, Probe>,
+}
+
+/// What the hub hands a connection's loop to send to its sidecar.
+enum Outbound {
+  /// A protocol frame.
+  Frame(ServerFrame),
+  /// A WebSocket ping. The loop answers on the channel when a pong comes
+  /// back (see [`IngestHub::sidecar_answers`]).
+  Ping(tokio::sync::oneshot::Sender<()>),
 }
 
 /// An outstanding registration token: the dial an endpoint's sidecar makes
@@ -414,10 +423,10 @@ impl IngestHub {
   /// Verify an ingest token and attach the connection. Replaces any
   /// existing connection for the session (the old one is stale — the
   /// sidecar reconnects after a drop).
-  pub async fn attach(
+  async fn attach(
     &self,
     token: &str,
-    tx: mpsc::Sender<ServerFrame>,
+    tx: mpsc::Sender<Outbound>,
   ) -> Result<(Uuid, bool), IngestError> {
     let hash = keys::hash(token);
     let mut inner = self.inner.lock().await;
@@ -432,7 +441,7 @@ impl IngestHub {
   /// Drop the session's connection IF it is still `tx`'s — a replaced
   /// connection's exiting loop must not detach its replacement (the
   /// reconnect race: the old loop's exit fires after the new attach).
-  pub async fn detach_if_current(&self, session: Uuid, tx: &mpsc::Sender<ServerFrame>) {
+  async fn detach_if_current(&self, session: Uuid, tx: &mpsc::Sender<Outbound>) {
     let mut inner = self.inner.lock().await;
     if inner
       .conns
@@ -521,10 +530,42 @@ impl IngestHub {
   pub async fn push(&self, session: Uuid, frame: ServerFrame) {
     let tx = { self.inner.lock().await.conns.get(&session).cloned() };
     if let Some(tx) = tx
-      && tx.send(frame).await.is_err()
+      && tx.send(Outbound::Frame(frame)).await.is_err()
     {
       self.inner.lock().await.conns.remove(&session);
     }
+  }
+
+  /// Whether the session's sidecar is still there: true once it answers a
+  /// WebSocket ping, false when `within` passes first. A sidecar that isn't
+  /// connected gets until then to reconnect (it redials after a drop), and
+  /// a ping a replaced or closed connection never answered is sent again
+  /// on the current one. A frozen instance (a Lambda past its timeout) can
+  /// leave its connection open with nothing reading it, so being attached
+  /// alone proves nothing.
+  pub async fn sidecar_answers(&self, session: Uuid, within: std::time::Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + within;
+    while tokio::time::Instant::now() < deadline {
+      let tx = { self.inner.lock().await.conns.get(&session).cloned() };
+      let Some(tx) = tx else {
+        tokio::time::sleep_until(
+          deadline.min(tokio::time::Instant::now() + std::time::Duration::from_millis(100)),
+        )
+        .await;
+        continue;
+      };
+      let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
+      if tx.send(Outbound::Ping(pong_tx)).await.is_err() {
+        continue;
+      }
+      match tokio::time::timeout_at(deadline, pong_rx).await {
+        Ok(Ok(())) => return true,
+        // The connection closed before a pong: try the next one.
+        Ok(Err(_)) => continue,
+        Err(_) => return false,
+      }
+    }
+    false
   }
 
   /// Ingest one `event` batch: heartbeat the lease FIRST (live-lease
@@ -717,9 +758,9 @@ impl IngestHub {
 }
 
 impl IngestHub {
-  /// An endpoint's wake request ended mid-turn (a platform time limit, a
-  /// dead instance): end the turn now with `message`, rather than at its
-  /// lease's expiry, and stop its sidecar. Does nothing when the turn has
+  /// An endpoint's wake request ended mid-turn and its sidecar stopped
+  /// answering (a platform time limit, a dead instance): end the turn now
+  /// with `message`, rather than at its lease's expiry, and stop its sidecar. Does nothing when the turn has
   /// already ended or moved on (see [`sectr_common::reconcile::end_turn_now`]).
   pub async fn end_endpoint_turn(&self, session: Uuid, invocation_id: Uuid, message: &str) {
     match sectr_common::reconcile::end_turn_now(
@@ -856,20 +897,28 @@ async fn connection(
   hub: Arc<IngestHub>,
   session: Uuid,
   mut socket: WebSocket,
-  mut rx: mpsc::Receiver<ServerFrame>,
-  tx: mpsc::Sender<ServerFrame>,
+  mut rx: mpsc::Receiver<Outbound>,
+  tx: mpsc::Sender<Outbound>,
 ) {
+  // Pings sent and not yet answered: any pong answers them all.
+  let mut pinged: Vec<tokio::sync::oneshot::Sender<()>> = Vec::new();
   loop {
     tokio::select! {
         outbound = rx.recv() => match outbound {
             // Queue closed: the hub replaced or aborted this connection.
             None => break,
-            Some(frame) => {
+            Some(Outbound::Frame(frame)) => {
                 let text = serde_json::to_string(&frame)
                     .expect("server frames serialize");
                 if socket.send(Message::text(text)).await.is_err() {
                     break;
                 }
+            }
+            Some(Outbound::Ping(answered)) => {
+                if socket.send(Message::Ping(Default::default())).await.is_err() {
+                    break;
+                }
+                pinged.push(answered);
             }
         },
         inbound = socket.recv() => match inbound {
@@ -888,7 +937,12 @@ async fn connection(
                     }
                 }
             }
-            Some(Ok(_)) => {} // ping/pong/binary: nothing to do
+            Some(Ok(Message::Pong(_))) => {
+                for answered in pinged.drain(..) {
+                    let _ = answered.send(());
+                }
+            }
+            Some(Ok(_)) => {} // ping/binary: nothing to do
         },
     }
   }
