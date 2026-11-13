@@ -105,7 +105,8 @@ These go in `.env`. Apply changes with `docker compose up -d`.
 | `SECTR_BOOTSTRAP_PLATFORM_KEY` | Generated | The first platform key |
 | `SECTR_MAX_CONCURRENT_SANDBOX_TURNS` | `10` | Turns running in runners on this machine at once. Set it to fit the machine |
 | `SECTR_MAX_CONCURRENT_SANDBOX_TURNS_PER_APP` | `0` | The same, per app. `0` turns it off |
-| `SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP` | `0` | An app's turns on its own compute endpoint at once. They run elsewhere, so the limits above don't count them. `0` turns it off |
+| `SECTR_MAX_CONCURRENT_ENDPOINT_TURNS` | `0` | Turns on compute endpoints at once, across all apps. They run elsewhere, so the limits above don't count them, but each holds a connection to this server. `0` turns it off |
+| `SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP` | `0` | The same, per app. `0` turns it off |
 | `SECTR_RUNNER_CPU_COUNT` | `1` | CPUs per runner. May be fractional |
 | `SECTR_RUNNER_MEMORY_MB` | `1024` | Memory per runner |
 | `SECTR_RUNNER_TIMEOUT_SECS` | `3600` | The longest a runner can live. A turn that hits this ends with an error |

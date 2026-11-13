@@ -1561,6 +1561,53 @@ async fn an_endpoint_app_gets_the_endpoint_cap() {
   assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
 }
 
+/// The platform-wide endpoint cap spans apps, and refuses with
+/// `platform_capacity` like the sandbox one.
+#[tokio::test]
+async fn the_endpoint_cap_spans_apps() {
+  let Some(w) = world_with_limits(|_, _| crate::limits::LimitsConfig {
+    max_endpoint_turns_per_app: 5,
+    max_endpoint_turns: 2,
+    ..limits(0, 0)
+  })
+  .await
+  else {
+    eprintln!("skipping: no test Postgres (initdb not on PATH)");
+    return;
+  };
+  let registry = w.state.registry();
+  for (app, host) in [(w.app_a, "app-a"), (w.app_b, "app-b")] {
+    let endpoint = registry
+      .create_deployment(NewDeployment {
+        endpoint_url: Some(format!("https://{host}-xyz.a.run.app/")),
+        app_id: app,
+        version: 2,
+        manifest: json!({"routes": [{"path": "/test"}]}),
+      })
+      .await
+      .unwrap();
+    registry
+      .set_deployment_status(endpoint.id, DeploymentStatus::Active)
+      .await
+      .unwrap();
+  }
+
+  w.dispatcher.set(Mode::Hold);
+  create_ok(&w, &w.platform_key, "app-a").await;
+  create_ok(&w, &w.platform_key, "app-b").await;
+  let (status, body, retry_after) = req_retry_after(
+    &w.app,
+    "POST",
+    "/sessions",
+    &w.platform_key,
+    new_session_body("app-a"),
+  )
+  .await;
+  assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+  assert_eq!(body["code"], "platform_capacity");
+  assert!(retry_after.is_some());
+}
+
 #[tokio::test]
 async fn input_at_cap_is_429_and_the_journal_is_untouched() {
   let Some(w) = world_with_limits(|_, _| limits(1, 0)).await else {
