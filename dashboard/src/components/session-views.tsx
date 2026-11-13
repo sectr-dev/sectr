@@ -11,6 +11,7 @@ import {
 import { isWakeFailure, wakeHint } from "@/lib/connections";
 import { EVENT_META, formatTimeMs, shortId, deltaText } from "@/lib/events";
 import type { EventMeta } from "@/lib/events";
+import { toolCallStatuses, type ToolCallStatus } from "@/lib/tool-calls";
 import type { JournalEvent } from "@/lib/transport/types";
 import type { InvocationStartedPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -101,6 +102,7 @@ type ChatItem =
       args?: unknown;
       result?: unknown;
       toolCallId: string;
+      status: ToolCallStatus;
     }
   | {
       kind: "approval";
@@ -123,6 +125,7 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
     { text: string; lastEvent: JournalEvent }
   >();
   let turn = 0;
+  const toolStatus = toolCallStatuses(events);
 
   for (const e of events) {
     const p = e.payload as Record<string, unknown>;
@@ -190,6 +193,7 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
           name: String(p.name),
           args: p.arguments,
           toolCallId: String(p.tool_call_id),
+          status: toolStatus.get(e.seq) ?? "running",
         });
         break;
       case "TOOL_RESULT": {
@@ -266,6 +270,21 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
   return items;
 }
 
+const TOOL_PILLS: Record<ToolCallStatus, { label: string; cls: string; title?: string }> = {
+  running: { label: "running", cls: "border-warning/30 bg-warning/10 text-warning" },
+  done: { label: "done", cls: "border-success/30 bg-success/10 text-success" },
+  interrupted: {
+    label: "interrupted",
+    cls: "border-danger/30 bg-danger/10 text-danger",
+    title: "The turn ended before this tool call finished, so no result was recorded.",
+  },
+  not_run: {
+    label: "not run",
+    cls: "border-border bg-muted text-muted-foreground",
+    title: "Its approval was denied or never decided, so it didn't run.",
+  },
+};
+
 function ChatNode({
   item,
   selected,
@@ -338,6 +357,7 @@ function ChatNode({
         </div>
       );
     case "tool": {
+      const pill = TOOL_PILLS[item.status];
       return (
         <div className={cn("pl-8", anim)}>
           <button
@@ -359,18 +379,14 @@ function ChatNode({
                 seq {item.event.seq}
               </span>
               <span
-                className={cn(
-                  "rounded-full border px-1.5 py-px text-[10px]",
-                  item.result != null
-                    ? "border-success/30 bg-success/10 text-success"
-                    : "border-warning/30 bg-warning/10 text-warning",
-                )}
+                className={cn("rounded-full border px-1.5 py-px text-[10px]", pill.cls)}
+                title={pill.title}
               >
-                {item.result != null ? "done" : "running"}
+                {pill.label}
               </span>
             </span>
           </button>
-          {item.result != null && (
+          {item.status === "done" && (
             <div className="mt-1 pl-4 font-mono text-[11px] text-muted-foreground">
               <span className="text-faint-foreground">→ </span>
               {excerpt(stringify(item.result), 160)}
