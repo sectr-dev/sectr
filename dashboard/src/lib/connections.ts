@@ -86,7 +86,7 @@ export function wakeHint(message: string, endpointUrl?: string | null): string |
   const platform = url ? platformOf(url) : "other";
   if (message.includes(`${PHRASES.ANSWERED_HTTP} 403`)) {
     if (platform === "lambda") {
-      return "A Lambda function URL needs auth type NONE, and a resource policy that lets anyone call both lambda:InvokeFunctionUrl and lambda:InvokeFunction.";
+      return "A Lambda function URL needs auth type NONE, and a resource policy that lets anyone call lambda:InvokeFunctionUrl, and lambda:InvokeFunction only through the function URL (with the AWS CLI: `aws lambda add-permission … --invoked-via-function-url`).";
     }
     if (platform === "cloud-run") {
       return "The service must allow unauthenticated invocations (deploy it with --allow-unauthenticated).";

@@ -165,7 +165,8 @@ pub fn hint(message: &str, url: &str) -> Option<String> {
     return match platform {
       Platform::Lambda => Some(
         "a Lambda function URL needs auth type NONE, and a resource policy that lets anyone \
-         call both lambda:InvokeFunctionUrl and lambda:InvokeFunction"
+         call lambda:InvokeFunctionUrl, and lambda:InvokeFunction only through the function URL \
+         (with the AWS CLI: `aws lambda add-permission … --invoked-via-function-url`)"
           .into(),
       ),
       Platform::CloudRun => {
@@ -568,6 +569,8 @@ pub(crate) mod tests {
       format!("your compute endpoint at {LAMBDA} {ANSWERED_HTTP} 403: it refused the request.");
     let lambda = hint(&forbidden, LAMBDA).unwrap();
     assert!(lambda.contains("auth type NONE"), "{lambda}");
+    // lambda:InvokeFunction for anyone, but only through the URL.
+    assert!(lambda.contains("--invoked-via-function-url"), "{lambda}");
     let run = hint(&forbidden, RUN).unwrap();
     assert!(run.contains("--allow-unauthenticated"), "{run}");
     assert_eq!(hint(&forbidden, OTHER), None);
