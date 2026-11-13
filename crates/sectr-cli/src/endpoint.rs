@@ -100,10 +100,17 @@ impl Platform {
             .to_owned(),
         ],
       ],
-      Platform::CloudRun => vec![vec![format!(
-        "gcloud run deploy {app_name} --source . --allow-unauthenticated \
-           --timeout 3600 --concurrency 1"
-      )]],
+      // Without --region gcloud asks for one, and without --project it
+      // deploys silently to whichever project is its default.
+      Platform::CloudRun => vec![vec![
+        format!(
+          "gcloud run deploy {app_name} --source . --region REGION --project PROJECT_ID \
+           --allow-unauthenticated --timeout 3600 --concurrency 1"
+        ),
+        "(fill in your project, and a region near your Sectr server: hosted Sectr's is \
+         us-east4)"
+          .to_owned(),
+      ]],
       Platform::Container => vec![
         // Without --platform, an Apple Silicon Mac builds arm64, which an
         // amd64 host can't run.
@@ -679,6 +686,10 @@ pub(crate) mod tests {
     assert!(container.contains("--platform linux/amd64"), "{container}");
     let run = Platform::CloudRun.next_steps("a").join("\n");
     assert!(run.contains("--timeout 3600 --concurrency 1"));
+    assert!(
+      run.contains("--region REGION --project PROJECT_ID"),
+      "{run}"
+    );
     assert!(
       run.contains("2. put the service URL it prints in sectr.toml"),
       "{run}"
