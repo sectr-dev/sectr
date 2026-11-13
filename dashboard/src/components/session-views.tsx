@@ -276,7 +276,7 @@ const TOOL_PILLS: Record<ToolCallStatus, { label: string; cls: string; title?: s
   interrupted: {
     label: "interrupted",
     cls: "border-danger/30 bg-danger/10 text-danger",
-    title: "The turn ended before this tool call returned, so no result was recorded.",
+    title: "The turn ended before this tool call finished, so no result was recorded.",
   },
   not_run: {
     label: "not run",

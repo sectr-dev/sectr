@@ -64,7 +64,8 @@ test("an approval pause doesn't end the turn", () => {
   assert.deepEqual(statuses(["USER", "CALL:a", "ASK:a", "GRANT:a", "RESUME", "RESULT:a", "NO_MORE_ACTIONS"]), [
     [1, "done"],
   ]);
-  // Granted, then the resume was killed mid-call: it did run.
+  // Granted, then the resume was killed mid-call, or failed to start: the
+  // journal can't tell which, so it's interrupted either way.
   assert.deepEqual(statuses(["USER", "CALL:a", "ASK:a", "GRANT:a", "RESUME", "SESSION_ERROR", "NO_MORE_ACTIONS"]), [
     [1, "interrupted"],
   ]);

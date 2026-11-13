@@ -10,8 +10,9 @@ interface EventLike {
  * - `running`: no result yet, and its turn hasn't ended (or is waiting on
  *   an approval);
  * - `done`: its `TOOL_RESULT` is journaled (the result itself may be null);
- * - `interrupted`: its turn ended before it returned (the turn was killed
- *   mid-call, or failed);
+ * - `interrupted`: its turn ended before it finished. The turn was killed
+ *   or failed mid-call, or, for a granted call, its resume failed to start,
+ *   so it may never have run;
  * - `not_run`: its turn ended and it never ran, because its approval was
  *   denied or never decided.
  *
