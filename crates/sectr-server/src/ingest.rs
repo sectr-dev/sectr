@@ -545,23 +545,35 @@ impl IngestHub {
   /// alone proves nothing.
   pub async fn sidecar_answers(&self, session: Uuid, within: std::time::Duration) -> bool {
     let deadline = tokio::time::Instant::now() + within;
+    // Between tries: no connection yet, or a dead one its loop hasn't
+    // detached yet.
+    let pause = || {
+      tokio::time::sleep_until(
+        deadline.min(tokio::time::Instant::now() + std::time::Duration::from_millis(100)),
+      )
+    };
     while tokio::time::Instant::now() < deadline {
       let tx = { self.inner.lock().await.conns.get(&session).cloned() };
       let Some(tx) = tx else {
-        tokio::time::sleep_until(
-          deadline.min(tokio::time::Instant::now() + std::time::Duration::from_millis(100)),
-        )
-        .await;
+        pause().await;
         continue;
       };
       let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
-      if tx.send(Outbound::Ping(pong_tx)).await.is_err() {
-        continue;
+      // A full queue (its loop stuck writing to a frozen peer) waits
+      // only until the deadline.
+      match tokio::time::timeout_at(deadline, tx.send(Outbound::Ping(pong_tx))).await {
+        Ok(Ok(())) => {}
+        // The connection's loop has exited.
+        Ok(Err(_)) => {
+          pause().await;
+          continue;
+        }
+        Err(_) => return false,
       }
       match tokio::time::timeout_at(deadline, pong_rx).await {
         Ok(Ok(())) => return true,
         // The connection closed before a pong: try the next one.
-        Ok(Err(_)) => continue,
+        Ok(Err(_)) => pause().await,
         Err(_) => return false,
       }
     }
