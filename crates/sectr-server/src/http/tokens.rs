@@ -19,10 +19,10 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use sectr_common::api::ErrorBody;
 use sectr_common::registry::{ApiKeyKind, RegistryError};
 
 use crate::auth::{InvocationPrincipal, Principal, keys};
@@ -179,11 +179,10 @@ pub async fn mint(
     .check(key_id, external_user_id)
     .is_err()
   {
-    return (
+    return ErrorBody::response(
       StatusCode::TOO_MANY_REQUESTS,
-      Json(json!({ "error": "mint rate limit exceeded for this user; retry later" })),
-    )
-      .into_response();
+      "mint rate limit exceeded for this user; retry later",
+    );
   }
 
   let ttl = chrono::Duration::seconds(state.config().user_token_ttl_secs as i64);
@@ -202,30 +201,30 @@ pub async fn mint(
     )
     .await
   {
-    Ok(_) => (StatusCode::CREATED, Json(json!({ "token": full_token }))).into_response(),
+    Ok(_) => (StatusCode::CREATED, Json(Minted { token: full_token })).into_response(),
     // The presenting key was revoked between authentication and insert.
-    Err(RegistryError::NotFound(_)) => (
-      StatusCode::UNAUTHORIZED,
-      Json(json!({ "error": "missing, invalid, or revoked key" })),
-    )
-      .into_response(),
+    Err(RegistryError::NotFound(_)) => {
+      ErrorBody::response(StatusCode::UNAUTHORIZED, "missing, invalid, or revoked key")
+    }
     Err(e) => internal_error(e),
   }
 }
 
+/// The 201: the minted user token, shown once.
+#[derive(Serialize)]
+struct Minted {
+  token: String,
+}
+
 fn bad_request(message: &str) -> Response {
-  (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+  ErrorBody::response(StatusCode::BAD_REQUEST, message)
 }
 
 fn not_found(message: String) -> Response {
-  (StatusCode::NOT_FOUND, Json(json!({ "error": message }))).into_response()
+  ErrorBody::response(StatusCode::NOT_FOUND, message)
 }
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
   tracing::error!(error = %e, "token minting failed");
-  (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(json!({ "error": "internal error" })),
-  )
-    .into_response()
+  ErrorBody::response(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }

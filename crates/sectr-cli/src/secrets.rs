@@ -79,11 +79,17 @@ fn env_safe(key: &str) -> bool {
     && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// `PUT /secrets/{key}`'s body.
+#[derive(serde::Serialize)]
+struct PutSecret<'a> {
+  value: &'a str,
+}
+
 async fn request(
   args: &SecretsArgs,
   method: reqwest::Method,
   path: &str,
-  json_body: Option<serde_json::Value>,
+  json_body: Option<&PutSecret<'_>>,
 ) -> anyhow::Result<reqwest::Response> {
   let target = crate::auth::resolve(args.api.as_deref(), args.key.as_deref())?;
   let key = target.key;
@@ -91,7 +97,7 @@ async fn request(
   let client = reqwest::Client::new();
   let mut builder = client.request(method, &url).bearer_auth(&key);
   if let Some(body) = json_body {
-    builder = builder.json(&body);
+    builder = builder.json(body);
   }
   Ok(builder.send().await?)
 }
@@ -137,7 +143,7 @@ pub async fn run_secrets(args: SecretsArgs) -> anyhow::Result<()> {
         &args,
         reqwest::Method::PUT,
         &format!("/secrets/{key}?app={slug}"),
-        Some(serde_json::json!({ "value": value })),
+        Some(&PutSecret { value: &value }),
       )
       .await?;
       let status = response.status();

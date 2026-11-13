@@ -2,6 +2,14 @@
 //! sectr-worker engine for `sectr dev`, shells out to the user's Python for
 //! deploy-time inspection.
 
+#![cfg_attr(
+  test,
+  allow(
+    clippy::disallowed_macros,
+    reason = "tests build JSON fixtures with `json!`"
+  )
+)]
+
 mod auth;
 mod auth_cmd;
 mod browser;

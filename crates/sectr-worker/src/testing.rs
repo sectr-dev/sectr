@@ -6,6 +6,11 @@
 //! Shared by dispatch tests (worker) and `sectr send` tests (CLI) — one
 //! copy so the two harnesses can't drift.
 
+#![allow(
+  clippy::disallowed_macros,
+  reason = "test support shared by the worker and CLI tests"
+)]
+
 use sectr_common::events::{
   EventPayload, MessageDelta, NoMoreActions, RunnerEvent, ToolApprovalRequired, TypedDelta,
 };

@@ -17,6 +17,14 @@ use crate::events::{
   NoMoreActions, SessionError, ToolApprovalRequired, ToolCall, ToolResult, TypedDelta,
 };
 
+/// The fold as wire JSON, for indexing by field.
+fn fold(events: &[Event]) -> Vec<Value> {
+  fold_messages(events)
+    .iter()
+    .map(|m| serde_json::to_value(m).unwrap())
+    .collect()
+}
+
 fn fixtures_dir() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/fixtures/valid/agui")
 }
@@ -111,7 +119,7 @@ fn golden_streams_match_the_journal_projection() {
     // What a client holds after applying the run (the thread's messages):
     // the fold of the WHOLE journal. The Node suite checks the client
     // reducer's state against it (snapshot and stream must agree).
-    let final_messages = Value::Array(fold_messages(&fixture.journal()));
+    let final_messages = serde_json::to_value(fold_messages(&fixture.journal())).unwrap();
     if bless {
       let mut doc = fixture.doc.clone();
       doc["expected"] = Value::Array(stream);
@@ -528,7 +536,10 @@ fn run_started_echoes_the_request_and_declares_the_protocol_version() {
     thread_id: "t".into(),
     run_id: "r".into(),
     input: Some(json!({"threadId": "t", "runId": "r", "messages": []})),
-    snapshot: Some(vec![json!({"id": "u", "role": "user", "content": "hi"})]),
+    snapshot: Some(vec![Message::User {
+      id: "u".into(),
+      content: "hi".into(),
+    }]),
   });
   let out = p.push(&invocation_started(1, "hi"));
   assert_eq!(types(&out), ["RUN_STARTED", "MESSAGES_SNAPSHOT"]);
@@ -642,8 +653,10 @@ fn connect_context_snapshots_through_the_latest_invocation_without_input() {
   assert_eq!(ctx.thread_id, "t");
   assert!(ctx.input.is_none());
   // Earlier turns + this turn's user message; not this turn's reply.
-  let snapshot = ctx.snapshot.clone().unwrap();
+  let snapshot = serde_json::to_value(ctx.snapshot.clone().unwrap()).unwrap();
   let contents: Vec<&str> = snapshot
+    .as_array()
+    .unwrap()
     .iter()
     .map(|m| m["content"].as_str().unwrap())
     .collect();
@@ -664,7 +677,7 @@ fn fold_uses_the_client_message_id_and_falls_back_to_the_event_id() {
   }
   let without = invocation_started(2, "again");
   let fallback = format!("user-{}", without.id);
-  let messages = fold_messages(&[with_id, without]);
+  let messages = fold(&[with_id, without]);
   assert_eq!(messages[0]["id"], "client-1");
   assert_eq!(messages[1]["id"], fallback);
 }
@@ -728,7 +741,7 @@ fn framework_state_never_reaches_ag_ui() {
 
 #[test]
 fn fold_keeps_reasoning_out_of_assistant_content() {
-  let messages = fold_messages(&[
+  let messages = fold(&[
     invocation_started(1, "hi"),
     start(2, "m1"),
     delta(3, "m1", TypedDelta::reasoning("think")),
@@ -744,7 +757,7 @@ fn fold_keeps_reasoning_out_of_assistant_content() {
 
 #[test]
 fn fold_mints_an_assistant_message_for_a_parentless_tool_call() {
-  let messages = fold_messages(&[
+  let messages = fold(&[
     invocation_started(1, "hi"),
     ev(
       2,
@@ -776,7 +789,7 @@ fn fold_never_attaches_a_tool_call_to_an_earlier_turns_message() {
   };
   // Turn 1 ends with assistant text; turn 2 opens with a tool-only response
   // (no MESSAGE_START — the openai-agents shape), then its result.
-  let messages = fold_messages(&[
+  let messages = fold(&[
     invocation_started(1, "status?"),
     start(2, "m1"),
     delta(3, "m1", TypedDelta::text("Shipped.")),

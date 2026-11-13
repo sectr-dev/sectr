@@ -34,7 +34,7 @@
 
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::config::ServerConfig;
@@ -51,13 +51,38 @@ pub mod events {
   pub const CLI_LOGIN: &str = "cli_login";
 }
 
-/// The `first_session` property carrying the request origin (`session_origin`,
-/// api vs playground). The same enum that feeds the
-/// OTel `origin` attribute feeds this prop — one source of truth.
-pub const PROP_SESSION_ORIGIN: &str = "session_origin";
-/// The app id, on events scoped to one app. Bounded cardinality (apps per
-/// org are few) — NOT session/deployment ids (unbounded).
-pub const PROP_APP_ID: &str = "app_id";
+/// An event's properties: one field per property, so every property is
+/// reviewed here against the low-cardinality rule. Unset ones are left out.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Props {
+  /// `org_created`: how the org signed up (`clerk`).
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub signup: Option<&'static str>,
+  /// Deploy outcomes: `endpoint` for an endpoint registration.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub kind: Option<&'static str>,
+  /// The app id, on events scoped to one app. Bounded cardinality (apps per
+  /// org are few) — NOT session/deployment ids (unbounded).
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub app_id: Option<Uuid>,
+  /// `first_session`: the request origin (api vs playground). The same
+  /// enum that feeds the OTel `origin` attribute feeds this prop — one
+  /// source of truth.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub session_origin: Option<&'static str>,
+}
+
+/// PostHog's `/capture/` body.
+#[derive(Serialize)]
+struct Capture {
+  api_key: String,
+  event: String,
+  /// The org IS the actor (identify by org id, never raw user email).
+  /// String form — PostHog distinct_ids are strings.
+  distinct_id: String,
+  properties: Props,
+  timestamp: String,
+}
 
 /// Hard cap on the spawned capture POST — a hung PostHog must not pile up
 /// tasks (an outage must never delay a turn; a zombie task must
@@ -123,20 +148,18 @@ impl Analytics {
   /// Fire-and-forget product event. Returns immediately; the capture
   /// POST rides a spawned task (failures are logged, never propagated —
   /// nothing in the request path may wait on PostHog).
-  pub fn track(&self, event: &str, org_id: Uuid, props: Value) {
+  pub fn track(&self, event: &str, org_id: Uuid, props: Props) {
     let Some(inner) = &self.inner else {
       return;
     };
     let event = event.to_owned();
-    let payload = json!({
-        "api_key": inner.key,
-        "event": event,
-        // The org IS the actor (identify by org id, never raw
-        // user email). String form — PostHog distinct_ids are strings.
-        "distinct_id": org_id.to_string(),
-        "properties": props,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-    });
+    let payload = Capture {
+      api_key: inner.key.clone(),
+      event: event.clone(),
+      distinct_id: org_id.to_string(),
+      properties: props,
+      timestamp: chrono::Utc::now().to_rfc3339(),
+    };
     let client = inner.client.clone();
     let url = format!("{}/capture/", inner.host);
     tokio::spawn(async move {
@@ -164,6 +187,7 @@ pub(crate) mod testutil {
 
   use axum::routing::post;
   use axum::{Json, Router};
+  use serde_json::{Value, json};
 
   /// In-process capture stub (same pattern as the E2B wire tests): one
   /// POST route that records bodies and answers 200 `{}`.
@@ -203,6 +227,7 @@ pub(crate) mod testutil {
 mod tests {
   use super::testutil::{capture_server, wait_for_captures};
   use super::*;
+  use serde_json::json;
 
   #[tokio::test]
   async fn track_sends_the_capture_payload() {
@@ -214,7 +239,10 @@ mod tests {
     analytics.track(
       events::FIRST_SESSION,
       org,
-      json!({ PROP_SESSION_ORIGIN: "playground" }),
+      Props {
+        session_origin: Some("playground"),
+        ..Props::default()
+      },
     );
 
     let captures = wait_for_captures(&captured, 1).await;
@@ -224,7 +252,7 @@ mod tests {
     assert_eq!(body["event"], events::FIRST_SESSION);
     // Org id as distinct_id (string), never an email.
     assert_eq!(body["distinct_id"], org.to_string());
-    assert_eq!(body["properties"][PROP_SESSION_ORIGIN], "playground");
+    assert_eq!(body["properties"], json!({"session_origin": "playground"}));
     assert!(body["timestamp"].is_string());
   }
 
@@ -239,8 +267,8 @@ mod tests {
     let analytics = Analytics::from_config(&config);
     assert!(!analytics.is_enabled());
 
-    analytics.track(events::DEPLOY_SUCCESS, Uuid::now_v7(), json!({}));
-    analytics.track(events::ORG_CREATED, Uuid::now_v7(), json!({}));
+    analytics.track(events::DEPLOY_SUCCESS, Uuid::now_v7(), Props::default());
+    analytics.track(events::ORG_CREATED, Uuid::now_v7(), Props::default());
 
     let captures = wait_for_captures(&captured, 0).await;
     assert!(captures.is_empty(), "disabled analytics must not POST");

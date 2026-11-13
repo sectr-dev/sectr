@@ -3,6 +3,11 @@
 //! customer image with no init. Linux only: the test stands in for PID 1
 //! by becoming a child subreaper, which inherits orphans the same way.
 //! Its own test binary, so the subreaper setting reaches no other test.
+
+#![allow(
+  clippy::disallowed_macros,
+  reason = "tests build JSON fixtures with `json!`"
+)]
 #![cfg(target_os = "linux")]
 
 use std::io;

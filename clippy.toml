@@ -1,0 +1,8 @@
+# Shipped code builds JSON from `Serialize` structs, not `json!` literals: a
+# literal lists its fields by hand, so when a struct gains a field the
+# compiler can't point at the literals that should carry it too. Tests may
+# use `json!` freely (each crate allows it under `cfg(test)`), and genuinely
+# dynamic JSON keeps it under `#[expect(clippy::disallowed_macros, reason = "…")]`.
+disallowed-macros = [
+    { path = "serde_json::json", reason = "build JSON from a `Serialize` struct so the compiler tracks its fields" },
+]

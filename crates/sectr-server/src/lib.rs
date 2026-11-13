@@ -1,6 +1,14 @@
 //! sectr-server library — the gateway + control plane. Split from the thin
 //! binary so integration tests can build the router in-process.
 
+#![cfg_attr(
+  test,
+  allow(
+    clippy::disallowed_macros,
+    reason = "tests build JSON fixtures with `json!`"
+  )
+)]
+
 pub mod agui;
 pub mod analytics;
 pub mod apps;

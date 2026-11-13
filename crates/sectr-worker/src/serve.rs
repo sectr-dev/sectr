@@ -38,11 +38,12 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
+use sectr_common::endpoint::{Identity, ManifestAnswer, SERVE_MODE, SidecarIdentity, WakeAnswer};
 use sectr_common::inspect;
 use sectr_common::sidecar::INGEST_TOKEN_PREFIX;
 
@@ -183,10 +184,13 @@ pub async fn serve(config: ServeConfig, spawner: Arc<dyn RunnerSpawner>) -> anyh
   Ok(())
 }
 
-async fn identify() -> Json<Value> {
-  Json(json!({
-    "sectr_sidecar": {"version": env!("CARGO_PKG_VERSION"), "mode": "serve"}
-  }))
+async fn identify() -> Json<Identity> {
+  Json(Identity {
+    sectr_sidecar: SidecarIdentity {
+      version: env!("CARGO_PKG_VERSION").into(),
+      mode: SERVE_MODE.into(),
+    },
+  })
 }
 
 /// A refused request: its status, `error` code and message.
@@ -200,7 +204,10 @@ impl IntoResponse for Refusal {
   fn into_response(self) -> Response {
     (
       self.status,
-      Json(json!({"error": self.code, "message": self.message})),
+      Json(sectr_common::endpoint::Refusal {
+        error: self.code.into(),
+        message: Some(self.message),
+      }),
     )
       .into_response()
   }
@@ -221,10 +228,6 @@ fn busy() -> Response {
     message: "this instance is already running a turn".into(),
   }
   .into_response()
-}
-
-fn outcome(body: Value) -> Response {
-  (StatusCode::OK, Json(body)).into_response()
 }
 
 /// The JSON object body, or the response refusing it (413 over the limit,
@@ -313,15 +316,14 @@ async fn wake(
     let exit = client.run().await;
     let answer = match &exit {
       // A reclaimed turn ran: the journal holds how it ended.
-      RunExit::Boundary | RunExit::Reclaimed => json!({"outcome": "turn_ended"}),
-      RunExit::Unauthorized => json!({"outcome": "token_rejected"}),
-      RunExit::DialFailed(e) => json!({
-        "outcome": "dial_failed",
-        "message": format!("dial {ingest_url}: {e}"),
-      }),
+      RunExit::Boundary | RunExit::Reclaimed => WakeAnswer::TurnEnded,
+      RunExit::Unauthorized => WakeAnswer::TokenRejected,
+      RunExit::DialFailed(e) => WakeAnswer::DialFailed {
+        message: format!("dial {ingest_url}: {e}"),
+      },
     };
     tracing::info!(
-      outcome = answer["outcome"].as_str().unwrap_or_default(),
+      outcome = answer.outcome(),
       exit = ?exit,
       duration_ms = started.elapsed().as_millis() as u64,
       "wake finished"
@@ -329,13 +331,16 @@ async fn wake(
     answer
   });
   match run.await {
-    Ok(answer) => outcome(answer),
+    Ok(answer) => Json(answer).into_response(),
     // Only a panic in the turn's own code gets here.
     Err(e) => {
       tracing::error!(error = %e, "wake task failed");
       (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"error": "internal"})),
+        Json(sectr_common::endpoint::Refusal {
+          error: "internal".into(),
+          message: None,
+        }),
       )
         .into_response()
     }
@@ -372,15 +377,15 @@ async fn manifest(
   let started = Instant::now();
   let response = match dial_check(&state.config, &token).await {
     DialCheck::Accepted => import_manifest(&state.config, &entry).await,
-    DialCheck::Rejected => json!({"outcome": "token_rejected"}),
-    DialCheck::Failed(message) => json!({"outcome": "dial_failed", "message": message}),
+    DialCheck::Rejected => ManifestAnswer::TokenRejected,
+    DialCheck::Failed(message) => ManifestAnswer::DialFailed { message },
   };
   tracing::info!(
-    outcome = response["outcome"].as_str().unwrap_or_default(),
+    outcome = response.outcome(),
     duration_ms = started.elapsed().as_millis() as u64,
     "manifest request finished"
   );
-  outcome(response)
+  Json(response).into_response()
 }
 
 enum DialCheck {
@@ -434,7 +439,7 @@ async fn dial_check(config: &ServeConfig, token: &str) -> DialCheck {
 
 /// Import the app the way managed builds do and shape the result as a
 /// `/manifest` outcome.
-async fn import_manifest(config: &ServeConfig, entry: &str) -> Value {
+async fn import_manifest(config: &ServeConfig, entry: &str) -> ManifestAnswer {
   let uses_uv = inspect::uses_uv(&config.app_dir);
   let command = inspect::import_command(uses_uv, &config.python);
   let result = inspect::run_import(
@@ -446,22 +451,18 @@ async fn import_manifest(config: &ServeConfig, entry: &str) -> Value {
   )
   .await;
   match result {
-    Ok(manifest) => json!({"outcome": "manifest", "manifest": manifest, "uses_uv": uses_uv}),
+    Ok(manifest) => ManifestAnswer::Manifest { manifest, uses_uv },
     Err(failure) => {
       tracing::warn!(
         exit_code = failure.exit_code,
         message = failure.message.as_deref().unwrap_or_default(),
         "manifest import failed"
       );
-      let mut body = json!({
-        "outcome": "import_failed",
-        "exit_code": failure.exit_code,
-        "stderr_tail": failure.stderr_tail,
-      });
-      if let Some(message) = failure.message {
-        body["message"] = Value::String(message);
+      ManifestAnswer::ImportFailed {
+        exit_code: failure.exit_code,
+        stderr_tail: failure.stderr_tail,
+        message: failure.message,
       }
-      body
     }
   }
 }

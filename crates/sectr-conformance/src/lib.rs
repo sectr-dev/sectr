@@ -58,6 +58,11 @@
 //! again through each, on langgraph only (`<id>_middleware`,
 //! `<id>_wrapped`), with the same case code.
 
+#![allow(
+  clippy::disallowed_macros,
+  reason = "test tooling: mock providers and scenarios build JSON with `json!`"
+)]
+
 pub mod adapter;
 pub mod agent;
 pub mod case;

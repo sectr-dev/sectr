@@ -19,7 +19,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use serde_json::{Value, json};
+use sectr_common::api::ErrorBody;
+use serde::Serialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::PlatformPrincipal;
@@ -56,13 +58,7 @@ async fn compose_list(state: &AppState, org_id: Uuid, only: Option<Uuid>) -> Res
   let apps = match only {
     Some(id) => match registry.get_app(id).await {
       Ok(app) if app.org_id == org_id => vec![app],
-      Ok(_) | Err(_) => {
-        return (
-          StatusCode::NOT_FOUND,
-          Json(json!({ "error": "app not found" })),
-        )
-          .into_response();
-      }
+      Ok(_) | Err(_) => return ErrorBody::response(StatusCode::NOT_FOUND, "app not found"),
     },
     None => match registry.list_apps(org_id).await {
       Ok(apps) => apps,
@@ -105,21 +101,18 @@ async fn compose_list(state: &AppState, org_id: Uuid, only: Option<Uuid>) -> Res
     let dto = |d: &Deployment| DeploymentDto::new(d, Some(d.id) == active_id);
     let latest = deployments.first().map(dto);
 
-    let mut summary = json!({
-        "id": app.id,
-        "name": app.name,
-        "slug": app.slug,
-        "framework": framework,
-        "description": "",
-        "url": null,
-        "routes": routes,
-        "sessions_count": counts.get(&app.id).copied().unwrap_or(0),
-        "latest_deployment": latest,
+    out.push(AppSummary {
+      id: app.id,
+      name: app.name.clone(),
+      slug: app.slug.clone(),
+      framework,
+      description: "",
+      url: None,
+      routes,
+      sessions_count: counts.get(&app.id).copied().unwrap_or(0),
+      latest_deployment: latest,
+      deployments: only.map(|_| deployments.iter().map(dto).collect()),
     });
-    if only.is_some() {
-      summary["deployments"] = json!(deployments.iter().map(dto).collect::<Vec<_>>());
-    }
-    out.push(summary);
   }
 
   // Detail endpoint: a single AppDetail object; summary endpoint: the
@@ -127,27 +120,51 @@ async fn compose_list(state: &AppState, org_id: Uuid, only: Option<Uuid>) -> Res
   match only {
     Some(_) => match out.into_iter().next() {
       Some(one) => Json(one).into_response(),
-      None => (
-        StatusCode::NOT_FOUND,
-        Json(json!({ "error": "app not found" })),
-      )
-        .into_response(),
+      None => ErrorBody::response(StatusCode::NOT_FOUND, "app not found"),
     },
     None => Json(out).into_response(),
   }
 }
 
+/// `AppSummary`, and with `deployments` the detail endpoint's `AppDetail`.
+/// `description` is always empty and `url` always null (see the module
+/// docs).
+#[derive(Serialize)]
+struct AppSummary {
+  id: Uuid,
+  name: String,
+  slug: String,
+  framework: Option<String>,
+  description: &'static str,
+  url: Option<String>,
+  routes: Vec<RouteDto>,
+  sessions_count: i64,
+  latest_deployment: Option<DeploymentDto>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  deployments: Option<Vec<DeploymentDto>>,
+}
+
+/// One route an app serves (`description` is always empty).
+#[derive(Serialize)]
+struct RouteDto {
+  path: String,
+  description: &'static str,
+}
+
 /// The UI-facing route list + framework marker from a manifest: the
 /// import result carries `routes[]` (`{path, framework?}`) and
 /// `deployment_serves_route` matches those paths.
-fn routes_from_manifest(manifest: &Value) -> (Vec<Value>, Option<String>) {
+fn routes_from_manifest(manifest: &Value) -> (Vec<RouteDto>, Option<String>) {
   let mut routes = Vec::new();
   let mut framework = None;
   if let Some(list) = manifest.get("routes").and_then(|r| r.as_array()) {
     for r in list {
       let path = r.get("path").and_then(|p| p.as_str()).unwrap_or("");
       if !path.is_empty() {
-        routes.push(json!({ "path": path, "description": "" }));
+        routes.push(RouteDto {
+          path: path.to_owned(),
+          description: "",
+        });
       }
       if framework.is_none() {
         framework = r
@@ -162,11 +179,7 @@ fn routes_from_manifest(manifest: &Value) -> (Vec<Value>, Option<String>) {
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
   tracing::error!(error = %e, "apps request failed");
-  (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(json!({ "error": "internal error" })),
-  )
-    .into_response()
+  ErrorBody::response(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
 
 #[cfg(test)]

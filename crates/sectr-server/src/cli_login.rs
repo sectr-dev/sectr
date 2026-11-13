@@ -25,12 +25,16 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use base64::Engine;
-use serde::Deserialize;
-use serde_json::json;
+use serde::Serialize;
+
+use sectr_common::api::cli_login::{
+  ApprovedLogin, DeviceGrant, PollAnswer, PollRequest, StartRequest,
+};
+use sectr_common::api::{ErrorBody, OrgRef};
 
 use sectr_common::registry::{ApiKeyKind, CliLoginDecision, CliLoginPoll, PgRegistry};
 
-use crate::analytics::events;
+use crate::analytics::{Props, events};
 use crate::auth::{PlatformPrincipal, keys};
 use crate::state::AppState;
 
@@ -174,7 +178,7 @@ fn generate_device_code() -> String {
 // ---------------------------------------------------------------------------
 
 fn error(status: StatusCode, msg: &str) -> Response {
-  (status, Json(json!({ "error": msg }))).into_response()
+  ErrorBody::response(status, msg)
 }
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
@@ -190,12 +194,6 @@ fn pg(state: &AppState) -> Result<&PgRegistry, Response> {
       "browser login is unavailable on this deployment",
     )
   })
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct StartRequest {
-  #[serde(default)]
-  client_name: String,
 }
 
 /// `POST /auth/cli` — `{"client_name"}` → the device code (secret), the
@@ -236,20 +234,15 @@ async fn start(State(state): State<AppState>, Json(req): Json<StartRequest>) -> 
   }
 
   let base = &state.config().dashboard_url;
-  Json(json!({
-      "device_code": device_code,
-      "user_code": user_code,
-      "verification_url": format!("{base}/cli"),
-      "verification_url_complete": format!("{base}/cli/{user_code}"),
-      "expires_in": REQUEST_TTL_SECS,
-      "interval": POLL_INTERVAL_SECS,
-  }))
+  Json(DeviceGrant {
+    device_code,
+    verification_url: format!("{base}/cli"),
+    verification_url_complete: format!("{base}/cli/{user_code}"),
+    user_code,
+    expires_in: REQUEST_TTL_SECS.unsigned_abs(),
+    interval: POLL_INTERVAL_SECS,
+  })
   .into_response()
-}
-
-#[derive(Debug, Deserialize)]
-struct PollRequest {
-  device_code: String,
 }
 
 /// `POST /auth/cli/poll` — `{"device_code"}` → `pending` | `denied` |
@@ -265,18 +258,20 @@ async fn poll(State(state): State<AppState>, Json(req): Json<PollRequest>) -> Re
     .poll_cli_login(&keys::hash(&req.device_code), &keys::hash(&full_key))
     .await
   {
-    Ok(CliLoginPoll::Pending) => Json(json!({ "status": "pending" })).into_response(),
-    Ok(CliLoginPoll::Denied) => Json(json!({ "status": "denied" })).into_response(),
-    Ok(CliLoginPoll::Expired) => Json(json!({ "status": "expired" })).into_response(),
+    Ok(CliLoginPoll::Pending) => Json(PollAnswer::Pending).into_response(),
+    Ok(CliLoginPoll::Denied) => Json(PollAnswer::Denied).into_response(),
+    Ok(CliLoginPoll::Expired) => Json(PollAnswer::Expired).into_response(),
     Ok(CliLoginPoll::Approved { key_id, org }) => {
       state
         .analytics()
-        .track(events::CLI_LOGIN, org.id, json!({}));
-      Json(json!({
-          "status": "approved",
-          "key": full_key,
-          "key_id": key_id,
-          "org": { "id": org.id, "name": org.name },
+        .track(events::CLI_LOGIN, org.id, Props::default());
+      Json(PollAnswer::Approved(ApprovedLogin {
+        key: full_key,
+        key_id,
+        org: OrgRef {
+          id: org.id,
+          name: org.name,
+        },
       }))
       .into_response()
     }
@@ -296,14 +291,7 @@ async fn get_request(
   };
   let code = display_user_code(&normalize_user_code(&user_code));
   match pg.get_cli_login(&code).await {
-    Ok(Some(req)) => Json(json!({
-        "user_code": req.user_code,
-        "client_name": req.client_name,
-        "created_at": req.created_at,
-        "expires_at": req.expires_at,
-        "status": req.status,
-    }))
-    .into_response(),
+    Ok(Some(req)) => Json(req).into_response(),
     Ok(None) => error(StatusCode::NOT_FOUND, "login request not found or expired"),
     Err(e) => internal_error(e),
   }
@@ -326,6 +314,14 @@ async fn deny(
   decide(&state, &user_code, None).await
 }
 
+/// A decision on a request that isn't pending: the error and its current
+/// status.
+#[derive(Serialize)]
+struct AlreadyDecided {
+  error: &'static str,
+  status: String,
+}
+
 async fn decide(
   state: &AppState,
   user_code: &str,
@@ -343,7 +339,10 @@ async fn decide(
     }
     Ok(CliLoginDecision::NotPending(status)) => (
       StatusCode::CONFLICT,
-      Json(json!({ "error": "login request was already decided", "status": status })),
+      Json(AlreadyDecided {
+        error: "login request was already decided",
+        status,
+      }),
     )
       .into_response(),
     Err(e) => internal_error(e),

@@ -74,7 +74,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use opentelemetry::KeyValue;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use uuid::Uuid;
 
 use sectr_common::registry::{Deployment, DeploymentStatus, Registry};
@@ -425,7 +425,7 @@ async fn deploy(
       app_id: app.id,
       version,
       // Placeholder until the authoritative import lands.
-      manifest: json!({"routes": []}),
+      manifest: placeholder_manifest(),
     })
     .await
     .map_err(reg_err)?;
@@ -484,7 +484,7 @@ async fn run_build(state: AppState, deployment: Deployment, parsed: DeployManife
   );
   let _guard = span.enter();
   let result = build_and_activate(&state, &deployment, &parsed).await;
-  let outcome = record_deploy_outcome(&state, &deployment, result, json!({})).await;
+  let outcome = record_deploy_outcome(&state, &deployment, result, None).await;
   span.record("outcome", outcome);
   let registry = state.registry();
   // The build has resolved (either way) — clear the in-flight ref.
@@ -496,13 +496,13 @@ async fn run_build(state: AppState, deployment: Deployment, parsed: DeployManife
 /// Resolve a deploy's background outcome on its `building` row: on
 /// failure store the error tail and mark it `failed`; on success clear any
 /// stale error (the row was activated already). Both count in the deploy
-/// metric and analytics; `extra_props` adds analytics properties (an
-/// endpoint registration's `kind`).
+/// metric and analytics; `kind` is the analytics `kind` property (an
+/// endpoint registration's `endpoint`).
 async fn record_deploy_outcome(
   state: &AppState,
   deployment: &Deployment,
   result: Result<(), String>,
-  extra_props: Value,
+  kind: Option<&'static str>,
 ) -> &'static str {
   let registry = state.registry();
   // Product analytics need the org (deployment rows don't carry
@@ -515,10 +515,10 @@ async fn record_deploy_outcome(
       None
     }
   };
-  let deploy_props = || {
-    let mut props = extra_props.clone();
-    props[crate::analytics::PROP_APP_ID] = json!(deployment.app_id.to_string());
-    props
+  let deploy_props = || crate::analytics::Props {
+    kind,
+    app_id: Some(deployment.app_id),
+    ..Default::default()
   };
   let outcome = if result.is_err() { "failed" } else { "success" };
   if let Err(e) = result {
@@ -669,19 +669,53 @@ fn compose_manifest(
     vec!["python3".into(), "-m".into(), "sectr.server".into()]
   };
   runner_command.push(parsed.entry.clone());
-  json!({
-      "name": imported.get("name").unwrap_or(&json!(parsed.app_name)).clone(),
-      "entry": parsed.entry,
-      "python": imported.get("python").cloned().unwrap_or(json!(null)),
-      "routes": imported.get("routes").cloned().unwrap_or(json!([])),
-      "env": imported.get("env").cloned().unwrap_or(json!([])),
-      "runner": {
-          "image": image_ref,
-          "command": runner_command,
-          "workdir": "/app",
-      },
-      "approval_tools": parsed.approval_tools,
-  })
+  let imported_or = |key: &str, default: Value| imported.get(key).cloned().unwrap_or(default);
+  let manifest = DeploymentManifest {
+    name: imported_or("name", Value::String(parsed.app_name.clone())),
+    entry: &parsed.entry,
+    python: imported_or("python", Value::Null),
+    routes: imported_or("routes", Value::Array(Vec::new())),
+    env: imported_or("env", Value::Array(Vec::new())),
+    runner: RunnerManifest {
+      image: image_ref,
+      command: runner_command,
+      workdir: "/app",
+    },
+    approval_tools: &parsed.approval_tools,
+  };
+  serde_json::to_value(manifest).expect("the manifest serializes")
+}
+
+/// A deployment row's manifest, as [`compose_manifest`] writes it. `name`,
+/// `python`, `routes` and `env` pass through from the app's import, whose
+/// shape the SDK owns.
+#[derive(Serialize)]
+struct DeploymentManifest<'a> {
+  name: Value,
+  entry: &'a str,
+  python: Value,
+  routes: Value,
+  env: Value,
+  runner: RunnerManifest<'a>,
+  approval_tools: &'a [String],
+}
+
+/// The manifest's `runner`: how the dispatcher starts the agent.
+#[derive(Serialize)]
+struct RunnerManifest<'a> {
+  image: Option<&'a str>,
+  command: Vec<String>,
+  workdir: &'static str,
+}
+
+/// The manifest a deployment row holds until its import lands: no routes,
+/// so it serves none.
+fn placeholder_manifest() -> Value {
+  #[derive(Serialize)]
+  struct Placeholder {
+    routes: Vec<Value>,
+  }
+  serde_json::to_value(Placeholder { routes: Vec::new() }).expect("the placeholder serializes")
 }
 
 /// Routing handover: retire the current active, activate `deployment_id`.
@@ -745,9 +779,10 @@ async fn activate(state: &AppState, deployment_id: Uuid) -> Result<(), String> {
       state.analytics().track(
         crate::analytics::events::FIRST_APP_DEPLOYED,
         app.org_id,
-        serde_json::json!({
-            crate::analytics::PROP_APP_ID: deployment.app_id.to_string()
-        }),
+        crate::analytics::Props {
+          app_id: Some(deployment.app_id),
+          ..Default::default()
+        },
       );
     }
   }
@@ -803,6 +838,7 @@ pub async fn sweep_stale_building(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::json;
   use std::sync::Arc;
 
   use axum::body::Body;

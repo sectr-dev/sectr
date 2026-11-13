@@ -37,7 +37,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
-use serde_json::json;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -97,7 +96,7 @@ pub fn agui_cors_layer() -> CorsLayer {
 }
 
 fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
-  (status, axum::Json(json!({ "error": message.into() }))).into_response()
+  super::ErrorBody::response(status, message)
 }
 
 async fn run(

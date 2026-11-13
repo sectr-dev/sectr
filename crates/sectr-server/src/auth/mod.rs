@@ -35,8 +35,7 @@ use axum::http::request::Parts;
 use axum::http::{HeaderValue, header::AUTHORIZATION};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::{Json, extract::State, http::StatusCode};
-use serde_json::json;
+use axum::{extract::State, http::StatusCode};
 use uuid::Uuid;
 
 use sectr_common::api::{Origin, RequestScope, UserTokenLease};
@@ -107,7 +106,7 @@ pub struct AuthError {
 
 impl IntoResponse for AuthError {
   fn into_response(self) -> Response {
-    let mut resp = (self.status, Json(json!({ "error": self.message }))).into_response();
+    let mut resp = sectr_common::api::ErrorBody::response(self.status, self.message);
     if self.status == StatusCode::UNAUTHORIZED {
       resp.headers_mut().insert(
         "WWW-Authenticate",

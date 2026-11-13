@@ -23,7 +23,7 @@
 use axum::Router;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use sectr_common::api::agui::{agui_cors_layer, agui_router};
 
 use crate::auth::{self, Principal};
@@ -48,13 +48,10 @@ async fn reject_platform_keys(req: axum::extract::Request, next: Next) -> Respon
     req.extensions().get::<Principal>(),
     Some(Principal::Platform { .. })
   ) {
-    return (
+    return sectr_common::api::ErrorBody::response(
       StatusCode::FORBIDDEN,
-      axum::Json(serde_json::json!({
-        "error": "the AG-UI endpoint accepts invocation keys (ski_) and user tokens (sks_), not platform keys"
-      })),
-    )
-      .into_response();
+      "the AG-UI endpoint accepts invocation keys (ski_) and user tokens (sks_), not platform keys",
+    );
   }
   next.run(req).await
 }

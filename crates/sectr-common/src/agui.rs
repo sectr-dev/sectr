@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::events::{Event, EventPayload, InvocationReason, ToolApprovalRequired, TypedDelta};
 
@@ -228,7 +228,14 @@ pub struct AgUiEvent {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub timestamp: Option<i64>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub metadata: Option<Map<String, Value>>,
+  pub metadata: Option<EventMetadata>,
+}
+
+/// `BaseEvent.metadata` (open in the protocol): ours carries the journal
+/// event's `seq`, so a client can tell where in the journal it is.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EventMetadata {
+  pub seq: i64,
 }
 
 impl AgUiEvent {
@@ -320,8 +327,68 @@ pub enum AgUiBody {
     message_id: String,
   },
   MessagesSnapshot {
-    messages: Vec<Value>,
+    messages: Vec<Message>,
   },
+}
+
+/// One message of a `MESSAGES_SNAPSHOT`: the upstream `#Message` shapes the
+/// journal fold produces ([`fold_messages`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+  tag = "role",
+  rename_all = "lowercase",
+  rename_all_fields = "camelCase"
+)]
+pub enum Message {
+  User {
+    id: String,
+    content: String,
+  },
+  Assistant {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<ToolCall>,
+  },
+  Reasoning {
+    id: String,
+    content: String,
+  },
+  Tool {
+    id: String,
+    tool_call_id: String,
+    content: String,
+  },
+}
+
+impl Message {
+  fn assistant(id: &str) -> Self {
+    Message::Assistant {
+      id: id.to_owned(),
+      content: None,
+      tool_calls: Vec::new(),
+    }
+  }
+
+  fn issued_call(&self, tool_call_id: &str) -> bool {
+    matches!(self, Message::Assistant { tool_calls, .. } if tool_calls.iter().any(|c| c.id == tool_call_id))
+  }
+}
+
+/// An assistant message's tool call (`#ToolCall`: always `type: "function"`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename = "function")]
+pub struct ToolCall {
+  pub id: String,
+  pub function: FunctionCall,
+}
+
+/// A tool call's function: its name and JSON-encoded arguments.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FunctionCall {
+  pub name: String,
+  pub arguments: String,
 }
 
 /// `RUN_FINISHED.outcome` — the closed union (`success` | `interrupt`;
@@ -347,9 +414,25 @@ pub struct Interrupt {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub message: Option<String>,
   pub tool_call_id: String,
-  pub response_schema: Value,
+  pub response_schema: ResponseSchema,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub metadata: Option<Map<String, Value>>,
+  pub metadata: Option<InterruptMetadata>,
+}
+
+/// `Interrupt.responseSchema`: the JSON Schema of the answer. A tool
+/// approval is answered with a boolean.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResponseSchema {
+  #[serde(rename = "type")]
+  pub kind: String,
+}
+
+/// `Interrupt.metadata` of a tool approval: what is being approved.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterruptMetadata {
+  pub tool_name: String,
+  pub arguments: Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +486,7 @@ pub struct RunContext {
   pub input: Option<Value>,
   /// When `Some`, emitted as `MESSAGES_SNAPSHOT` right after `RUN_STARTED`
   /// (every run on an EXISTING thread; see agui-mapping.md "History").
-  pub snapshot: Option<Vec<Value>>,
+  pub snapshot: Option<Vec<Message>>,
 }
 
 /// Maps ONE invocation's journal events to AG-UI events. Feed it the
@@ -663,16 +746,18 @@ fn interrupt_for(event: &Event, approval: &ToolApprovalRequired) -> Interrupt {
   // The AG-UI Interrupt carries no tool name/arguments, and the approval
   // request is not a TOOL_CALL (the runner may journal only the approval
   // event), so the client would otherwise not know WHAT is being approved.
-  let mut metadata = Map::new();
-  metadata.insert("toolName".into(), json!(approval.name));
-  metadata.insert("arguments".into(), approval.arguments.clone());
   Interrupt {
     id: event.id.to_string(),
     reason: INTERRUPT_REASON_TOOL_APPROVAL.into(),
     message: approval.reason.clone(),
     tool_call_id: approval.tool_call_id.clone(),
-    response_schema: json!({"type": "boolean"}),
-    metadata: Some(metadata),
+    response_schema: ResponseSchema {
+      kind: "boolean".into(),
+    },
+    metadata: Some(InterruptMetadata {
+      tool_name: approval.name.clone(),
+      arguments: approval.arguments.clone(),
+    }),
   }
 }
 
@@ -705,11 +790,7 @@ impl Out {
   fn push(&mut self, body: AgUiBody) {
     let mut ev = AgUiEvent::bare(body);
     ev.timestamp = self.at.map(millis);
-    if let Some(seq) = self.seq {
-      let mut metadata = Map::new();
-      metadata.insert("seq".into(), json!(seq));
-      ev.metadata = Some(metadata);
-    }
+    ev.metadata = self.seq.map(|seq| EventMetadata { seq });
     self.events.push_back(ev);
   }
 
@@ -743,8 +824,8 @@ impl Out {
 /// user prompt) are LLM-CONTEXT management, not conversation history: the
 /// journal is never rewritten, so the fold shows the full original
 /// conversation to the user.
-pub fn fold_messages(events: &[Event]) -> Vec<Value> {
-  let mut msgs: Vec<Value> = Vec::new();
+pub fn fold_messages(events: &[Event]) -> Vec<Message> {
+  let mut msgs: Vec<Message> = Vec::new();
   // message_id → index in `msgs` (assistant), reasoning id → index.
   let mut text_idx: std::collections::HashMap<String, usize> = Default::default();
   let mut reasoning_idx: std::collections::HashMap<String, usize> = Default::default();
@@ -762,15 +843,14 @@ pub fn fold_messages(events: &[Event]) -> Vec<Value> {
           let extra_id = invocation_namespace(&inv.extra)
             .and_then(|ns| ns.get(CLIENT_MESSAGE_ID_KEY))
             .and_then(Value::as_str);
-          msgs.push(json!({
-            "id": user_message_id(event, extra_id),
-            "role": "user",
-            "content": input,
-          }));
+          msgs.push(Message::User {
+            id: user_message_id(event, extra_id),
+            content: input.as_str().to_owned(),
+          });
         }
       }
       EventPayload::MessageStart(m) => {
-        msgs.push(json!({"id": m.message_id, "role": "assistant"}));
+        msgs.push(Message::assistant(&m.message_id));
         let idx = msgs.len() - 1;
         text_idx.insert(m.message_id.clone(), idx);
         current = Some(idx);
@@ -781,25 +861,32 @@ pub fn fold_messages(events: &[Event]) -> Vec<Value> {
             Some(idx) => *idx,
             None => {
               // Delta without a START (defensive; mirrors the Projector).
-              msgs.push(json!({"id": d.message_id, "role": "assistant"}));
+              msgs.push(Message::assistant(&d.message_id));
               text_idx.insert(d.message_id.clone(), msgs.len() - 1);
               current = Some(msgs.len() - 1);
               msgs.len() - 1
             }
           };
-          append_string(&mut msgs[idx], "content", text);
+          if let Message::Assistant { content, .. } = &mut msgs[idx] {
+            content.get_or_insert_default().push_str(text);
+          }
         }
         TypedDelta::Reasoning { text, .. } => {
           let rid = reasoning_message_id(&d.message_id);
           let idx = match reasoning_idx.get(&rid) {
             Some(idx) => *idx,
             None => {
-              msgs.push(json!({"id": rid, "role": "reasoning", "content": ""}));
+              msgs.push(Message::Reasoning {
+                id: rid.clone(),
+                content: String::new(),
+              });
               reasoning_idx.insert(rid, msgs.len() - 1);
               msgs.len() - 1
             }
           };
-          append_string(&mut msgs[idx], "content", text);
+          if let Message::Reasoning { content, .. } = &mut msgs[idx] {
+            content.push_str(text);
+          }
         }
       },
       EventPayload::ToolCall(c) => {
@@ -815,12 +902,7 @@ pub fn fold_messages(events: &[Event]) -> Vec<Value> {
       // fold it as the pending, unanswered call so the resumed run's
       // TOOL_CALL_RESULT has a call to answer.
       EventPayload::ToolApprovalRequired(a) => {
-        let known = msgs.iter().any(|m| {
-          m.get("toolCalls")
-            .and_then(Value::as_array)
-            .is_some_and(|calls| calls.iter().any(|c| c["id"] == a.tool_call_id.as_str()))
-        });
-        if !known {
+        if !msgs.iter().any(|m| m.issued_call(&a.tool_call_id)) {
           attach_tool_call(
             &mut msgs,
             &mut current,
@@ -831,25 +913,18 @@ pub fn fold_messages(events: &[Event]) -> Vec<Value> {
         }
       }
       EventPayload::ToolResult(r) => {
-        let tool = json!({
-          "id": tool_message_id(&r.tool_call_id),
-          "role": "tool",
-          "toolCallId": r.tool_call_id,
-          "content": stringify(&r.result),
-        });
+        let tool = Message::Tool {
+          id: tool_message_id(&r.tool_call_id),
+          tool_call_id: r.tool_call_id.clone(),
+          content: stringify(&r.result),
+        };
         // Right after the assistant message that issued the call (past any
         // results already recorded for it), else at the end.
-        let owner = msgs.iter().position(|m| {
-          m["role"] == "assistant"
-            && m
-              .get("toolCalls")
-              .and_then(Value::as_array)
-              .is_some_and(|calls| calls.iter().any(|c| c["id"] == r.tool_call_id.as_str()))
-        });
+        let owner = msgs.iter().position(|m| m.issued_call(&r.tool_call_id));
         match owner {
           Some(owner) => {
             let mut at = owner + 1;
-            while at < msgs.len() && msgs[at]["role"] == "tool" {
+            while at < msgs.len() && matches!(msgs[at], Message::Tool { .. }) {
               at += 1;
             }
             msgs.insert(at, tool);
@@ -878,7 +953,7 @@ pub fn fold_messages(events: &[Event]) -> Vec<Value> {
 /// the call id, when there is none — what an AG-UI client does for a
 /// parent-less `TOOL_CALL_START`).
 fn attach_tool_call(
-  msgs: &mut Vec<Value>,
+  msgs: &mut Vec<Message>,
   current: &mut Option<usize>,
   tool_call_id: &str,
   name: &str,
@@ -887,30 +962,20 @@ fn attach_tool_call(
   let idx = match *current {
     Some(idx) => idx,
     None => {
-      msgs.push(json!({"id": tool_call_id, "role": "assistant"}));
+      msgs.push(Message::assistant(tool_call_id));
       *current = Some(msgs.len() - 1);
       msgs.len() - 1
     }
   };
-  let call = json!({
-    "id": tool_call_id,
-    "type": "function",
-    "function": {"name": name, "arguments": stringify(arguments)},
-  });
-  let calls = msgs[idx]
-    .as_object_mut()
-    .expect("messages are objects")
-    .entry("toolCalls")
-    .or_insert_with(|| Value::Array(Vec::new()));
-  if let Value::Array(calls) = calls {
-    calls.push(call);
+  if let Message::Assistant { tool_calls, .. } = &mut msgs[idx] {
+    tool_calls.push(ToolCall {
+      id: tool_call_id.to_owned(),
+      function: FunctionCall {
+        name: name.to_owned(),
+        arguments: stringify(arguments),
+      },
+    });
   }
-}
-
-fn append_string(message: &mut Value, key: &str, text: &str) {
-  let obj = message.as_object_mut().expect("messages are objects");
-  let current = obj.get(key).and_then(Value::as_str).unwrap_or("");
-  obj.insert(key.into(), Value::String(format!("{current}{text}")));
 }
 
 // ---------------------------------------------------------------------------

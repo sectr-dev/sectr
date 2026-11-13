@@ -17,6 +17,8 @@
 //! The journal is the source of truth: the SSE endpoint is a journal tail
 //! (`Last-Event-ID` resumption), never a proxy of a running runner.
 
+pub mod cli_login;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -170,20 +172,26 @@ pub struct SessionInput {
 }
 
 /// `POST /sessions`'s body, before its input is checked.
-#[derive(Debug, Deserialize)]
-struct NewSessionBody {
-  app: String,
-  route: String,
-  input: serde_json::Value,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NewSessionBody {
+  pub app: String,
+  pub route: String,
+  pub input: serde_json::Value,
+}
+
+/// `POST /sessions`'s 201 answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCreated {
+  pub session_id: SessionId,
 }
 
 /// `POST /sessions/{id}/input`'s body, before its input is checked.
-#[derive(Debug, Deserialize)]
-struct SessionInputBody {
-  input: serde_json::Value,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionInputBody {
+  pub input: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ApprovalDecisionRequest {
   pub approved: bool,
   /// Omitted: a user token's decision is attributed to its end user
@@ -402,6 +410,43 @@ pub struct DevStatus {
 // Service trait — the seam between the HTTP contract and an engine
 // ---------------------------------------------------------------------------
 
+/// An org, as the API names it to a caller: its id and name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgRef {
+  pub id: Uuid,
+  pub name: String,
+}
+
+/// Every API error's body: `{error}`, plus a machine-readable `code` where
+/// clients branch on the kind of refusal (429s, the beta cap).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorBody {
+  pub error: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub code: Option<String>,
+}
+
+impl ErrorBody {
+  pub fn new(error: impl Into<String>) -> Self {
+    ErrorBody {
+      error: error.into(),
+      code: None,
+    }
+  }
+
+  pub fn with_code(error: impl Into<String>, code: impl Into<String>) -> Self {
+    ErrorBody {
+      error: error.into(),
+      code: Some(code.into()),
+    }
+  }
+
+  /// A `{error}` response with `status`.
+  pub fn response(status: StatusCode, error: impl Into<String>) -> Response {
+    (status, Json(Self::new(error))).into_response()
+  }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
   #[error("not found: {0}")]
@@ -446,12 +491,12 @@ impl IntoResponse for ServiceError {
             axum::http::header::RETRY_AFTER,
             retry_after_secs.to_string(),
           )],
-          Json(serde_json::json!({ "error": message, "code": code })),
+          Json(ErrorBody::with_code(message.clone(), *code)),
         )
           .into_response();
       }
     };
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
+    ErrorBody::response(status, message)
   }
 }
 
@@ -571,11 +616,7 @@ async fn create_session(
     .map(|axum::Extension(s)| s)
     .unwrap_or_else(RequestScope::unscoped);
   match service.create_session(req, scope).await {
-    Ok(id) => (
-      StatusCode::CREATED,
-      Json(serde_json::json!({ "session_id": id })),
-    )
-      .into_response(),
+    Ok(id) => (StatusCode::CREATED, Json(SessionCreated { session_id: id })).into_response(),
     Err(e) => e.into_response(),
   }
 }

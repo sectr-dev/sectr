@@ -9,6 +9,11 @@
 //!
 //! Needs the generated projects' Python env (`just conformance` syncs it).
 
+#![allow(
+  clippy::disallowed_macros,
+  reason = "test tooling: mock providers and scenarios build JSON with `json!`"
+)]
+
 use std::path::Path;
 use std::process::Stdio;
 

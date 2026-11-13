@@ -9,6 +9,11 @@
 //! target exists so cargo does. (No exec smoke here: the server has no
 //! fast flags — it runs until SIGTERM — so existence is the assertion.)
 
+#![allow(
+  clippy::disallowed_macros,
+  reason = "tests build JSON fixtures with `json!`"
+)]
+
 #[test]
 fn server_binary_built() {
   let bin = env!("CARGO_BIN_EXE_sectr-server");
