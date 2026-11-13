@@ -11,6 +11,7 @@ import {
 import { isWakeFailure, wakeHint } from "@/lib/connections";
 import { EVENT_META, formatTimeMs, shortId, deltaText } from "@/lib/events";
 import type { EventMeta } from "@/lib/events";
+import { toolCallStatuses, type ToolCallStatus } from "@/lib/tool-calls";
 import type { JournalEvent } from "@/lib/transport/types";
 import type { InvocationStartedPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -99,14 +100,9 @@ type ChatItem =
       event: JournalEvent;
       name: string;
       args?: unknown;
-      /** Set once its TOOL_RESULT is journaled (the result may be null). */
-      answered?: boolean;
       result?: unknown;
       toolCallId: string;
-      /** Unanswered when its turn ended: the turn was killed mid-call
-       *  (interrupted), or its approval was denied. The journal never
-       *  invents a result, so the view says why there's none. */
-      unanswered?: "interrupted" | "denied";
+      status: ToolCallStatus;
     }
   | {
       kind: "approval";
@@ -129,32 +125,14 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
     { text: string; lastEvent: JournalEvent }
   >();
   let turn = 0;
-  // The turn's tool calls still waiting for a result.
-  let openTools: Extract<ChatItem, { kind: "tool" }>[] = [];
-  // The turn ended (or a new one began): what's still open never got its
-  // result.
-  const closeTools = () => {
-    for (const tool of openTools) {
-      if (tool.answered) continue;
-      const denied = items.some(
-        (i) => i.kind === "approval" && i.toolCallId === tool.toolCallId && i.status === "denied",
-      );
-      tool.unanswered = denied ? "denied" : "interrupted";
-    }
-    openTools = [];
-  };
+  const toolStatus = toolCallStatuses(events);
 
   for (const e of events) {
     const p = e.payload as Record<string, unknown>;
-    // Errors end the turn, as does the sentinel.
-    if (e.type === "ERROR" || e.type === "SESSION_ERROR" || e.type === "NO_MORE_ACTIONS") {
-      closeTools();
-    }
     switch (e.type) {
       case "INVOCATION_STARTED": {
         const reason = p.reason as InvocationStartedPayload["reason"];
         if (reason.kind === "user_message") {
-          closeTools();
           turn += 1;
           items.push({
             kind: "divider",
@@ -207,25 +185,22 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
         textByMessage.delete(id);
         break;
       }
-      case "TOOL_CALL": {
-        const tool: Extract<ChatItem, { kind: "tool" }> = {
+      case "TOOL_CALL":
+        items.push({
           kind: "tool",
           key: `tc-${e.seq}`,
           event: e,
           name: String(p.name),
           args: p.arguments,
           toolCallId: String(p.tool_call_id),
-        };
-        items.push(tool);
-        openTools.push(tool);
+          status: toolStatus.get(e.seq) ?? "running",
+        });
         break;
-      }
       case "TOOL_RESULT": {
         const item = [...items]
           .reverse()
           .find((i) => i.kind === "tool" && i.toolCallId === String(p.tool_call_id));
         if (item && item.kind === "tool") {
-          item.answered = true;
           item.result = p.result;
         }
         break;
@@ -294,6 +269,21 @@ function buildChatItems(events: JournalEvent[]): ChatItem[] {
   }
   return items;
 }
+
+const TOOL_PILLS: Record<ToolCallStatus, { label: string; cls: string; title?: string }> = {
+  running: { label: "running", cls: "border-warning/30 bg-warning/10 text-warning" },
+  done: { label: "done", cls: "border-success/30 bg-success/10 text-success" },
+  interrupted: {
+    label: "interrupted",
+    cls: "border-danger/30 bg-danger/10 text-danger",
+    title: "The turn ended before this tool call returned, so no result was recorded.",
+  },
+  not_run: {
+    label: "not run",
+    cls: "border-border bg-muted text-muted-foreground",
+    title: "Its approval was denied or never decided, so it didn't run.",
+  },
+};
 
 function ChatNode({
   item,
@@ -367,13 +357,7 @@ function ChatNode({
         </div>
       );
     case "tool": {
-      const pill = item.answered
-        ? { label: "done", cls: "border-success/30 bg-success/10 text-success" }
-        : item.unanswered === "interrupted"
-          ? { label: "interrupted", cls: "border-danger/30 bg-danger/10 text-danger" }
-          : item.unanswered === "denied"
-            ? { label: "not run", cls: "border-border bg-muted text-muted-foreground" }
-            : { label: "running", cls: "border-warning/30 bg-warning/10 text-warning" };
+      const pill = TOOL_PILLS[item.status];
       return (
         <div className={cn("pl-8", anim)}>
           <button
@@ -396,17 +380,13 @@ function ChatNode({
               </span>
               <span
                 className={cn("rounded-full border px-1.5 py-px text-[10px]", pill.cls)}
-                title={
-                  item.unanswered === "interrupted"
-                    ? "The turn ended before this tool call returned, so no result was recorded."
-                    : undefined
-                }
+                title={pill.title}
               >
                 {pill.label}
               </span>
             </span>
           </button>
-          {item.answered && (
+          {item.status === "done" && (
             <div className="mt-1 pl-4 font-mono text-[11px] text-muted-foreground">
               <span className="text-faint-foreground">→ </span>
               {excerpt(stringify(item.result), 160)}
