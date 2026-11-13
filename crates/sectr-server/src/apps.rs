@@ -12,7 +12,7 @@
 //! Authz mirrors the session routes: org-scoped by the principal; foreign
 //! orgs get 404 (no existence leaks).
 
-use sectr_common::registry::DeploymentStatus;
+use sectr_common::registry::{Deployment, DeploymentStatus};
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::auth::PlatformPrincipal;
+use crate::deploy::DeploymentDto;
 use crate::state::AppState;
 
 pub fn apps_router() -> axum::Router<AppState> {
@@ -81,28 +82,28 @@ async fn compose_list(state: &AppState, org_id: Uuid, only: Option<Uuid>) -> Res
       Ok(d) => d,
       Err(e) => return internal_error(e),
     };
-    let active = deployments
+    // The active deployment is the one with status active
+    // (`Registry::active_deployment`: the newest, should there be two).
+    let active_id = deployments
       .iter()
-      .find(|d| d.status == DeploymentStatus::Active)
-      // Fall back to the newest row (an app mid-first-build has no
-      // active deployment yet — its routes render empty, honestly).
+      .filter(|d| d.status == DeploymentStatus::Active)
+      .max_by_key(|d| (d.created_at, d.version))
+      .map(|d| d.id);
+    // Routes come from it, or else from the newest row (an app
+    // mid-first-build has no active deployment yet: its routes render
+    // empty, honestly).
+    let serving = deployments
+      .iter()
+      .find(|d| Some(d.id) == active_id)
       .or_else(|| deployments.first());
 
-    let (routes, framework) = match active {
+    let (routes, framework) = match serving {
       Some(d) => routes_from_manifest(&d.manifest),
       None => (Vec::new(), None),
     };
 
-    let latest = deployments.first().map(|d| {
-      json!({
-          "id": d.id,
-          "app_id": d.app_id,
-          "version": d.version,
-          "status": serde_json::to_value(&d.status).unwrap_or(Value::Null),
-          "created_at": d.created_at,
-          "active": active.is_some_and(|a| a.id == d.id),
-      })
-    });
+    let dto = |d: &Deployment| DeploymentDto::new(d, Some(d.id) == active_id);
+    let latest = deployments.first().map(dto);
 
     let mut summary = json!({
         "id": app.id,
@@ -116,21 +117,7 @@ async fn compose_list(state: &AppState, org_id: Uuid, only: Option<Uuid>) -> Res
         "latest_deployment": latest,
     });
     if only.is_some() {
-      summary["deployments"] = Value::Array(
-        deployments
-          .iter()
-          .map(|d| {
-            json!({
-                "id": d.id,
-                "app_id": d.app_id,
-                "version": d.version,
-                "status": serde_json::to_value(&d.status).unwrap_or(Value::Null),
-                "created_at": d.created_at,
-                "active": active.is_some_and(|a| a.id == d.id),
-            })
-          })
-          .collect(),
-      );
+      summary["deployments"] = json!(deployments.iter().map(dto).collect::<Vec<_>>());
     }
     out.push(summary);
   }
@@ -198,7 +185,7 @@ mod tests {
   use crate::test_pg;
   use crate::{http, state::AppState};
 
-  async fn world() -> Option<(axum::Router, String, Uuid, Uuid)> {
+  async fn world() -> Option<(axum::Router, String, Uuid, Uuid, Arc<dyn Registry>)> {
     let store: PgStore = test_pg::fresh_store().await?;
     let registry: Arc<dyn Registry> = Arc::new(store.registry());
     let journal: Arc<dyn sectr_common::journal::Journal> = Arc::new(store.journal());
@@ -282,11 +269,11 @@ mod tests {
         Arc::new(sectr_common::drivers::InMemoryArtifactStore::default()),
         None,
         config,
-        registry,
+        registry.clone(),
       )),
       false,
     );
-    Some((http::router(state), platform, app.id, org.id))
+    Some((http::router(state), platform, app.id, org.id, registry))
   }
 
   fn test_config() -> ServerConfig {
@@ -362,7 +349,7 @@ mod tests {
 
   #[tokio::test]
   async fn apps_list_composes_manifest_routes_and_active_flag() {
-    let Some((app, key, app_id, _org)) = world().await else {
+    let Some((app, key, app_id, _org, _registry)) = world().await else {
       eprintln!("skipping: no test Postgres (initdb not on PATH)");
       return;
     };
@@ -388,7 +375,7 @@ mod tests {
 
   #[tokio::test]
   async fn app_detail_includes_deployment_history_and_404s_foreign() {
-    let Some((app, key, app_id, _org)) = world().await else {
+    let Some((app, key, app_id, _org, _registry)) = world().await else {
       eprintln!("skipping: no test Postgres (initdb not on PATH)");
       return;
     };
@@ -409,5 +396,112 @@ mod tests {
     // No token → 401 (auth middleware), not a data leak.
     let (status, _) = req(&app, "GET", "/apps", None).await;
     assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+  }
+
+  /// Where an app runs comes from its deployments' `endpoint_url`: both
+  /// routes give the same Deployment as the deploy routes.
+  #[tokio::test]
+  async fn app_routes_give_the_full_deployment() {
+    let Some((app, key, _app_id, org, registry)) = world().await else {
+      eprintln!("skipping: no test Postgres (initdb not on PATH)");
+      return;
+    };
+    let endpoint_app = registry
+      .create_app(NewApp {
+        org_id: org,
+        name: "byo".into(),
+        slug: "byo".into(),
+      })
+      .await
+      .unwrap();
+    let url = "https://byo-xyz.a.run.app/";
+    let d = registry
+      .create_deployment(NewDeployment {
+        endpoint_url: Some(url.into()),
+        app_id: endpoint_app.id,
+        version: 1,
+        manifest: serde_json::json!({"routes": [{"path": "/chat"}]}),
+      })
+      .await
+      .unwrap();
+    registry
+      .set_deployment_status(d.id, DeploymentStatus::Active)
+      .await
+      .unwrap();
+
+    let (_, detail) = req(
+      &app,
+      "GET",
+      &format!("/apps/{}", endpoint_app.id),
+      Some(&key),
+    )
+    .await;
+    assert_eq!(detail["latest_deployment"]["endpoint_url"], url);
+    assert_eq!(detail["latest_deployment"]["active"], true);
+    assert_eq!(detail["deployments"][0]["endpoint_url"], url);
+    // The same as the deploy routes' DTO.
+    let (_, history) = req(
+      &app,
+      "GET",
+      &format!("/apps/{}/deployments", endpoint_app.id),
+      Some(&key),
+    )
+    .await;
+    assert_eq!(detail["deployments"], history);
+
+    let (_, list) = req(&app, "GET", "/apps", Some(&key)).await;
+    let byo = list
+      .as_array()
+      .unwrap()
+      .iter()
+      .find(|a| a["id"] == endpoint_app.id.to_string())
+      .unwrap();
+    assert_eq!(byo["latest_deployment"]["endpoint_url"], url);
+    // A managed deployment has `endpoint_url: null`, not a missing field.
+    let managed = list
+      .as_array()
+      .unwrap()
+      .iter()
+      .find(|a| a["id"] != endpoint_app.id.to_string())
+      .unwrap();
+    assert!(managed["latest_deployment"]["endpoint_url"].is_null());
+    assert!(
+      managed["latest_deployment"]
+        .as_object()
+        .unwrap()
+        .contains_key("endpoint_url")
+    );
+  }
+
+  /// An app whose only deployment is still building has no active one.
+  #[tokio::test]
+  async fn a_building_first_deployment_is_not_active() {
+    let Some((app, key, _app_id, org, registry)) = world().await else {
+      eprintln!("skipping: no test Postgres (initdb not on PATH)");
+      return;
+    };
+    let new_app = registry
+      .create_app(NewApp {
+        org_id: org,
+        name: "new".into(),
+        slug: "new".into(),
+      })
+      .await
+      .unwrap();
+    registry
+      .create_deployment(NewDeployment {
+        endpoint_url: None,
+        app_id: new_app.id,
+        version: 1,
+        manifest: serde_json::json!({"routes": [{"path": "/assist"}]}),
+      })
+      .await
+      .unwrap();
+    let (_, detail) = req(&app, "GET", &format!("/apps/{}", new_app.id), Some(&key)).await;
+    assert_eq!(detail["latest_deployment"]["status"], "building");
+    assert_eq!(detail["latest_deployment"]["active"], false);
+    assert_eq!(detail["deployments"][0]["active"], false);
+    // Its routes still show, from the newest deployment.
+    assert_eq!(detail["routes"][0]["path"], "/assist");
   }
 }
