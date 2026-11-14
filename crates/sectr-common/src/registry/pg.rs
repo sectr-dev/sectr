@@ -483,16 +483,30 @@ impl Registry for PgRegistry {
   }
 
   async fn delete_unstarted_session(&self, id: Uuid) -> Result<bool> {
-    // One statement, so the check and the delete can't be split by a
-    // turn starting in between.
+    // Lock the row first, then delete in a second statement. A lease claim
+    // in flight holds a key-share lock on the session row until it
+    // commits. A lone DELETE would wait for that lock, then check its NOT
+    // EXISTS against the snapshot it started with, which can't see the
+    // new lease, and the cascade would remove it. Under READ COMMITTED
+    // the DELETE after the lock takes a fresh snapshot that does see it.
+    let mut tx = self.pool.begin().await?;
+    let locked: Option<Uuid> =
+      sqlx::query_scalar("SELECT id FROM sessions WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if locked.is_none() {
+      return Ok(false);
+    }
     let result = sqlx::query(
       "DELETE FROM sessions WHERE id = $1 \
              AND NOT EXISTS (SELECT 1 FROM events WHERE events.session_id = sessions.id AND events.seq > 0) \
              AND NOT EXISTS (SELECT 1 FROM leases WHERE leases.session_id = sessions.id)",
     )
     .bind(id)
-    .execute(&self.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(result.rows_affected() > 0)
   }
 
@@ -2226,6 +2240,66 @@ mod tests {
       org.id,
     )
     .await;
+  }
+
+  /// A lease claim that commits while the delete waits on it keeps the
+  /// session (and the lease): the delete must not judge "never held a
+  /// lease" from a snapshot taken before the claim committed.
+  #[tokio::test]
+  async fn delete_unstarted_session_keeps_a_session_whose_claim_commits_meanwhile() {
+    let Some(store) = fresh_store().await else {
+      eprintln!("skipping: no test Postgres (initdb not on PATH)");
+      return;
+    };
+    let registry = store.registry();
+    let org = registry.create_org("test-org", "test-org").await.unwrap();
+    let (app, deployment) =
+      crate::registry::cap_suite::app_with_deployment(&registry, org.id, "race").await;
+    let session = crate::registry::cap_suite::session_of(&registry, &app, &deployment).await;
+
+    // The claim: its lease inserted, not yet committed.
+    let mut claim = registry.pool.begin().await.unwrap();
+    let lease_id = Uuid::now_v7();
+    sqlx::query(
+      "INSERT INTO leases (id, session_id, runner_id, expires_at) \
+             VALUES ($1, $2, 'test', now() + interval '30 seconds')",
+    )
+    .bind(lease_id)
+    .bind(session.id)
+    .execute(&mut *claim)
+    .await
+    .unwrap();
+
+    let deleting = tokio::spawn({
+      let registry = registry.clone();
+      async move { registry.delete_unstarted_session(session.id).await }
+    });
+    // Commit the claim only once the delete is waiting on its lock.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+      let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE NOT granted")
+        .fetch_one(&registry.pool)
+        .await
+        .unwrap();
+      if waiting > 0 {
+        break;
+      }
+      assert!(
+        tokio::time::Instant::now() < deadline,
+        "the delete never waited on the claim's lock"
+      );
+      tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    claim.commit().await.unwrap();
+
+    assert!(!deleting.await.unwrap().unwrap());
+    registry.get_session(session.id).await.unwrap();
+    let kept: Option<Uuid> = sqlx::query_scalar("SELECT id FROM leases WHERE id = $1")
+      .bind(lease_id)
+      .fetch_optional(&registry.pool)
+      .await
+      .unwrap();
+    assert_eq!(kept, Some(lease_id));
   }
 
   #[tokio::test]

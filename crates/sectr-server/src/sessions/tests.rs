@@ -1544,6 +1544,92 @@ async fn concurrent_creates_past_the_cap_leave_no_empty_session() {
   );
 }
 
+/// The journal over the real one, except that appending `SESSION_CREATED`
+/// fails, as a database error would.
+struct NoSessionCreated(Arc<dyn Journal>);
+
+#[async_trait::async_trait]
+impl sectr_common::journal::EventSink for NoSessionCreated {
+  async fn append(
+    &self,
+    session: Uuid,
+    deployment_id: Uuid,
+    events: Vec<sectr_common::events::NewEvent>,
+  ) -> sectr_common::journal::Result<Vec<sectr_common::events::Event>> {
+    if events
+      .iter()
+      .any(|e| matches!(e.payload, EventPayload::SessionCreated(_)))
+    {
+      return Err(sectr_common::journal::JournalError::Conflict(
+        "injected append failure".into(),
+      ));
+    }
+    self.0.append(session, deployment_id, events).await
+  }
+}
+
+#[async_trait::async_trait]
+impl sectr_common::journal::JournalReader for NoSessionCreated {
+  async fn fetch(
+    &self,
+    session: Uuid,
+    after_seq: Option<i64>,
+  ) -> sectr_common::journal::Result<Vec<sectr_common::events::Event>> {
+    self.0.fetch(session, after_seq).await
+  }
+  async fn subscribe(
+    &self,
+    session: Uuid,
+    after_seq: Option<i64>,
+  ) -> sectr_common::journal::Result<sectr_common::journal::EventStream> {
+    self.0.subscribe(session, after_seq).await
+  }
+  async fn deployment_turn_starts(
+    &self,
+    deployment: Uuid,
+    limit: i64,
+  ) -> sectr_common::journal::Result<Vec<sectr_common::journal::TurnRow>> {
+    self.0.deployment_turn_starts(deployment, limit).await
+  }
+}
+
+/// A session whose `SESSION_CREATED` fails to append is removed with the
+/// error, not left as a row with no events.
+#[tokio::test]
+async fn a_failed_session_created_append_leaves_no_session() {
+  let Some(w) = world().await else {
+    eprintln!("skipping: no test Postgres (initdb not on PATH)");
+    return;
+  };
+  let registry = w.state.registry().clone();
+  let service = crate::sessions::ProdSessionService::new(
+    registry.clone(),
+    Arc::new(NoSessionCreated(w.journal.clone())),
+    w.dispatcher.clone(),
+    chrono::Duration::seconds(30),
+  );
+  let org = registry.find_org_by_slug("default").await.unwrap().unwrap();
+  let scope = sectr_common::api::RequestScope {
+    org_id: Some(org.id),
+    app_id: None,
+    origin: sectr_common::api::Origin::Playground,
+    external_user_id: None,
+    user_token: None,
+  };
+  let result = sectr_common::api::SessionService::create_session(
+    &service,
+    sectr_common::api::NewSessionRequest {
+      app: "app-a".into(),
+      route: "/test".into(),
+      input: "hi".to_string().try_into().unwrap(),
+    },
+    scope,
+  )
+  .await;
+  assert!(result.is_err());
+  assert_eq!(session_count(&w, w.app_a).await, 0);
+}
+
 /// An app whose active deployment runs on a compute endpoint gets the
 /// endpoint per-app cap, for new sessions and for turns on them, and the
 /// platform-wide cap (the sandboxes') doesn't count its turns.

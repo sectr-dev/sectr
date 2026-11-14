@@ -338,8 +338,10 @@ impl ProdSessionService {
       .await
       .map_err(internal)?;
 
-    // SESSION_CREATED is the journal's seq 0 for the session.
-    self
+    // SESSION_CREATED is the journal's seq 0 for the session. Without it
+    // the row is unusable (AG-UI's lost-race fallback would even start a
+    // turn on it), so a failed append takes the row with it.
+    if let Err(e) = self
       .journal
       .append_platform_event(
         session.id,
@@ -352,7 +354,10 @@ impl ProdSessionService {
         }),
       )
       .await
-      .map_err(internal)?;
+    {
+      self.discard_unstarted(session.id).await;
+      return Err(internal(e));
+    }
     Ok(session)
   }
 
@@ -399,7 +404,8 @@ impl ProdSessionService {
   }
 
   /// A new session's first turn didn't start (refused at a cap, most
-  /// often): remove it, so the error leaves nothing behind. The registry
+  /// often), or its `SESSION_CREATED` didn't append: remove it, so the
+  /// error leaves nothing behind. The registry
   /// only removes a session with nothing past `SESSION_CREATED` and no
   /// lease, so a turn that did start keeps its session.
   async fn discard_unstarted(&self, session: SessionId) {
