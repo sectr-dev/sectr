@@ -298,3 +298,94 @@ pub(crate) async fn kinds_are_counted_apart(registry: &dyn Registry, org: OrgId)
   );
   assert_eq!(registry.count_live_turns(a.id, true).await.unwrap(), (2, 2));
 }
+
+/// `delete_unstarted_session` removes a session that holds only its
+/// `SESSION_CREATED` and never held a lease, and nothing else: not one
+/// whose turn claimed a lease (even a released one), and not one with
+/// later events.
+pub(crate) async fn delete_unstarted_session_only_removes_unstarted(
+  registry: &dyn Registry,
+  journal: &dyn crate::journal::Journal,
+  org: OrgId,
+) {
+  use crate::events::{EventPayload, InvocationReason, InvocationStarted, SessionCreated};
+
+  let (app, deployment) = app_with_deployment(registry, org, "unstarted").await;
+  let created = |s: &Session| {
+    EventPayload::SessionCreated(SessionCreated {
+      app_id: app.id,
+      route: "/test".into(),
+      external_user_id: s.external_user_id.clone(),
+      extra: Default::default(),
+    })
+  };
+
+  // Only SESSION_CREATED: removed, events and all.
+  let unstarted = session_of(registry, &app, &deployment).await;
+  journal
+    .append_platform_event(unstarted.id, deployment.id, created(&unstarted))
+    .await
+    .unwrap();
+  assert!(
+    registry
+      .delete_unstarted_session(unstarted.id)
+      .await
+      .unwrap()
+  );
+  assert!(matches!(
+    registry.get_session(unstarted.id).await.unwrap_err(),
+    RegistryError::NotFound(_)
+  ));
+  assert!(journal.fetch(unstarted.id, None).await.unwrap().is_empty());
+  // Gone already: nothing to remove.
+  assert!(
+    !registry
+      .delete_unstarted_session(unstarted.id)
+      .await
+      .unwrap()
+  );
+
+  // Claimed a lease, since released: kept.
+  let leased = session_of(registry, &app, &deployment).await;
+  journal
+    .append_platform_event(leased.id, deployment.id, created(&leased))
+    .await
+    .unwrap();
+  let lease = claim(
+    registry,
+    &leased,
+    &caps(&app, None, None),
+    chrono::Duration::seconds(TTL),
+  )
+  .await
+  .unwrap();
+  registry.release_lease(lease.id).await.unwrap();
+  assert!(!registry.delete_unstarted_session(leased.id).await.unwrap());
+  registry.get_session(leased.id).await.unwrap();
+
+  // Has an event after seq 0: kept.
+  let started = session_of(registry, &app, &deployment).await;
+  journal
+    .append_platform_event(started.id, deployment.id, created(&started))
+    .await
+    .unwrap();
+  journal
+    .append_platform_event(
+      started.id,
+      deployment.id,
+      EventPayload::InvocationStarted(InvocationStarted {
+        invocation_id: Uuid::now_v7(),
+        route: "/test".into(),
+        deployment_id: deployment.id,
+        reason: InvocationReason::UserMessage {
+          input: "hi".to_string().try_into().unwrap(),
+          extra: Default::default(),
+        },
+        extra: Default::default(),
+      }),
+    )
+    .await
+    .unwrap();
+  assert!(!registry.delete_unstarted_session(started.id).await.unwrap());
+  assert_eq!(journal.fetch(started.id, None).await.unwrap().len(), 2);
+}

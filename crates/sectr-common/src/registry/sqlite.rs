@@ -411,6 +411,20 @@ impl Registry for SqliteRegistry {
     })
   }
 
+  async fn delete_unstarted_session(&self, id: Uuid) -> Result<bool> {
+    // One statement, so the check and the delete can't be split by a
+    // turn starting in between.
+    let result = sqlx::query(
+      "DELETE FROM sessions WHERE id = ? \
+             AND NOT EXISTS (SELECT 1 FROM events WHERE events.session_id = sessions.id AND events.seq > 0) \
+             AND NOT EXISTS (SELECT 1 FROM leases WHERE leases.session_id = sessions.id)",
+    )
+    .bind(id)
+    .execute(&self.pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+  }
+
   async fn get_session(&self, id: Uuid) -> Result<Session> {
     sqlx::query_as::<_, SessionRow>(
       "SELECT id, app_id, deployment_id, route, origin, status, created_at, updated_at, ended_at, external_user_id \
@@ -1133,6 +1147,16 @@ mod tests {
     crate::registry::cap_suite::concurrent_claims_respect_cap(
       std::sync::Arc::new(registry),
       org.id,
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn delete_unstarted_session_only_removes_unstarted() {
+    let (registry, org, ..) = registry().await;
+    let journal = crate::journal::SqliteJournal::new(registry.pool.clone());
+    crate::registry::cap_suite::delete_unstarted_session_only_removes_unstarted(
+      &registry, &journal, org.id,
     )
     .await;
   }
