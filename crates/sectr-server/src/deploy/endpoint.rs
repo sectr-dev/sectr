@@ -30,10 +30,12 @@ use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use reqwest::Url;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::Serialize;
 
-use sectr_common::endpoint::{DIAL_FAILED, DISABLED, IMPORT_FAILED, WRONG_INGEST};
+use sectr_common::endpoint::{
+  DIAL_FAILED, DISABLED, EndpointDeploymentsConfig, IMPORT_FAILED, ManifestAnswer,
+  RegisterEndpoint, WRONG_INGEST,
+};
 use sectr_common::registry::{Deployment, NewDeployment};
 
 use super::{DeployManifest, compose_manifest, deployment_dto, parse_sectr_toml, prepare_deploy};
@@ -48,13 +50,6 @@ pub(super) const REGISTER_BODY_LIMIT: usize = 16 * 1024 * 1024;
 /// its dial and nothing more.
 const REGISTRATION_TOKEN_TTL: Duration = Duration::from_secs(120);
 
-#[derive(Deserialize)]
-pub(super) struct RegisterBody {
-  /// `sectr.toml`, as text.
-  manifest: String,
-  endpoint_url: String,
-}
-
 fn unprocessable(message: impl Into<String>) -> Response {
   (StatusCode::UNPROCESSABLE_ENTITY, message.into()).into_response()
 }
@@ -63,15 +58,15 @@ fn unprocessable(message: impl Into<String>) -> Response {
 pub(super) async fn endpoint_config(
   State(state): State<AppState>,
   _principal: PlatformPrincipal,
-) -> Json<Value> {
+) -> Json<EndpointDeploymentsConfig> {
   let ingest_url = state.endpoints().ingest_url();
   // Always set: the configured base image, or this version's published one.
   let base_image = state.config().runner_base_image.clone().unwrap_or_default();
-  Json(json!({
-    "enabled": ingest_url.is_some(),
-    "ingest_url": ingest_url,
-    "base_image": base_image,
-  }))
+  Json(EndpointDeploymentsConfig {
+    enabled: ingest_url.is_some(),
+    ingest_url: ingest_url.map(str::to_owned),
+    base_image: Some(base_image),
+  })
 }
 
 /// The registration warning when the endpoint's sidecar isn't this
@@ -98,7 +93,7 @@ fn version_warning(theirs: &str, ours: &str, base_image: Option<&str>) -> Option
 pub(super) async fn register_endpoint(
   State(state): State<AppState>,
   principal: PlatformPrincipal,
-  body: Result<Json<RegisterBody>, JsonRejection>,
+  body: Result<Json<RegisterEndpoint>, JsonRejection>,
 ) -> Response {
   let org_id = principal.0.org_id();
   let Json(body) = match body {
@@ -149,7 +144,7 @@ pub(super) async fn register_endpoint(
       app_id: app.id,
       version,
       // Placeholder until the endpoint's manifest lands.
-      manifest: json!({"routes": []}),
+      manifest: super::placeholder_manifest(),
       endpoint_url: Some(url.as_str().to_owned()),
     })
     .await
@@ -168,11 +163,24 @@ pub(super) async fn register_endpoint(
     Ok(dto) => dto,
     Err(e) => return unprocessable(e),
   };
-  let mut body = serde_json::to_value(dto).expect("the DTO serializes");
-  if !warnings.is_empty() {
-    body["warnings"] = json!(warnings);
-  }
-  (StatusCode::ACCEPTED, Json(body)).into_response()
+  (
+    StatusCode::ACCEPTED,
+    Json(Registered {
+      deployment: dto,
+      warnings,
+    }),
+  )
+    .into_response()
+}
+
+/// `POST /endpoint-deployments`'s 202: the deployment, plus any warnings
+/// about the endpoint.
+#[derive(Serialize)]
+struct Registered {
+  #[serde(flatten)]
+  deployment: super::DeploymentDto,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  warnings: Vec<String>,
 }
 
 /// The background half: resolve the `building` row to `active` or
@@ -191,8 +199,7 @@ async fn run_registration(
       outcome = tracing::field::Empty,
   );
   let result = register_and_activate(&state, &deployment, &parsed, &url).await;
-  let outcome =
-    super::record_deploy_outcome(&state, &deployment, result, json!({"kind": "endpoint"})).await;
+  let outcome = super::record_deploy_outcome(&state, &deployment, result, Some("endpoint")).await;
   span.record("outcome", outcome);
 }
 
@@ -206,9 +213,8 @@ async fn register_and_activate(
   let ingest_url = endpoints.ingest_url().unwrap_or_default().to_owned();
   let (token, dialed) = state.hub().register_probe(REGISTRATION_TOKEN_TTL).await;
   let answer = endpoints.fetch_manifest(url, &token, &parsed.entry).await?;
-  let field = |name: &str| answer.get(name).and_then(Value::as_str).unwrap_or_default();
-  let (imported, uses_uv) = match field("outcome") {
-    "manifest" => {
+  let (imported, uses_uv) = match answer {
+    ManifestAnswer::Manifest { manifest, uses_uv } => {
       // The endpoint's word isn't enough: this server's own ingest must
       // have seen the dial.
       if !*dialed.borrow() {
@@ -218,46 +224,36 @@ async fn register_and_activate(
             .into(),
         );
       }
-      let imported = answer
-        .get("manifest")
-        .filter(|m| m.is_object())
-        .ok_or("your compute endpoint's manifest answer has no manifest object")?;
-      if imported.get("routes").is_some_and(|r| !r.is_array()) {
+      if !manifest.is_object() {
+        return Err("your compute endpoint's manifest answer has no manifest object".into());
+      }
+      if manifest.get("routes").is_some_and(|r| !r.is_array()) {
         return Err("your compute endpoint's manifest has a `routes` that isn't a list".into());
       }
-      let uses_uv = answer
-        .get("uses_uv")
-        .and_then(Value::as_bool)
-        .ok_or("your compute endpoint's manifest answer has no uses_uv")?;
-      (imported.clone(), uses_uv)
+      (manifest, uses_uv)
     }
-    "token_rejected" => {
+    ManifestAnswer::TokenRejected => {
       return Err(format!(
         "your compute endpoint's sidecar {WRONG_INGEST} registration. Check that \
          its SECTR_INGEST_URL is {ingest_url}."
       ));
     }
-    "dial_failed" => {
+    ManifestAnswer::DialFailed { message } => {
       return Err(format!(
-        "your compute endpoint's sidecar {DIAL_FAILED} {ingest_url}: {}. Check that your platform allows \
-         outbound connections.",
-        field("message")
+        "your compute endpoint's sidecar {DIAL_FAILED} {ingest_url}: {message}. Check that your platform \
+         allows outbound connections."
       ));
     }
-    "import_failed" => {
-      let exit = match answer.get("exit_code").and_then(Value::as_i64) {
+    ManifestAnswer::ImportFailed {
+      exit_code,
+      stderr_tail,
+      message,
+    } => {
+      let exit = match exit_code {
         Some(code) => format!("exit {code}"),
-        None => field("message").to_owned(),
+        None => message.unwrap_or_default(),
       };
-      return Err(format!(
-        "{IMPORT_FAILED} ({exit}): {}",
-        field("stderr_tail")
-      ));
-    }
-    other => {
-      return Err(format!(
-        "your compute endpoint answered the manifest request with an unknown outcome {other:?}"
-      ));
+      return Err(format!("{IMPORT_FAILED} ({exit}): {stderr_tail}"));
     }
   };
 

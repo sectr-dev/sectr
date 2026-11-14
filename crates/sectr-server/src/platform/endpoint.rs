@@ -49,13 +49,13 @@ use std::time::Duration;
 
 use opentelemetry::KeyValue;
 use reqwest::Url;
-use serde_json::{Value, json};
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use sectr_common::endpoint::{
-  ANSWERED_HTTP, COULD_NOT_CONNECT, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, Platform as Host,
-  WAKE_TIMEOUT, WRONG_INGEST, platform_of,
+  ANSWERED_HTTP, COULD_NOT_CONNECT, Identity, ManifestAnswer, ManifestRequest, NO_ANSWER_IN_TIME,
+  PRIVATE_ADDRESS, Platform as Host, SERVE_MODE, WAKE_TIMEOUT, WRONG_INGEST, WakeAnswer,
+  WakeRequest, platform_of,
 };
 
 use crate::config::EndpointConfig;
@@ -173,18 +173,13 @@ impl EndpointPlatform {
       .map_err(|e| request_failure(url, &e))?;
     let status = response.status();
     let body = read_capped(response, BODY_CAP).await.unwrap_or_default();
-    let identity = serde_json::from_slice::<Value>(&body).ok();
-    let sidecar = identity
-      .as_ref()
-      .and_then(|v| v.get("sectr_sidecar"))
-      .filter(|s| s.get("mode").and_then(Value::as_str) == Some("serve"));
+    let sidecar = serde_json::from_slice::<Identity>(&body)
+      .ok()
+      .map(|identity| identity.sectr_sidecar)
+      .filter(|sidecar| sidecar.mode == SERVE_MODE);
     match (status.as_u16(), sidecar) {
       (200, Some(sidecar)) => Ok(ProbeResult {
-        version: sidecar
-          .get("version")
-          .and_then(Value::as_str)
-          .unwrap_or_default()
-          .to_owned(),
+        version: sidecar.version,
       }),
       (200, None) => Err(format!(
         "your compute endpoint at {url} answered, but not as a Sectr sidecar in serve mode. Check that \
@@ -204,16 +199,24 @@ impl EndpointPlatform {
   }
 
   /// `POST <endpoint>/manifest` with a registration token and the app's
-  /// entry point. Returns the sidecar's JSON answer (an `outcome` object,
-  /// see `schema/serve.schema.json`), or why there was none.
-  pub async fn fetch_manifest(&self, url: &Url, token: &str, entry: &str) -> Result<Value, String> {
+  /// entry point. Returns the sidecar's answer (see
+  /// `schema/serve.schema.json`), or why there was none.
+  pub async fn fetch_manifest(
+    &self,
+    url: &Url,
+    token: &str,
+    entry: &str,
+  ) -> Result<ManifestAnswer, String> {
     guard::check_url(url, self.config.allow_private)?;
     let target = join(url, "manifest");
     let response = self
       .client
       .post(target.clone())
       .timeout(MANIFEST_TIMEOUT)
-      .json(&json!({"registration_token": token, "entry": entry}))
+      .json(&ManifestRequest {
+        registration_token: token.to_owned(),
+        entry: entry.to_owned(),
+      })
       .send()
       .await
       .map_err(|e| {
@@ -236,15 +239,12 @@ impl EndpointPlatform {
         quote(&body)
       ));
     }
-    serde_json::from_slice::<Value>(&body)
-      .ok()
-      .filter(|v| v.get("outcome").and_then(Value::as_str).is_some())
-      .ok_or_else(|| {
-        format!(
-          "your compute endpoint's manifest answer isn't one: {}",
-          quote(&body)
-        )
-      })
+    serde_json::from_slice::<ManifestAnswer>(&body).map_err(|e| {
+      format!(
+        "your compute endpoint's manifest answer isn't one ({e}): {}",
+        quote(&body)
+      )
+    })
   }
 
   /// Wake the endpoint for one turn and wait until it's delivered. See
@@ -390,6 +390,9 @@ async fn wake_task(task: WakeTask) {
   } = task;
   let host = url.host_str().unwrap_or_default().to_owned();
   let target = join(&url, "wake");
+  let body = WakeRequest {
+    ingest_token: token,
+  };
   let mut backoff = Duration::from_millis(250);
   let fail = |failure: WakeFailure| {
     let _ = failed.send(failure);
@@ -405,7 +408,7 @@ async fn wake_task(task: WakeTask) {
     let sent = client
       .post(target.clone())
       .timeout(turn_timeout)
-      .json(&json!({"ingest_token": token}))
+      .json(&body)
       .send()
       .await;
     let was_delivered = *delivered.borrow();
@@ -452,14 +455,12 @@ async fn wake_task(task: WakeTask) {
         let status = response.status().as_u16();
         let body = read_capped(response, BODY_CAP).await.unwrap_or_default();
         if status == 200 {
-          let outcome = serde_json::from_slice::<Value>(&body)
-            .ok()
-            .and_then(|v| v.get("outcome").and_then(Value::as_str).map(str::to_owned));
+          let answer = serde_json::from_slice::<WakeAnswer>(&body).ok();
           if !*delivered.borrow() {
-            break match outcome.as_deref() {
+            break match answer {
               // Before delivery, a rejected token can only mean the image
               // dials some other server.
-              Some("token_rejected") => WakeFailure {
+              Some(WakeAnswer::TokenRejected) => WakeFailure {
                 outcome: "token_rejected",
                 message: format!(
                   "{WAKE_FAILED} your compute endpoint's sidecar {WRONG_INGEST} \
@@ -477,13 +478,13 @@ async fn wake_task(task: WakeTask) {
               },
             };
           }
-          record(match outcome.as_deref() {
-            Some("token_rejected") => "token_rejected",
+          record(match answer {
+            Some(WakeAnswer::TokenRejected) => "token_rejected",
             Some(_) => "turn_ended",
             None => "http_error",
           });
           tracing::info!(
-            outcome = outcome.as_deref().unwrap_or("unknown"),
+            outcome = answer.as_ref().map_or("unknown", WakeAnswer::outcome),
             "endpoint wake finished"
           );
           break_done(&inflight, &handle);

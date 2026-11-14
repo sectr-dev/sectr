@@ -57,6 +57,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -197,25 +198,51 @@ fn split_sidecar_cmd(cmd: &[String]) -> Option<(String, Vec<String>)> {
 
 /// `POST /v3/templates` — create-or-reuse the template (same-name call is
 /// the live-verify item; see [`E2bPlatform::ensure_template`]).
-fn create_template_body(name: &str, cpu_count: i32, memory_mb: i32) -> Value {
-  serde_json::json!({
-      "name": name,
-      "cpuCount": cpu_count,
-      "memoryMB": memory_mb,
-  })
+fn create_template_body(name: &str, cpu_count: i32, memory_mb: i32) -> CreateTemplate<'_> {
+  CreateTemplate {
+    name,
+    cpu_count,
+    memory_mb,
+  }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateTemplate<'a> {
+  name: &'a str,
+  cpu_count: i32,
+  #[serde(rename = "memoryMB")]
+  memory_mb: i32,
 }
 
 /// `POST /v2/templates/{tid}/builds/{bid}` — start the build from the AR
 /// image. NO `steps`, NO `startCmd`/`readyCmd` (deviation 1: the snapshot
 /// must not capture a sidecar with build-time env).
-fn start_build_body(from_image: &str, service_account_json: &str) -> Value {
-  serde_json::json!({
-      "fromImage": from_image,
-      "fromImageRegistry": {
-          "type": "gcp",
-          "serviceAccountJson": service_account_json,
-      },
-  })
+fn start_build_body<'a>(from_image: &'a str, service_account_json: &'a str) -> StartBuild<'a> {
+  StartBuild {
+    from_image,
+    from_image_registry: ImageRegistry::Gcp {
+      service_account_json,
+    },
+  }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartBuild<'a> {
+  from_image: &'a str,
+  from_image_registry: ImageRegistry<'a>,
+}
+
+/// Where E2B pulls the image from, and its credentials.
+#[derive(Serialize)]
+#[serde(
+  tag = "type",
+  rename_all = "lowercase",
+  rename_all_fields = "camelCase"
+)]
+enum ImageRegistry<'a> {
+  Gcp { service_account_json: &'a str },
 }
 
 /// `POST /sandboxes` — one sandbox per turn. `timeout` is SECONDS (the API
@@ -223,36 +250,59 @@ fn start_build_body(from_image: &str, service_account_json: &str) -> Value {
 /// per-sandbox access token. Env is NOT passed here (deviation 1: global
 /// envs reach envd-run commands only — the sidecar's env rides the Start
 /// call).
-fn create_sandbox_body(
-  template_name: &str,
+fn create_sandbox_body<'a>(
+  template_name: &'a str,
   timeout_secs: i64,
-  metadata: &BTreeMap<String, String>,
-) -> Value {
-  serde_json::json!({
-      "templateID": template_name,
-      "timeout": timeout_secs,
-      "secure": true,
-      "metadata": metadata,
-  })
+  metadata: &'a BTreeMap<String, String>,
+) -> CreateSandbox<'a> {
+  CreateSandbox {
+    template_id: template_name,
+    timeout: timeout_secs,
+    secure: true,
+    metadata,
+  }
+}
+
+#[derive(Serialize)]
+struct CreateSandbox<'a> {
+  #[serde(rename = "templateID")]
+  template_id: &'a str,
+  timeout: i64,
+  secure: bool,
+  metadata: &'a BTreeMap<String, String>,
 }
 
 /// The envd `process.Process/Start` request (Connect JSON). `stdin: false`
 /// — nothing writes to the sidecar's stdin.
-fn start_process_body(
-  cmd: &str,
-  args: &[String],
-  envs: &BTreeMap<String, String>,
-  cwd: &str,
-) -> Value {
-  serde_json::json!({
-      "process": {
-          "cmd": cmd,
-          "args": args,
-          "envs": envs,
-          "cwd": cwd,
-      },
-      "stdin": false,
-  })
+fn start_process_body<'a>(
+  cmd: &'a str,
+  args: &'a [String],
+  envs: &'a BTreeMap<String, String>,
+  cwd: &'a str,
+) -> StartProcess<'a> {
+  StartProcess {
+    process: ProcessConfig {
+      cmd,
+      args,
+      envs,
+      cwd,
+    },
+    stdin: false,
+  }
+}
+
+#[derive(Serialize)]
+struct StartProcess<'a> {
+  process: ProcessConfig<'a>,
+  stdin: bool,
+}
+
+#[derive(Serialize)]
+struct ProcessConfig<'a> {
+  cmd: &'a str,
+  args: &'a [String],
+  envs: &'a BTreeMap<String, String>,
+  cwd: &'a str,
 }
 
 /// Connect stream-RPC end-of-stream flag (5th... rather, FIRST header
@@ -767,9 +817,8 @@ impl E2bClient {
       .header("Connect-Protocol-Version", "1")
       .header("Content-Type", "application/connect+json")
       .body(connect_request_frame(
-        start_process_body(cmd, args, envs, cwd)
-          .to_string()
-          .as_bytes(),
+        &serde_json::to_vec(&start_process_body(cmd, args, envs, cwd))
+          .expect("the start request serializes"),
       ));
     if let Some(token) = envd_access_token {
       req = req.header("X-Access-Token", token);
@@ -1321,7 +1370,7 @@ mod tests {
 
   #[test]
   fn create_template_body_carries_name_cpu_memory() {
-    let body = create_template_body("sectr-app-x", 2, 1024);
+    let body = serde_json::to_value(create_template_body("sectr-app-x", 2, 1024)).unwrap();
     assert_eq!(body["name"], "sectr-app-x");
     assert_eq!(body["cpuCount"], 2);
     assert_eq!(body["memoryMB"], 1024);
@@ -1329,10 +1378,11 @@ mod tests {
 
   #[test]
   fn start_build_body_is_fromimage_with_gcp_registry_and_no_steps() {
-    let body = start_build_body(
+    let body = serde_json::to_value(start_build_body(
       "us-east4-docker.pkg.dev/p/repo/sectr-app-x:v1",
       "{\"project_id\":\"p\"}",
-    );
+    ))
+    .unwrap();
     assert_eq!(
       body["fromImage"],
       "us-east4-docker.pkg.dev/p/repo/sectr-app-x:v1"
@@ -1357,7 +1407,7 @@ mod tests {
       Uuid::now_v7(),
       "ingest.sectr.dev",
     );
-    let body = create_sandbox_body("sectr-app-x", 3600, &md);
+    let body = serde_json::to_value(create_sandbox_body("sectr-app-x", 3600, &md)).unwrap();
     assert_eq!(body["templateID"], "sectr-app-x");
     assert_eq!(
       body["timeout"], 3600,
@@ -1379,12 +1429,14 @@ mod tests {
       ),
       ("SECTR_INGEST_TOKEN".to_owned(), "sit_tok".to_owned()),
     ]);
-    let body = start_process_body(
+    let args = ["--flag".to_owned()];
+    let body = serde_json::to_value(start_process_body(
       "/usr/local/bin/sectr-worker",
-      &["--flag".to_owned()],
+      &args,
       &envs,
       "/app",
-    );
+    ))
+    .unwrap();
     assert_eq!(body["process"]["cmd"], "/usr/local/bin/sectr-worker");
     assert_eq!(body["process"]["args"], serde_json::json!(["--flag"]));
     assert_eq!(

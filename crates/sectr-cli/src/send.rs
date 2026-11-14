@@ -90,7 +90,7 @@ pub async fn run_send(args: SendArgs) -> anyhow::Result<()> {
   let (sid, baseline) = match args.session {
     Some(sid) => {
       let baseline = client.session_event_count(sid).await?;
-      client.send_input(sid, serde_json::json!(message)).await?;
+      client.send_input(sid, &message).await?;
       (sid, baseline)
     }
     None if args.cloud => {
@@ -110,9 +110,7 @@ pub async fn run_send(args: SendArgs) -> anyhow::Result<()> {
             .clone()
         }
       };
-      let sid = client
-        .create_session(slug, &route, serde_json::json!(message))
-        .await?;
+      let sid = client.create_session(slug, &route, &message).await?;
       (sid, 0)
     }
     None => {
@@ -121,9 +119,7 @@ pub async fn run_send(args: SendArgs) -> anyhow::Result<()> {
         .routes
         .first()
         .context("the app has no routes — add one to the AgentApp")?;
-      let sid = client
-        .create_session(&status.app, route, serde_json::json!(message))
-        .await?;
+      let sid = client.create_session(&status.app, route, &message).await?;
       (sid, 0)
     }
   };

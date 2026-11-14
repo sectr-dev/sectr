@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use sectr_common::api::SecretValue;
 use sectr_common::sidecar::{APPROVAL_POLICY_ENV, APPROVAL_POLICY_ENV_IS_RESERVED};
 
 #[derive(Parser, Debug)]
@@ -83,7 +84,7 @@ async fn request(
   args: &SecretsArgs,
   method: reqwest::Method,
   path: &str,
-  json_body: Option<serde_json::Value>,
+  json_body: Option<&SecretValue>,
 ) -> anyhow::Result<reqwest::Response> {
   let target = crate::auth::resolve(args.api.as_deref(), args.key.as_deref())?;
   let key = target.key;
@@ -91,7 +92,7 @@ async fn request(
   let client = reqwest::Client::new();
   let mut builder = client.request(method, &url).bearer_auth(&key);
   if let Some(body) = json_body {
-    builder = builder.json(&body);
+    builder = builder.json(body);
   }
   Ok(builder.send().await?)
 }
@@ -137,7 +138,7 @@ pub async fn run_secrets(args: SecretsArgs) -> anyhow::Result<()> {
         &args,
         reqwest::Method::PUT,
         &format!("/secrets/{key}?app={slug}"),
-        Some(serde_json::json!({ "value": value })),
+        Some(&SecretValue { value }),
       )
       .await?;
       let status = response.status();

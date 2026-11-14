@@ -17,8 +17,9 @@ use std::time::Duration;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde_json::json;
+use serde::Serialize;
 
+use sectr_common::api::ErrorBody;
 use sectr_common::registry::PgRegistry;
 
 use crate::config::ServerConfig;
@@ -37,13 +38,10 @@ pub async fn ensure_signup_open(pg: &PgRegistry, cap: Option<u32>) -> Result<(),
     Ok(n) => n,
     Err(e) => {
       tracing::error!(error = %e, "signup cap: org count failed");
-      return Err(
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          Json(json!({ "error": "could not verify signup capacity — try again" })),
-        )
-          .into_response(),
-      );
+      return Err(ErrorBody::response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "could not verify signup capacity — try again",
+      ));
     }
   };
   if orgs >= u64::from(cap) {
@@ -51,7 +49,7 @@ pub async fn ensure_signup_open(pg: &PgRegistry, cap: Option<u32>) -> Result<(),
     return Err(
       (
         StatusCode::FORBIDDEN,
-        Json(json!({ "error": BETA_FULL_MESSAGE, "code": "beta_full" })),
+        Json(ErrorBody::with_code(BETA_FULL_MESSAGE, "beta_full")),
       )
         .into_response(),
     );
@@ -111,11 +109,11 @@ impl SignupNotifier {
           None
         }
       };
-      let payload = json!({
-          "content": signup_message(count, cap),
-          // Plain text: nothing in it may ping anyone.
-          "allowed_mentions": { "parse": [] },
-      });
+      let payload = DiscordMessage {
+        content: signup_message(count, cap),
+        // Plain text: nothing in it may ping anyone.
+        allowed_mentions: AllowedMentions { parse: Vec::new() },
+      };
       match tokio::time::timeout(NOTIFY_TIMEOUT, client.post(&url).json(&payload).send()).await {
         Ok(Ok(resp)) if resp.status().is_success() => {}
         Ok(Ok(resp)) => tracing::warn!(status = %resp.status(), "signup notice rejected"),
@@ -125,6 +123,19 @@ impl SignupNotifier {
       }
     });
   }
+}
+
+/// A Discord webhook message.
+#[derive(Serialize)]
+struct DiscordMessage {
+  content: String,
+  allowed_mentions: AllowedMentions,
+}
+
+/// Which mentions in `content` may ping: here, none.
+#[derive(Serialize)]
+struct AllowedMentions {
+  parse: Vec<String>,
 }
 
 /// `New signup: account #42 of 1000`.

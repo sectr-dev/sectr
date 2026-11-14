@@ -16,6 +16,14 @@
 //!   `schema/data-model.sql` (sessions, deployments, leases, …). Consumed by
 //!   the server-role layer only.
 
+#![cfg_attr(
+  test,
+  allow(
+    clippy::disallowed_macros,
+    reason = "tests build JSON fixtures with `json!`"
+  )
+)]
+
 pub mod agui;
 pub mod api;
 pub mod dockerfile;

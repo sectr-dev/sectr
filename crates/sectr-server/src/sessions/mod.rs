@@ -379,13 +379,13 @@ impl ProdSessionService {
         self.analytics.track(
           analytics::events::FIRST_SESSION,
           org_id,
-          serde_json::json!({
-              analytics::PROP_SESSION_ORIGIN:
-                  match scope.origin {
-                      sectr_common::api::Origin::Playground => "playground",
-                      sectr_common::api::Origin::Api => "api",
-                  }
-          }),
+          analytics::Props {
+            session_origin: Some(match scope.origin {
+              sectr_common::api::Origin::Playground => "playground",
+              sectr_common::api::Origin::Api => "api",
+            }),
+            ..analytics::Props::default()
+          },
         );
       }
     }
@@ -444,7 +444,7 @@ impl ProdSessionService {
           analytics.track(
             analytics::events::FIRST_APPROVAL_USED,
             org_id,
-            serde_json::json!({}),
+            analytics::Props::default(),
           );
         }
       });

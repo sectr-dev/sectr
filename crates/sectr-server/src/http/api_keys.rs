@@ -8,9 +8,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use uuid::Uuid;
 
+use sectr_common::api::{ErrorBody, Me, OrgRef};
 use sectr_common::registry::ApiKeyKind;
 
 use crate::auth::keys;
@@ -55,10 +55,13 @@ pub async fn me(
     Ok(org) => org,
     Err(e) => return internal_error(e),
   };
-  Json(json!({
-      "org": { "id": org.id, "name": org.name },
-      "dashboard_url": state.config().dashboard_url,
-  }))
+  Json(Me {
+    org: OrgRef {
+      id: org.id,
+      name: org.name,
+    },
+    dashboard_url: state.config().dashboard_url.clone(),
+  })
   .into_response()
 }
 
@@ -158,14 +161,10 @@ pub async fn revoke(
 }
 
 fn bad_request(message: &str) -> Response {
-  (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+  ErrorBody::response(StatusCode::BAD_REQUEST, message)
 }
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
   tracing::error!(error = %e, "control-plane request failed");
-  (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(json!({ "error": "internal error" })),
-  )
-    .into_response()
+  ErrorBody::response(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }

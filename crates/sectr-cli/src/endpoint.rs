@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use sectr_common::endpoint::{
-  ANSWERED_HTTP, COULD_NOT_CONNECT, DIAL_FAILED, DISABLED, IMPORT_FAILED, NO_ANSWER_IN_TIME,
-  PRIVATE_ADDRESS, Platform as Host, WRONG_INGEST, platform_of,
+  ANSWERED_HTTP, COULD_NOT_CONNECT, DIAL_FAILED, DISABLED, EndpointDeploymentsConfig,
+  IMPORT_FAILED, NO_ANSWER_IN_TIME, PRIVATE_ADDRESS, Platform as Host, WRONG_INGEST, platform_of,
 };
 
 /// The setup guide for each platform.
@@ -253,22 +253,16 @@ pub(crate) async fn fetch_pins_from(target: &crate::auth::Target) -> anyhow::Res
   if !status.is_success() {
     bail!("GET {url} returned {status}: {}", text.trim());
   }
-  let config: serde_json::Value =
-    serde_json::from_str(&text).with_context(|| format!("GET {url} didn't answer JSON"))?;
-  let field = |name: &str| {
-    config
-      .get(name)
-      .and_then(|v| v.as_str())
-      .filter(|v| !v.is_empty())
-      .map(str::to_owned)
-  };
-  if config.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
+  let config: EndpointDeploymentsConfig = serde_json::from_str(&text)
+    .with_context(|| format!("GET {url} didn't answer an endpoint config"))?;
+  if !config.enabled {
     bail!(
       "{} {DISABLED} (its admin turns them on with SECTR_ENDPOINT_INGEST_URL)",
       target.api
     );
   }
-  match (field("base_image"), field("ingest_url")) {
+  let set = |v: Option<String>| v.filter(|v| !v.is_empty());
+  match (set(config.base_image), set(config.ingest_url)) {
     (Some(base_image), Some(ingest_url)) => Ok(Pins {
       base_image,
       ingest_url,

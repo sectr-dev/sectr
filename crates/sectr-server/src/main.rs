@@ -5,6 +5,14 @@
 //! two bearer key classes, `/healthz`, key management, and the shared
 //! sessions-api (journal-backed SSE) served by `ProdSessionService`.
 
+#![cfg_attr(
+  test,
+  allow(
+    clippy::disallowed_macros,
+    reason = "tests build JSON fixtures with `json!`"
+  )
+)]
+
 use chrono::Duration;
 use std::sync::Arc;
 

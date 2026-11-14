@@ -59,7 +59,7 @@ pub fn approval_frame() -> String {
   frame_json(EventPayload::ToolApprovalRequired(ToolApprovalRequired {
     tool_call_id: "call_1".into(),
     name: "issue_refund".into(),
-    arguments: serde_json::json!({}),
+    arguments: serde_json::Value::Object(Default::default()),
     reason: None,
     extra: Default::default(),
   }))

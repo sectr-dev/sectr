@@ -20,10 +20,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, routing::get};
+use chrono::{DateTime, Utc};
+use sectr_common::api::{ErrorBody, SecretValue};
 use sectr_common::secret::Secret;
 use sectr_common::sidecar::{APPROVAL_POLICY_ENV, APPROVAL_POLICY_ENV_IS_RESERVED};
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 
 use crate::auth::PlatformPrincipal;
 use crate::state::AppState;
@@ -39,11 +40,6 @@ struct AppQuery {
   app: String,
 }
 
-#[derive(Deserialize)]
-struct PutSecret {
-  value: String,
-}
-
 /// Env-safe keys only: secrets become environment variables inside the
 /// runner, so the same lexical rule applies (letter/underscore first).
 fn valid_key(key: &str) -> bool {
@@ -56,14 +52,19 @@ fn valid_key(key: &str) -> bool {
     && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// One secret's metadata, as `GET /secrets` lists it (never the value).
+#[derive(Serialize)]
+struct SecretDto {
+  name: String,
+  created_at: DateTime<Utc>,
+  updated_at: Option<DateTime<Utc>>,
+}
+
 fn secrets_disabled() -> Response {
-  (
+  ErrorBody::response(
     StatusCode::SERVICE_UNAVAILABLE,
-    Json(json!({
-        "error": "secrets are not configured on this server (SECTR_SECRETS_MASTER_KEY missing)"
-    })),
+    "secrets are not configured on this server (SECTR_SECRETS_MASTER_KEY missing)",
   )
-    .into_response()
 }
 
 /// Resolve the org-scoped app by slug. Foreign-org apps are 404s (no
@@ -78,15 +79,7 @@ async fn resolve_app(
     .find_app_by_slug(principal.0.org_id(), slug)
     .await
     .map_err(internal_error)?
-    .ok_or_else(|| {
-      Box::new(
-        (
-          StatusCode::NOT_FOUND,
-          Json(json!({ "error": "app not found" })),
-        )
-          .into_response(),
-      )
-    })
+    .ok_or_else(|| Box::new(ErrorBody::response(StatusCode::NOT_FOUND, "app not found")))
 }
 
 /// `GET /secrets?app=<slug>` — metadata only.
@@ -106,7 +99,11 @@ async fn list(
     Ok(metas) => Json(
       metas
         .into_iter()
-        .map(|m| json!({ "name": m.key, "created_at": m.created_at, "updated_at": m.updated_at }))
+        .map(|m| SecretDto {
+          name: m.key,
+          created_at: m.created_at,
+          updated_at: m.updated_at,
+        })
         .collect::<Vec<_>>(),
     )
     .into_response(),
@@ -120,28 +117,24 @@ async fn store(
   principal: PlatformPrincipal,
   Path(key): Path<String>,
   Query(q): Query<AppQuery>,
-  Json(body): Json<PutSecret>,
+  Json(body): Json<SecretValue>,
 ) -> Response {
   if !state.secrets_enabled() {
     return secrets_disabled();
   }
   if !valid_key(&key) {
-    return (
+    return ErrorBody::response(
       StatusCode::UNPROCESSABLE_ENTITY,
-      Json(json!({ "error": "secret keys must be env-safe: [A-Za-z_][A-Za-z0-9_]* (max 128)" })),
-    )
-      .into_response();
+      "secret keys must be env-safe: [A-Za-z_][A-Za-z0-9_]* (max 128)",
+    );
   }
   // Sectr sets it on every runner, over any secret: storing it would
   // silently do nothing.
   if key == APPROVAL_POLICY_ENV {
-    return (
+    return ErrorBody::response(
       StatusCode::UNPROCESSABLE_ENTITY,
-      Json(json!({
-        "error": format!("{APPROVAL_POLICY_ENV} can't be a secret: {APPROVAL_POLICY_ENV_IS_RESERVED}")
-      })),
-    )
-      .into_response();
+      format!("{APPROVAL_POLICY_ENV} can't be a secret: {APPROVAL_POLICY_ENV_IS_RESERVED}"),
+    );
   }
   let app = match resolve_app(&state, &principal, &q.app).await {
     Ok(app) => app,
@@ -179,18 +172,13 @@ async fn delete(
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
   tracing::error!(error = %e, "secrets request failed");
-  (
-    StatusCode::INTERNAL_SERVER_ERROR,
-    Json(json!({ "error": "internal error" })),
-  )
-    .into_response()
+  ErrorBody::response(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
   use axum::body::Body;
-  use serde_json::Value;
+  use serde_json::{Value, json};
   use std::sync::Arc;
   use tower::ServiceExt;
   use uuid::Uuid;

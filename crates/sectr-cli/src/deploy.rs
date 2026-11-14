@@ -32,6 +32,7 @@ use std::time::Duration;
 use anyhow::Context;
 
 use clap::Parser;
+use sectr_common::endpoint::RegisterEndpoint;
 
 /// Deploy to a server. Sectr builds and runs the project by default; with
 /// `[deploy] endpoint = "https://…"` in sectr.toml, it registers your own
@@ -307,7 +308,10 @@ pub(crate) async fn deploy_endpoint(
   let response = client
     .post(format!("{}/endpoint-deployments", target.api))
     .bearer_auth(&target.key)
-    .json(&serde_json::json!({"manifest": manifest_toml, "endpoint_url": endpoint_url}))
+    .json(&RegisterEndpoint {
+      manifest: manifest_toml,
+      endpoint_url: endpoint_url.to_owned(),
+    })
     .send()
     .await?;
   let status = response.status();
@@ -684,7 +688,7 @@ mod tests {
         "/me",
         get(|| async {
           axum::Json(serde_json::json!({
-            "org": {"id": "o", "name": "acme"},
+            "org": {"id": "0190d8a4-0000-7000-8000-000000000002", "name": "acme"},
             "dashboard_url": "https://app.example.com",
           }))
         }),
@@ -860,7 +864,7 @@ mod tests {
     let api = me_stub(
       200,
       serde_json::json!({
-        "org": {"id": "o", "name": "acme"},
+        "org": {"id": "0190d8a4-0000-7000-8000-000000000002", "name": "acme"},
         "dashboard_url": "https://sectr.example.com/",
       }),
     )

@@ -22,7 +22,9 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::{Args, Subcommand};
-use serde::Deserialize;
+use sectr_common::api::cli_login::{
+  ApprovedLogin, DeviceGrant, PollAnswer, PollRequest, StartRequest,
+};
 
 use crate::auth::{self, Credentials};
 
@@ -106,7 +108,7 @@ async fn run_login(args: &AuthArgs, with_key: bool, no_browser: bool) -> anyhow:
     auth::store(&Credentials {
       api: api.clone(),
       platform_key: approved.key,
-      key_id: Some(approved.key_id),
+      key_id: Some(approved.key_id.to_string()),
       dashboard: me.dashboard_url,
     })?;
     eprintln!(
@@ -151,27 +153,6 @@ fn read_key() -> anyhow::Result<String> {
 
 // ---- browser (device) login ----------------------------------------------
 
-#[derive(Debug, Deserialize)]
-struct DeviceGrant {
-  device_code: String,
-  user_code: String,
-  verification_url_complete: String,
-  expires_in: u64,
-  interval: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApprovedOrg {
-  name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Approved {
-  key: String,
-  key_id: String,
-  org: ApprovedOrg,
-}
-
 /// This machine's name, shown on the approval page and used to name the
 /// minted key (`CLI (<hostname>)`).
 fn hostname() -> String {
@@ -197,7 +178,7 @@ fn hostname() -> String {
   "unknown machine".into()
 }
 
-async fn device_login(api: &str, open: bool) -> anyhow::Result<Approved> {
+async fn device_login(api: &str, open: bool) -> anyhow::Result<ApprovedLogin> {
   let client = reqwest::Client::new();
   let grant = start_device_login(&client, api, &hostname()).await?;
 
@@ -220,7 +201,9 @@ async fn start_device_login(
   let url = format!("{api}/auth/cli");
   let resp = client
     .post(&url)
-    .json(&serde_json::json!({ "client_name": client_name }))
+    .json(&StartRequest {
+      client_name: client_name.to_owned(),
+    })
     .send()
     .await
     .map_err(|e| anyhow::anyhow!("reach {url}: {e}"))?;
@@ -248,7 +231,7 @@ async fn poll_device_login(
   api: &str,
   grant: &DeviceGrant,
   min_interval: Duration,
-) -> anyhow::Result<Approved> {
+) -> anyhow::Result<ApprovedLogin> {
   let url = format!("{api}/auth/cli/poll");
   let interval = Duration::from_secs(grant.interval).max(min_interval);
   let deadline = tokio::time::Instant::now() + Duration::from_secs(grant.expires_in);
@@ -256,26 +239,45 @@ async fn poll_device_login(
     tokio::time::sleep(interval).await;
     let resp = client
       .post(&url)
-      .json(&serde_json::json!({ "device_code": grant.device_code }))
+      .json(&PollRequest {
+        device_code: grant.device_code.clone(),
+      })
       .send()
       .await;
     let Ok(resp) = resp else { continue };
     if !resp.status().is_success() {
       continue;
     }
-    let Ok(body) = resp.json::<serde_json::Value>().await else {
+    let Ok(body) = resp.bytes().await else {
       continue;
     };
-    match body.get("status").and_then(|s| s.as_str()) {
-      Some("approved") => {
-        return serde_json::from_value(body).context("parse the approved login response");
+    let answer = match serde_json::from_slice::<PollAnswer>(&body) {
+      Ok(answer) => answer,
+      // An approval that doesn't parse has consumed the request: say so
+      // rather than poll on to the expiry.
+      Err(e) if says_approved(&body) => {
+        return Err(e).context("parse the approved login response");
       }
-      Some("denied") => bail!("the login request was denied in the browser"),
-      Some("expired") => bail!("the login request expired; run `sectr auth login` again"),
-      _ => {}
+      // Anything else (a proxy's page, say) is retried like a 5xx.
+      Err(_) => continue,
+    };
+    match answer {
+      PollAnswer::Approved(approved) => return Ok(approved),
+      PollAnswer::Denied => bail!("the login request was denied in the browser"),
+      PollAnswer::Expired => bail!("the login request expired; run `sectr auth login` again"),
+      PollAnswer::Pending | PollAnswer::Unknown => {}
     }
   }
   bail!("the login request expired; run `sectr auth login` again")
+}
+
+/// Does a poll answer that didn't parse claim `"status": "approved"`?
+fn says_approved(body: &[u8]) -> bool {
+  #[derive(serde::Deserialize)]
+  struct Status {
+    status: String,
+  }
+  serde_json::from_slice::<Status>(body).is_ok_and(|s| s.status == "approved")
 }
 
 // ---- logout ----------------------------------------------------------------
@@ -380,6 +382,7 @@ mod tests {
     DeviceGrant {
       device_code: "dev".into(),
       user_code: "BBBB-CCCC".into(),
+      verification_url: "https://app.sectr.dev/cli".into(),
       verification_url_complete: "https://app.sectr.dev/cli/BBBB-CCCC".into(),
       expires_in,
       interval: 0,
@@ -387,11 +390,13 @@ mod tests {
   }
 
   fn approved_body() -> Value {
-    json!({"status": "approved", "key": "skp_x", "key_id": "kid-1",
-           "org": {"id": "o", "name": "acme"}})
+    json!({"status": "approved", "key": "skp_x", "key_id": KEY_ID,
+           "org": {"id": "0190d8a4-0000-7000-8000-000000000002", "name": "acme"}})
   }
 
-  async fn poll(api: &str, expires_in: u64) -> anyhow::Result<Approved> {
+  const KEY_ID: &str = "0190d8a4-0000-7000-8000-000000000001";
+
+  async fn poll(api: &str, expires_in: u64) -> anyhow::Result<ApprovedLogin> {
     poll_device_login(
       &reqwest::Client::new(),
       api,
@@ -413,10 +418,10 @@ mod tests {
     assert_eq!(
       (
         approved.key.as_str(),
-        approved.key_id.as_str(),
+        approved.key_id.to_string().as_str(),
         approved.org.name.as_str()
       ),
-      ("skp_x", "kid-1", "acme")
+      ("skp_x", KEY_ID, "acme")
     );
     assert_eq!(*calls.lock().unwrap(), 3);
   }
@@ -425,6 +430,27 @@ mod tests {
   async fn poll_survives_a_transient_502() {
     let (api, _) = stub(vec![(502, json!({})), (200, approved_body())]).await;
     assert_eq!(poll(&api, 30).await.unwrap().key, "skp_x");
+  }
+
+  #[tokio::test]
+  async fn poll_retries_a_200_that_isnt_a_login_answer() {
+    let (api, calls) = stub(vec![
+      (200, json!("<html>a proxy's page</html>")),
+      (200, json!({})),
+      (200, approved_body()),
+    ])
+    .await;
+    assert_eq!(poll(&api, 30).await.unwrap().key, "skp_x");
+    assert_eq!(*calls.lock().unwrap(), 3);
+  }
+
+  #[tokio::test]
+  async fn poll_fails_on_an_approval_it_cant_read() {
+    // The request is consumed: polling on would only end in "expired".
+    let (api, calls) = stub(vec![(200, json!({"status": "approved", "key": "skp_x"}))]).await;
+    let err = format!("{:#}", poll(&api, 30).await.unwrap_err());
+    assert!(err.contains("approved login response"), "{err}");
+    assert_eq!(*calls.lock().unwrap(), 1);
   }
 
   #[tokio::test]

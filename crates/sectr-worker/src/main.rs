@@ -26,6 +26,14 @@
 //! mode does, dialing the image's own `SECTR_INGEST_URL`. See
 //! [`sectr_worker::serve`].
 
+#![cfg_attr(
+  test,
+  allow(
+    clippy::disallowed_macros,
+    reason = "tests build JSON fixtures with `json!`"
+  )
+)]
+
 use std::time::Duration;
 
 use sectr_common::telemetry;

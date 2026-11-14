@@ -1,0 +1,4 @@
+{
+  "outcome": "dial_failed",
+  "message": "dial wss://ingest.sectr.dev/ingest: IO error: Connection refused (os error 111)"
+}

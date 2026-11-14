@@ -41,6 +41,11 @@ commit messages and PR text.
 
 - Rust: workspace deps declared in the root `Cargo.toml`; errors via `thiserror`
   (libs) and `anyhow` (binaries); `tracing` for logging.
+- Rust: shipped code builds JSON from `Serialize` structs, never `json!`, which
+  `clippy.toml` bans outside tests. A shape that crosses components (server and
+  CLI, server and sidecar) lives in `sectr-common`, and both sides use it. Some
+  CLI reads of server answers still pick fields out of untyped JSON: move one
+  to the shared type when you touch it.
 - Python: `uv`-managed, `src/` layout, Python 3.12, pytest.
 
 ## Releasing and CI

@@ -35,12 +35,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use chrono::{SubsecRound, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 
 use sectr_common::registry::{ApiKeyKind, Org, PgRegistry, Registry, RegistryError};
 
-use crate::analytics::events;
+use crate::analytics::{Props, events};
 use crate::auth::{PlatformPrincipal, keys};
 use crate::config::ClerkConfig;
 use crate::state::AppState;
@@ -137,7 +136,7 @@ pub fn verify_session(config: &ClerkConfig, token: &str) -> Result<ClerkSession,
 
 /// `{"error": …}` with a status — the endpoint's only error shape.
 fn error(status: StatusCode, msg: &str) -> Response {
-  (status, Json(json!({ "error": msg }))).into_response()
+  sectr_common::api::ErrorBody::response(status, msg)
 }
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
@@ -199,13 +198,24 @@ async fn exchange(State(state): State<AppState>, Json(req): Json<ExchangeRequest
     return internal_error(e);
   }
 
-  Json(json!({
-      "key": full_key,
-      "org_slug": org.slug,
-      "created": created,
-      "expires_at": expires_at,
-  }))
+  Json(Exchanged {
+    key: full_key,
+    org_slug: org.slug,
+    created,
+    expires_at,
+  })
   .into_response()
+}
+
+/// `POST /auth/clerk`'s answer: the dashboard-session key (shown once), the
+/// org's slug, whether this sign-in created the account, and when the key
+/// expires.
+#[derive(Serialize)]
+struct Exchanged {
+  key: String,
+  org_slug: String,
+  created: bool,
+  expires_at: chrono::DateTime<Utc>,
 }
 
 /// Returning Clerk user → their org; anyone else → a new account, unless
@@ -264,9 +274,14 @@ async fn resolve_account(
   };
 
   // Top of the activation funnel. Fresh orgs only.
-  state
-    .analytics()
-    .track(events::ORG_CREATED, org.id, json!({ "signup": "clerk" }));
+  state.analytics().track(
+    events::ORG_CREATED,
+    org.id,
+    Props {
+      signup: Some("clerk"),
+      ..Props::default()
+    },
+  );
   state
     .signup_notifier()
     .new_account(pg, state.config().limits.signup_cap);
@@ -332,7 +347,7 @@ mod tests {
   use axum::body::Body;
   use jsonwebtoken::{EncodingKey, Header};
   use sectr_common::store::{PgStore, SqliteStore};
-  use serde_json::Value;
+  use serde_json::{Value, json};
   use std::sync::Arc;
   use tower::ServiceExt;
 

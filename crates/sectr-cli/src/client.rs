@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use futures::StreamExt;
-use sectr_common::api::DevStatus;
+use sectr_common::api::{
+  ApprovalDecisionRequest, DevStatus, ErrorBody, NewSessionBody, SessionCreated, SessionInputBody,
+};
 use sectr_common::events::{Event, EventPayload};
 
 pub(crate) struct GatewayClient {
@@ -152,31 +154,31 @@ impl GatewayClient {
     &self,
     app: &str,
     route: &str,
-    input: serde_json::Value,
+    input: &str,
   ) -> anyhow::Result<uuid::Uuid> {
     let created = self
       .post(
         "/sessions",
-        &serde_json::json!({ "app": app, "route": route, "input": input }),
+        &NewSessionBody {
+          app: app.to_owned(),
+          route: route.to_owned(),
+          input: input.into(),
+        },
       )
       .await?;
-    created["session_id"]
-      .as_str()
-      .context("gateway returned no session_id")?
-      .parse()
-      .context("gateway returned a non-UUID session_id")
+    let created: SessionCreated =
+      serde_json::from_value(created).context("gateway returned no session_id")?;
+    Ok(created.session_id)
   }
 
   /// `POST /sessions/{id}/input` — a follow-up turn.
-  pub(crate) async fn send_input(
-    &self,
-    sid: uuid::Uuid,
-    input: serde_json::Value,
-  ) -> anyhow::Result<()> {
+  pub(crate) async fn send_input(&self, sid: uuid::Uuid, input: &str) -> anyhow::Result<()> {
     self
       .post(
         &format!("/sessions/{sid}/input"),
-        &serde_json::json!({ "input": input }),
+        &SessionInputBody {
+          input: input.into(),
+        },
       )
       .await?;
     Ok(())
@@ -188,7 +190,10 @@ impl GatewayClient {
     self
       .post(
         &format!("/sessions/{sid}/approval"),
-        &serde_json::json!({ "approved": approved, "approver": "sectr send" }),
+        &ApprovalDecisionRequest {
+          approved,
+          approver: Some("sectr send".into()),
+        },
       )
       .await?;
     Ok(())
@@ -303,7 +308,11 @@ impl GatewayClient {
   /// readable message. A `429` (the app is at its concurrent-turn limit)
   /// is retried after its `Retry-After`, saying so on stderr: the server
   /// leaves nothing behind when it refuses, so a retry is safe.
-  async fn post(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+  async fn post(
+    &self,
+    path: &str,
+    body: &impl serde::Serialize,
+  ) -> anyhow::Result<serde_json::Value> {
     let mut retries = 0;
     let (status, text) = loop {
       let resp = self
@@ -355,8 +364,9 @@ const MAX_BUSY_WAIT: Duration = Duration::from_secs(30);
 
 /// The `error` of a server's JSON error body.
 fn server_error(text: &str) -> Option<String> {
-  let value: serde_json::Value = serde_json::from_str(text).ok()?;
-  value.get("error")?.as_str().map(str::to_owned)
+  serde_json::from_str::<ErrorBody>(text)
+    .ok()
+    .map(|body| body.error)
 }
 
 /// What the streaming loop does when the journal shows a turn boundary.
@@ -809,10 +819,7 @@ Refunded.
       (201, None, serde_json::json!({"session_id": sid})),
     ])
     .await;
-    let got = client
-      .create_session("a", "/chat", serde_json::json!("hi"))
-      .await
-      .unwrap();
+    let got = client.create_session("a", "/chat", "hi").await.unwrap();
     assert_eq!(got, sid);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
   }
@@ -821,7 +828,7 @@ Refunded.
   async fn a_long_retry_after_is_not_waited_for() {
     let (client, calls) = sessions_stub(vec![(429, Some("3600"), busy())]).await;
     let err = client
-      .create_session("a", "/chat", serde_json::json!("hi"))
+      .create_session("a", "/chat", "hi")
       .await
       .unwrap_err()
       .to_string();

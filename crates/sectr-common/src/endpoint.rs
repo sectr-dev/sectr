@@ -5,6 +5,8 @@
 //! a hint about what to fix. Change a phrase here and every reader follows;
 //! reword one in a message without it and the readers' tests fail.
 
+use serde::{Deserialize, Serialize};
+
 /// Starts every error a failed wake journals as the turn's `SESSION_ERROR`.
 pub const WAKE_FAILED: &str = "endpoint wake failed:";
 
@@ -61,9 +63,193 @@ pub fn platform_of(host: &str) -> Platform {
   }
 }
 
+/// `GET /endpoint-deployments/config`: whether the server takes endpoint
+/// deployments, the ingest URL an endpoint's image must dial, and the base
+/// image it builds from. Absent fields read as unset, so the CLI can tell
+/// an older server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointDeploymentsConfig {
+  #[serde(default)]
+  pub enabled: bool,
+  #[serde(default)]
+  pub ingest_url: Option<String>,
+  #[serde(default)]
+  pub base_image: Option<String>,
+}
+
+/// `POST /endpoint-deployments`'s body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisterEndpoint {
+  /// `sectr.toml`, as text.
+  pub manifest: String,
+  pub endpoint_url: String,
+}
+
+// ---------------------------------------------------------------------------
+// Serve mode's wire shapes (`schema/serve.schema.json`). The server writes
+// the requests and the sidecar reads them; the sidecar writes the answers
+// and the server reads them. Both sides use these types, so both are checked
+// against one definition.
+// ---------------------------------------------------------------------------
+
+/// `GET /`: identifies a serve-mode sidecar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+  pub sectr_sidecar: SidecarIdentity,
+}
+
+/// The sidecar's version and mode (always `serve` from this endpoint).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidecarIdentity {
+  pub version: String,
+  pub mode: String,
+}
+
+/// The mode a serve-mode sidecar names in its [`Identity`].
+pub const SERVE_MODE: &str = "serve";
+
+/// `POST /wake`'s body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WakeRequest {
+  pub ingest_token: String,
+}
+
+/// `POST /wake`'s answer, once the invocation is over. Receivers ignore
+/// outcomes they don't know ([`WakeAnswer::Unknown`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum WakeAnswer {
+  /// A turn ran and is over; the journal holds how it ended.
+  TurnEnded,
+  /// Ingest refused the token before any turn started.
+  TokenRejected,
+  /// No dial was accepted in time; nothing ran. The schema makes the
+  /// message optional.
+  DialFailed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+  },
+  /// An outcome newer than this reader.
+  #[serde(other, skip_serializing)]
+  Unknown,
+}
+
+impl WakeAnswer {
+  /// The `outcome`, for logs.
+  pub fn outcome(&self) -> &'static str {
+    match self {
+      WakeAnswer::TurnEnded => "turn_ended",
+      WakeAnswer::TokenRejected => "token_rejected",
+      WakeAnswer::DialFailed { .. } => "dial_failed",
+      WakeAnswer::Unknown => "unknown",
+    }
+  }
+}
+
+/// `POST /manifest`'s body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestRequest {
+  pub registration_token: String,
+  pub entry: String,
+}
+
+/// `POST /manifest`'s answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ManifestAnswer {
+  /// The import's manifest (what `python3 -m sectr.inspect` writes), and
+  /// whether the import ran under `uv run --no-sync`.
+  Manifest {
+    manifest: serde_json::Value,
+    uses_uv: bool,
+  },
+  /// Ingest answered 401 at the dial; the app was not imported.
+  TokenRejected,
+  /// The dial failed for another reason; the app was not imported.
+  DialFailed { message: String },
+  /// The import failed. `exit_code` is `None` when it never exited on its
+  /// own; `message` then says why.
+  ImportFailed {
+    exit_code: Option<i32>,
+    stderr_tail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+  },
+}
+
+impl ManifestAnswer {
+  /// The `outcome`, for logs.
+  pub fn outcome(&self) -> &'static str {
+    match self {
+      ManifestAnswer::Manifest { .. } => "manifest",
+      ManifestAnswer::TokenRejected => "token_rejected",
+      ManifestAnswer::DialFailed { .. } => "dial_failed",
+      ManifestAnswer::ImportFailed { .. } => "import_failed",
+    }
+  }
+}
+
+/// A refused serve-mode request: the `error` code (`bad_request`, `busy`,
+/// `too_large`, `internal`) and a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Refusal {
+  pub error: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub message: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Every serve-mode golden fixture reads as its shape and writes back
+  /// the same JSON (unknown fields aside, which readers drop).
+  #[test]
+  fn serve_fixtures_round_trip_through_the_shapes() {
+    fn round_trip<T: serde::de::DeserializeOwned + Serialize>(
+      doc: &serde_json::Value,
+    ) -> serde_json::Value {
+      let typed: T = serde_json::from_value(doc.clone()).unwrap();
+      serde_json::to_value(typed).unwrap()
+    }
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("../../schema/fixtures/valid/serve");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+      let path = entry.unwrap().path();
+      let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+      let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+      let written = match name.as_str() {
+        "identity" => round_trip::<Identity>(&doc),
+        n if n.starts_with("wake_request") => round_trip::<WakeRequest>(&doc),
+        n if n.starts_with("wake_") => round_trip::<WakeAnswer>(&doc),
+        "manifest_request" => round_trip::<ManifestRequest>(&doc),
+        n if n.starts_with("manifest") => round_trip::<ManifestAnswer>(&doc),
+        n if n.starts_with("error_") => round_trip::<Refusal>(&doc),
+        other => panic!("no shape for serve fixture {other}"),
+      };
+      let mut expected = doc;
+      if name == "wake_request_with_unknown_field" {
+        expected.as_object_mut().unwrap().remove("ingest_url");
+      }
+      assert_eq!(written, expected, "{name}");
+      seen += 1;
+    }
+    assert!(seen > 0, "no serve fixtures found");
+  }
+
+  #[test]
+  fn a_dial_failed_wake_answer_may_leave_out_its_message() {
+    let answer: WakeAnswer = serde_json::from_str(r#"{"outcome": "dial_failed"}"#).unwrap();
+    assert_eq!(answer, WakeAnswer::DialFailed { message: None });
+  }
+
+  #[test]
+  fn an_unknown_wake_outcome_is_read_not_refused() {
+    let answer: WakeAnswer = serde_json::from_str(r#"{"outcome": "something_new"}"#).unwrap();
+    assert_eq!(answer, WakeAnswer::Unknown);
+  }
 
   #[test]
   fn hosts_classify_by_their_suffix() {
