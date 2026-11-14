@@ -132,6 +132,8 @@ Run it with:
 
 Put the URL in `sectr.toml`, then [register it](#register-it).
 
+On a [self-hosted](/guides/self-hosting/) server with `SECTR_ENDPOINT_ALLOW_PRIVATE=true`, the endpoint can instead be a plain `http` URL on your own network. For example, run the container on the server's machine, on the `sectr-runners` Docker network, and register `http://<container-name>:8080`. Then set `SECTR_ENDPOINT_INGEST_URL` to `ws://sectr-server:8080/ingest`, which is the server's address on that network.
+
 ## Register it
 
 With the URL in `sectr.toml`:
@@ -202,7 +204,7 @@ The Dockerfile's `FROM` line pins the runner base image to your server's version
 | -- | -- |
 | `answered HTTP 403` | Lambda: the function URL's auth type is `NONE`, and both permissions from step 5 are there. Cloud Run: the service allows unauthenticated invocations |
 | `could not connect to`, or `didn't answer in time` | The URL in `sectr.toml`, and that the service is deployed and running |
-| `resolves to a private address` | The endpoint must be reachable on the public internet |
+| `resolves to a private address` | The endpoint must be reachable on the public internet, unless the server allows private endpoints (self-hosted only) |
 | `dialed a server that doesn't know this` | `SECTR_INGEST_URL` in the Dockerfile names another server. Fix it or rerun `sectr init --endpoint <platform> --force`, then rebuild |
 | `couldn't reach` | Your platform blocks outbound connections. A Lambda function in a VPC needs a NAT gateway |
 | `the manifest import failed in your image` | Your agent failed to import. The error goes on with its output |
