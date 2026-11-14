@@ -184,6 +184,10 @@ export default defineConfig({
                             label: "Approvals (human in the loop)",
                             link: "/guides/approvals/",
                         },
+                        {
+                            label: "Your own compute",
+                            link: "/guides/your-own-compute/",
+                        },
                         { label: "Self-hosting", link: "/guides/self-hosting/" },
                         // {
                         //     label: "Choosing a framework",
