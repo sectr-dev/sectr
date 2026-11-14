@@ -523,6 +523,12 @@ pub trait Registry: Send + Sync {
   /// journal event is the caller's orchestration (Registry first, then
   /// Journal).
   async fn create_session(&self, new: NewSession) -> Result<Session>;
+  /// Remove a session whose first turn never started: one that has only
+  /// its `SESSION_CREATED` (seq 0) and has never held a lease. Its events
+  /// go with it (the FK cascades). Any other session is left alone, so
+  /// this is safe to call on a session that did start. Returns whether a
+  /// row was removed.
+  async fn delete_unstarted_session(&self, id: Uuid) -> Result<bool>;
   async fn get_session(&self, id: Uuid) -> Result<Session>;
   /// List sessions newest-first, keyset-paginated on `created_at`
   /// (`created_before` = "rows strictly older than"), optional org, app

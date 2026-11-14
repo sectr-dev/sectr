@@ -42,9 +42,7 @@ and a JSON body:
 
 A rejected `POST /sessions/{id}/input` or `/approval` changes nothing: no
 event is journaled, so it can simply be retried. A rejected `POST /sessions`
-normally creates no session either. Rarely, when another request takes the
-last slot at the same moment, an empty session is left behind; it appears in
-`GET /sessions` and is harmless to ignore.
+creates no session either.
 
 ## Retrying
 

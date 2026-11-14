@@ -1514,6 +1514,36 @@ async fn app_cap_rejects_create_with_429_and_leaves_no_session_row() {
   create_ok(&w, &w.platform_key, "app-a").await;
 }
 
+/// A burst of creates past the cap: they all pass the pre-check before any
+/// claims, so the claim refuses the extras after their sessions were
+/// written. Each refused create must still leave nothing behind.
+#[tokio::test]
+async fn concurrent_creates_past_the_cap_leave_no_empty_session() {
+  let Some(w) = world_with_limits(|_, _| limits(3, 0)).await else {
+    eprintln!("skipping: no test Postgres (initdb not on PATH)");
+    return;
+  };
+  w.dispatcher.set(Mode::Hold);
+  let results = futures::future::join_all(
+    (0..20).map(|_| create_session(&w.app, &w.platform_key, new_session_body("app-a"))),
+  )
+  .await;
+  let mut created = 0;
+  for (status, body) in &results {
+    match *status {
+      StatusCode::CREATED => created += 1,
+      StatusCode::TOO_MANY_REQUESTS => assert_eq!(body["code"], "concurrency_limit", "{body}"),
+      other => panic!("unexpected {other}: {body}"),
+    }
+  }
+  assert_eq!(created, 3);
+  assert_eq!(
+    session_count(&w, w.app_a).await,
+    3,
+    "every refused create must take its session with it"
+  );
+}
+
 /// An app whose active deployment runs on a compute endpoint gets the
 /// endpoint per-app cap, for new sessions and for turns on them, and the
 /// platform-wide cap (the sandboxes') doesn't count its turns.

@@ -141,6 +141,9 @@ impl Registry for EncryptedRegistry {
   async fn create_session(&self, new: NewSession) -> Result<Session> {
     self.inner.create_session(new).await
   }
+  async fn delete_unstarted_session(&self, id: Uuid) -> Result<bool> {
+    self.inner.delete_unstarted_session(id).await
+  }
   async fn get_session(&self, id: Uuid) -> Result<Session> {
     self.inner.get_session(id).await
   }

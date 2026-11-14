@@ -1584,6 +1584,48 @@ async fn new_thread_at_the_concurrency_cap_is_a_429_before_the_stream() {
   assert_eq!(retry.all().await.last().unwrap()["type"], "RUN_FINISHED");
 }
 
+/// A burst of new threads past the cap: each refused one passed the
+/// pre-check and was written before the claim refused it, and must still
+/// be gone when its 429 arrives.
+#[tokio::test]
+async fn concurrent_new_threads_past_the_cap_leave_no_thread_behind() {
+  let Some(w) = world_limited(crate::limits::LimitsConfig {
+    max_sandbox_turns_per_app: 3,
+    ..crate::limits::LimitsConfig::none()
+  })
+  .await
+  else {
+    eprintln!("skipping: no test Postgres (initdb not on PATH)");
+    return;
+  };
+  w.dispatcher.set(Mode::Hold);
+  let threads: Vec<Uuid> = (0..12).map(|_| Uuid::now_v7()).collect();
+  let responses = futures::future::join_all(threads.iter().map(|thread| {
+    post(
+      &w.app,
+      CHAT,
+      Some(&w.alice),
+      run_body(*thread, "r1", vec![user_msg("u1", "hi")]),
+    )
+  }))
+  .await;
+  let mut started = 0;
+  for (thread, response) in threads.iter().zip(responses) {
+    match response.status() {
+      StatusCode::OK => {
+        started += 1;
+        w.registry.get_session(*thread).await.unwrap();
+      }
+      StatusCode::TOO_MANY_REQUESTS => assert!(
+        w.registry.get_session(*thread).await.is_err(),
+        "a refused thread must not be left behind"
+      ),
+      other => panic!("unexpected {other}"),
+    }
+  }
+  assert_eq!(started, 3);
+}
+
 // ---------------------------------------------------------------------------
 // Connect — `GET /ag-ui/{app}/{route}?threadId=` re-streams the
 // thread's latest run, read-only

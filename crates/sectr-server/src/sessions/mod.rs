@@ -210,17 +210,17 @@ impl ProdSessionService {
   /// Admission for a NEW session (`POST /sessions`, AG-UI's first
   /// run of a thread), before any row is written:
   ///
-  /// 1. a non-atomic capacity pre-check, so the common rejection leaves no
-  ///    empty session behind (the authoritative check is the atomic claim
-  ///    in `start_turn`);
+  /// 1. a non-atomic capacity pre-check, so the common rejection writes
+  ///    nothing (the authoritative check is the atomic claim in
+  ///    `start_turn`);
   /// 2. then the rate-limit bucket — in that order, so capacity rejections
   ///    don't burn tokens.
   ///
-  /// Race (accepted, no delete path): if a concurrent create takes the last
-  /// slot between this pre-check and the claim, the claim fails AFTER
-  /// `open_session` — the client gets the 429 and the session exists with
-  /// only `SESSION_CREATED` (idle, valid: no lease, no sandbox; `POST
-  /// /input` works on it later).
+  /// Concurrent creates all pass this pre-check before any of them claims,
+  /// so at a cap the atomic claim refuses some AFTER `open_session`. The
+  /// caller then removes that session (`discard_unstarted`) before the
+  /// 429 goes out: the client never learned its id, so it would sit empty
+  /// and active forever.
   async fn admit_new_session(
     &self,
     app_id: Uuid,
@@ -309,11 +309,12 @@ impl ProdSessionService {
       .ok_or_else(|| ServiceError::NotFound(format!("unknown app {app:?}")))
   }
 
-  /// Create the session row (+ `SESSION_CREATED`, the creation metric and
-  /// the `first_session` analytics event). `id` = a caller-chosen session
-  /// id (AG-UI `threadId`), else a fresh UUIDv7. Shared by `create_session`
-  /// and AG-UI's first run, so ownership stamping and journaling stay
-  /// single-path.
+  /// Create the session row (+ `SESSION_CREATED`). `id` = a caller-chosen
+  /// session id (AG-UI `threadId`), else a fresh UUIDv7. Shared by
+  /// `create_session` and AG-UI's first run, so ownership stamping and
+  /// journaling stay single-path. The caller starts the first turn, then
+  /// either `note_session_created` (it started) or `discard_unstarted`
+  /// (it didn't).
   async fn open_session(
     &self,
     app: &sectr_common::registry::App,
@@ -352,8 +353,14 @@ impl ProdSessionService {
       )
       .await
       .map_err(internal)?;
+    Ok(session)
+  }
 
-    // Metric: a session exists (the 201 is already earned).
+  /// A new session's first turn started (dispatch failures included: the
+  /// session stays, errored): the creation metric and the `first_session`
+  /// analytics event.
+  async fn note_session_created(&self, scope: &RequestScope) {
+    // Metric: a session exists (the 201 is earned).
     crate::metrics::SESSIONS_CREATED.add(
       1,
       &[opentelemetry::KeyValue::new(
@@ -389,8 +396,16 @@ impl ProdSessionService {
         );
       }
     }
+  }
 
-    Ok(session)
+  /// A new session's first turn didn't start (refused at a cap, most
+  /// often): remove it, so the error leaves nothing behind. The registry
+  /// only removes a session with nothing past `SESSION_CREATED` and no
+  /// lease, so a turn that did start keeps its session.
+  async fn discard_unstarted(&self, session: SessionId) {
+    if let Err(e) = self.registry.delete_unstarted_session(session).await {
+      tracing::warn!(%session, "removing a session whose first turn didn't start: {e}");
+    }
   }
 
   /// The approval decision → resumed turn; returns the resumed turn's
@@ -616,8 +631,9 @@ impl SessionService for ProdSessionService {
       .await?;
 
     // Start the first turn; dispatch failures surface as SESSION_ERROR
-    // on the tail (the session exists either way — 201 is correct).
-    self
+    // on the tail (the session exists either way — 201 is correct). A
+    // turn that didn't start (a cap's 429) takes the session with it.
+    if let Err(e) = self
       .start_turn(
         session.id,
         &req.route,
@@ -628,7 +644,12 @@ impl SessionService for ProdSessionService {
         None,
         Extra::default(),
       )
-      .await?;
+      .await
+    {
+      self.discard_unstarted(session.id).await;
+      return Err(e);
+    }
+    self.note_session_created(&scope).await;
     Ok(session.id)
   }
 
@@ -833,7 +854,7 @@ impl SessionService for ProdSessionService {
           ..
         },
       ) => {
-        let invocation_id = self
+        let started = self
           .start_turn(
             session.id,
             &req.route,
@@ -849,7 +870,16 @@ impl SessionService for ProdSessionService {
               context,
             ),
           )
-          .await?;
+          .await;
+        // A thread this run created: as in `create_session`, a first turn
+        // that didn't start takes the thread with it.
+        if created {
+          match &started {
+            Ok(_) => self.note_session_created(&scope).await,
+            Err(_) => self.discard_unstarted(session.id).await,
+          }
+        }
+        let invocation_id = started?;
         Ok(StartedRun {
           session_id: session.id,
           invocation_id,

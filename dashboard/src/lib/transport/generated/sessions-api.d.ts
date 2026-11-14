@@ -588,7 +588,7 @@ export interface components {
         timestamp: string;
     };
     responses: {
-        /** @description concurrency, capacity or rate limit (server policy — the dev gateway never returns it). Retry the same request after the `Retry-After` delay. On `/input` and `/approval` nothing was journaled. On `POST /sessions` normally nothing was either, but if a concurrent request took the last slot between admission and the first turn's claim, an idle session (only `SESSION_CREATED`) may be left behind; it is listed by `GET /sessions` and accepts `/input` later. `code` says which limit tripped (see the body schema). */
+        /** @description concurrency, capacity or rate limit (server policy — the dev gateway never returns it). Retry the same request after the `Retry-After` delay. On `/input` and `/approval` nothing was journaled. On `POST /sessions` no session was created. `code` says which limit tripped (see the body schema). */
         TooManyRequests: {
             headers: {
                 /** @description seconds to wait before retrying */
