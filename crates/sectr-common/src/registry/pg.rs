@@ -2274,13 +2274,17 @@ mod tests {
       let registry = registry.clone();
       async move { registry.delete_unstarted_session(session.id).await }
     });
-    // Commit the claim only once the delete is waiting on its lock.
+    // Commit the claim only once the delete is waiting on its lock. Only
+    // this test's database counts: the tests share one cluster.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-      let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE NOT granted")
-        .fetch_one(&registry.pool)
-        .await
-        .unwrap();
+      let waiting: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+      )
+      .fetch_one(&registry.pool)
+      .await
+      .unwrap();
       if waiting > 0 {
         break;
       }
