@@ -1,6 +1,6 @@
 [project]
 name = "sectr"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python SDK for Sectr, which stores, streams and resumes AI agent conversations."
 readme = "README.md"
 license = "MIT"
