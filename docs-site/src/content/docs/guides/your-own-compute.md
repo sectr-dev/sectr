@@ -117,7 +117,7 @@ To ship a new version, run the same `gcloud run deploy`, which keeps the URL, th
 
 ## Your own container platform
 
-Any platform that runs a container behind an HTTPS URL works, for example ECS behind a load balancer, or Kubernetes behind an ingress:
+Any platform that runs a container behind an HTTPS URL works, for example ECS on Fargate behind a load balancer, or Kubernetes behind an ingress:
 
 ```sh
 docker build --platform linux/amd64 -t my-agent .     # linux/arm64 for Arm hosts
@@ -131,6 +131,21 @@ Run it with:
 - **one request at a time per container.** A container that's already running a turn answers a wake with `409`. Sectr then tries again, until the turn's start deadline.
 
 Put the URL in `sectr.toml`, then [register it](#register-it).
+
+Unlike Lambda and Cloud Run, a container platform doesn't start a container per request, so three things need setting.
+
+**How many turns run at once.** Each container runs one turn at a time, so N containers run N turns at once. A turn past that waits for a free container, and fails if none frees up within the 60 seconds a turn has to start. Run as many containers as you want turns at once. Autoscaling usually takes minutes, too slow to absorb a burst. On a self-hosted server, set `SECTR_MAX_CONCURRENT_ENDPOINT_TURNS_PER_APP` to N, so a turn past that gets a `429` at once and the client can retry.
+
+**Proxy timeouts.** The wake request stays open for the whole turn without sending anything, and proxies close idle requests: an AWS load balancer after 60 seconds by default, and nginx after 60 seconds too. If a proxy cuts the request, Sectr checks whether the container is still running the turn, and the turn goes on if it is. Still, set the idle timeout to at least the length of your longest turn. On an AWS Application Load Balancer, for example:
+
+```sh
+aws elbv2 modify-load-balancer-attributes --load-balancer-arn $ALB_ARN \
+  --attributes Key=idle_timeout.timeout_seconds,Value=3600
+```
+
+**Routing to a free container.** A load balancer that takes turns between containers sends some wakes to a busy one, which answers `409`, and Sectr then tries another. Routing by least outstanding requests avoids most of those. On an AWS target group, that's the `least_outstanding_requests` algorithm.
+
+The load balancer's health check can use `GET /`: the container answers it even while it runs a turn.
 
 On a [self-hosted](/guides/self-hosting/) server with `SECTR_ENDPOINT_ALLOW_PRIVATE=true`, the endpoint can instead be a plain `http` URL on your own network. For example, run the container on the server's machine, on the `sectr-runners` Docker network, and register `http://<container-name>:8080`. Then set `SECTR_ENDPOINT_INGEST_URL` to `ws://sectr-server:8080/ingest`, which is the server's address on that network.
 
@@ -186,7 +201,7 @@ A tool call that was running shows as interrupted. The session itself goes on: s
 
 Each running turn takes its own instance. Hosted Sectr runs up to 20 turns of one app at once. Past that, a new turn gets a `429` with `Retry-After`, and `sectr send` waits and retries.
 
-Your platform has its own limits: Lambda's concurrency quota for your account (low on new accounts, and you can raise it), or Cloud Run's `--max-instances`. When the platform turns a wake away for capacity, Sectr tries again until the turn's start deadline.
+Your platform has its own limits: Lambda's concurrency quota for your account (low on new accounts, and you can raise it), Cloud Run's `--max-instances`, or the number of containers you run on a [container platform](#your-own-container-platform). When the platform turns a wake away for capacity, Sectr tries again until the turn's start deadline.
 
 ## Upgrading
 
