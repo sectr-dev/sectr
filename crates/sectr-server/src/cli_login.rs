@@ -279,6 +279,17 @@ async fn poll(State(state): State<AppState>, Json(req): Json<PollRequest>) -> Re
   }
 }
 
+/// What the approval page shows of a login request. Its own type, so a
+/// column added to the row isn't published without a decision.
+#[derive(Serialize)]
+struct LoginRequestView {
+  user_code: String,
+  client_name: String,
+  created_at: chrono::DateTime<chrono::Utc>,
+  expires_at: chrono::DateTime<chrono::Utc>,
+  status: String,
+}
+
 /// `GET /auth/cli/requests/{userCode}` — what the approval page shows.
 async fn get_request(
   State(state): State<AppState>,
@@ -291,7 +302,14 @@ async fn get_request(
   };
   let code = display_user_code(&normalize_user_code(&user_code));
   match pg.get_cli_login(&code).await {
-    Ok(Some(req)) => Json(req).into_response(),
+    Ok(Some(req)) => Json(LoginRequestView {
+      user_code: req.user_code,
+      client_name: req.client_name,
+      created_at: req.created_at,
+      expires_at: req.expires_at,
+      status: req.status,
+    })
+    .into_response(),
     Ok(None) => error(StatusCode::NOT_FOUND, "login request not found or expired"),
     Err(e) => internal_error(e),
   }

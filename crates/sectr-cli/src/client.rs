@@ -29,7 +29,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use futures::StreamExt;
 use sectr_common::api::{
-  ApprovalDecisionRequest, DevStatus, NewSessionBody, SessionCreated, SessionInputBody,
+  ApprovalDecisionRequest, DevStatus, ErrorBody, NewSessionBody, SessionCreated, SessionInputBody,
 };
 use sectr_common::events::{Event, EventPayload};
 
@@ -364,8 +364,9 @@ const MAX_BUSY_WAIT: Duration = Duration::from_secs(30);
 
 /// The `error` of a server's JSON error body.
 fn server_error(text: &str) -> Option<String> {
-  let value: serde_json::Value = serde_json::from_str(text).ok()?;
-  value.get("error")?.as_str().map(str::to_owned)
+  serde_json::from_str::<ErrorBody>(text)
+    .ok()
+    .map(|body| body.error)
 }
 
 /// What the streaming loop does when the journal shows a turn boundary.

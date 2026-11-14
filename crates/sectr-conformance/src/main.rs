@@ -1,8 +1,3 @@
-#![allow(
-  clippy::disallowed_macros,
-  reason = "test tooling: mock providers and scenarios build JSON with `json!`"
-)]
-
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;

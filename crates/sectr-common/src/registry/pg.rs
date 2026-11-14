@@ -1297,9 +1297,8 @@ impl PgRegistry {
 // by the consuming poll, never by the approval.
 // --------------------------------------------------------------------------
 
-/// A pending-or-decided CLI login request, as the approval page sees it
-/// (`GET /auth/cli/requests/{userCode}`).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+/// A pending-or-decided CLI login request, as the approval page sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliLoginRequest {
   pub user_code: String,
   pub client_name: String,

@@ -688,7 +688,7 @@ mod tests {
         "/me",
         get(|| async {
           axum::Json(serde_json::json!({
-            "org": {"id": "o", "name": "acme"},
+            "org": {"id": "0190d8a4-0000-7000-8000-000000000002", "name": "acme"},
             "dashboard_url": "https://app.example.com",
           }))
         }),
@@ -864,7 +864,7 @@ mod tests {
     let api = me_stub(
       200,
       serde_json::json!({
-        "org": {"id": "o", "name": "acme"},
+        "org": {"id": "0190d8a4-0000-7000-8000-000000000002", "name": "acme"},
         "dashboard_url": "https://sectr.example.com/",
       }),
     )

@@ -86,9 +86,10 @@ pub struct RegisterEndpoint {
 }
 
 // ---------------------------------------------------------------------------
-// Serve mode's wire shapes (`schema/serve.schema.json`): the sidecar writes
-// them and the server reads them, so both sides are checked against one
-// definition.
+// Serve mode's wire shapes (`schema/serve.schema.json`). The server writes
+// the requests and the sidecar reads them; the sidecar writes the answers
+// and the server reads them. Both sides use these types, so both are checked
+// against one definition.
 // ---------------------------------------------------------------------------
 
 /// `GET /`: identifies a serve-mode sidecar.
@@ -122,8 +123,12 @@ pub enum WakeAnswer {
   TurnEnded,
   /// Ingest refused the token before any turn started.
   TokenRejected,
-  /// No dial was accepted in time; nothing ran.
-  DialFailed { message: String },
+  /// No dial was accepted in time; nothing ran. The schema makes the
+  /// message optional.
+  DialFailed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+  },
   /// An outcome newer than this reader.
   #[serde(other, skip_serializing)]
   Unknown,
@@ -232,6 +237,12 @@ mod tests {
       seen += 1;
     }
     assert!(seen > 0, "no serve fixtures found");
+  }
+
+  #[test]
+  fn a_dial_failed_wake_answer_may_leave_out_its_message() {
+    let answer: WakeAnswer = serde_json::from_str(r#"{"outcome": "dial_failed"}"#).unwrap();
+    assert_eq!(answer, WakeAnswer::DialFailed { message: None });
   }
 
   #[test]

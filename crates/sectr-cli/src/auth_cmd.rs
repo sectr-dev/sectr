@@ -251,9 +251,17 @@ async fn poll_device_login(
     let Ok(body) = resp.bytes().await else {
       continue;
     };
-    // A 200 is the server's own answer: one that doesn't parse may have
-    // consumed the request, so say so rather than poll on to the expiry.
-    match serde_json::from_slice::<PollAnswer>(&body).context("parse the login poll response")? {
+    let answer = match serde_json::from_slice::<PollAnswer>(&body) {
+      Ok(answer) => answer,
+      // An approval that doesn't parse has consumed the request: say so
+      // rather than poll on to the expiry.
+      Err(e) if says_approved(&body) => {
+        return Err(e).context("parse the approved login response");
+      }
+      // Anything else (a proxy's page, say) is retried like a 5xx.
+      Err(_) => continue,
+    };
+    match answer {
       PollAnswer::Approved(approved) => return Ok(approved),
       PollAnswer::Denied => bail!("the login request was denied in the browser"),
       PollAnswer::Expired => bail!("the login request expired; run `sectr auth login` again"),
@@ -261,6 +269,15 @@ async fn poll_device_login(
     }
   }
   bail!("the login request expired; run `sectr auth login` again")
+}
+
+/// Does a poll answer that didn't parse claim `"status": "approved"`?
+fn says_approved(body: &[u8]) -> bool {
+  #[derive(serde::Deserialize)]
+  struct Status {
+    status: String,
+  }
+  serde_json::from_slice::<Status>(body).is_ok_and(|s| s.status == "approved")
 }
 
 // ---- logout ----------------------------------------------------------------
@@ -413,6 +430,27 @@ mod tests {
   async fn poll_survives_a_transient_502() {
     let (api, _) = stub(vec![(502, json!({})), (200, approved_body())]).await;
     assert_eq!(poll(&api, 30).await.unwrap().key, "skp_x");
+  }
+
+  #[tokio::test]
+  async fn poll_retries_a_200_that_isnt_a_login_answer() {
+    let (api, calls) = stub(vec![
+      (200, json!("<html>a proxy's page</html>")),
+      (200, json!({})),
+      (200, approved_body()),
+    ])
+    .await;
+    assert_eq!(poll(&api, 30).await.unwrap().key, "skp_x");
+    assert_eq!(*calls.lock().unwrap(), 3);
+  }
+
+  #[tokio::test]
+  async fn poll_fails_on_an_approval_it_cant_read() {
+    // The request is consumed: polling on would only end in "expired".
+    let (api, calls) = stub(vec![(200, json!({"status": "approved", "key": "skp_x"}))]).await;
+    let err = format!("{:#}", poll(&api, 30).await.unwrap_err());
+    assert!(err.contains("approved login response"), "{err}");
+    assert_eq!(*calls.lock().unwrap(), 1);
   }
 
   #[tokio::test]

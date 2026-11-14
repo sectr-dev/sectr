@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use sectr_common::api::SecretValue;
 use sectr_common::sidecar::{APPROVAL_POLICY_ENV, APPROVAL_POLICY_ENV_IS_RESERVED};
 
 #[derive(Parser, Debug)]
@@ -79,17 +80,11 @@ fn env_safe(key: &str) -> bool {
     && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// `PUT /secrets/{key}`'s body.
-#[derive(serde::Serialize)]
-struct PutSecret<'a> {
-  value: &'a str,
-}
-
 async fn request(
   args: &SecretsArgs,
   method: reqwest::Method,
   path: &str,
-  json_body: Option<&PutSecret<'_>>,
+  json_body: Option<&SecretValue>,
 ) -> anyhow::Result<reqwest::Response> {
   let target = crate::auth::resolve(args.api.as_deref(), args.key.as_deref())?;
   let key = target.key;
@@ -143,7 +138,7 @@ pub async fn run_secrets(args: SecretsArgs) -> anyhow::Result<()> {
         &args,
         reqwest::Method::PUT,
         &format!("/secrets/{key}?app={slug}"),
-        Some(&PutSecret { value: &value }),
+        Some(&SecretValue { value }),
       )
       .await?;
       let status = response.status();

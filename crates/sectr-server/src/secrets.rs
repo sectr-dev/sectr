@@ -21,7 +21,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, routing::get};
 use chrono::{DateTime, Utc};
-use sectr_common::api::ErrorBody;
+use sectr_common::api::{ErrorBody, SecretValue};
 use sectr_common::secret::Secret;
 use sectr_common::sidecar::{APPROVAL_POLICY_ENV, APPROVAL_POLICY_ENV_IS_RESERVED};
 use serde::{Deserialize, Serialize};
@@ -38,11 +38,6 @@ pub fn secrets_router() -> axum::Router<AppState> {
 #[derive(Deserialize)]
 struct AppQuery {
   app: String,
-}
-
-#[derive(Deserialize)]
-struct PutSecret {
-  value: String,
 }
 
 /// Env-safe keys only: secrets become environment variables inside the
@@ -122,7 +117,7 @@ async fn store(
   principal: PlatformPrincipal,
   Path(key): Path<String>,
   Query(q): Query<AppQuery>,
-  Json(body): Json<PutSecret>,
+  Json(body): Json<SecretValue>,
 ) -> Response {
   if !state.secrets_enabled() {
     return secrets_disabled();

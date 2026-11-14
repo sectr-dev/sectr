@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use sectr_common::api::{ErrorBody, OrgRef};
+use sectr_common::api::{ErrorBody, Me, OrgRef};
 use sectr_common::registry::ApiKeyKind;
 
 use crate::auth::keys;
@@ -63,13 +63,6 @@ pub async fn me(
     dashboard_url: state.config().dashboard_url.clone(),
   })
   .into_response()
-}
-
-/// `GET /me`'s answer.
-#[derive(Serialize)]
-struct Me {
-  org: OrgRef,
-  dashboard_url: String,
 }
 
 #[derive(Debug, Deserialize)]

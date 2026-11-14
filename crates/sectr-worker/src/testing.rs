@@ -6,11 +6,6 @@
 //! Shared by dispatch tests (worker) and `sectr send` tests (CLI) — one
 //! copy so the two harnesses can't drift.
 
-#![allow(
-  clippy::disallowed_macros,
-  reason = "test support shared by the worker and CLI tests"
-)]
-
 use sectr_common::events::{
   EventPayload, MessageDelta, NoMoreActions, RunnerEvent, ToolApprovalRequired, TypedDelta,
 };
@@ -64,7 +59,7 @@ pub fn approval_frame() -> String {
   frame_json(EventPayload::ToolApprovalRequired(ToolApprovalRequired {
     tool_call_id: "call_1".into(),
     name: "issue_refund".into(),
-    arguments: serde_json::json!({}),
+    arguments: serde_json::Value::Object(Default::default()),
     reason: None,
     extra: Default::default(),
   }))

@@ -43,7 +43,10 @@ use tokio::sync::Semaphore;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
-use sectr_common::endpoint::{Identity, ManifestAnswer, SERVE_MODE, SidecarIdentity, WakeAnswer};
+use sectr_common::endpoint::{
+  Identity, ManifestAnswer, ManifestRequest, Refusal, SERVE_MODE, SidecarIdentity, WakeAnswer,
+  WakeRequest,
+};
 use sectr_common::inspect;
 use sectr_common::sidecar::INGEST_TOKEN_PREFIX;
 
@@ -193,74 +196,71 @@ async fn identify() -> Json<Identity> {
   })
 }
 
-/// A refused request: its status, `error` code and message.
-struct Refusal {
+/// A refused request: its status and the [`Refusal`] it answers.
+struct Refused {
   status: StatusCode,
-  code: &'static str,
-  message: String,
+  body: Refusal,
 }
 
-impl IntoResponse for Refusal {
+impl Refused {
+  fn new(status: StatusCode, code: &str, message: Option<String>) -> Self {
+    Refused {
+      status,
+      body: Refusal {
+        error: code.into(),
+        message,
+      },
+    }
+  }
+}
+
+impl IntoResponse for Refused {
   fn into_response(self) -> Response {
-    (
-      self.status,
-      Json(sectr_common::endpoint::Refusal {
-        error: self.code.into(),
-        message: Some(self.message),
-      }),
-    )
-      .into_response()
+    (self.status, Json(self.body)).into_response()
   }
 }
 
-fn bad_request(message: impl Into<String>) -> Refusal {
-  Refusal {
-    status: StatusCode::BAD_REQUEST,
-    code: "bad_request",
-    message: message.into(),
-  }
+fn bad_request(message: impl Into<String>) -> Refused {
+  Refused::new(StatusCode::BAD_REQUEST, "bad_request", Some(message.into()))
 }
 
 fn busy() -> Response {
-  Refusal {
-    status: StatusCode::CONFLICT,
-    code: "busy",
-    message: "this instance is already running a turn".into(),
-  }
+  Refused::new(
+    StatusCode::CONFLICT,
+    "busy",
+    Some("this instance is already running a turn".into()),
+  )
   .into_response()
 }
 
-/// The JSON object body, or the response refusing it (413 over the limit,
-/// 400 for anything that isn't a JSON object).
-fn object_body(
+/// The request body as `T`, or the response refusing it (413 over the
+/// limit, 400 for anything that isn't a JSON object of `T`'s shape).
+/// Unknown fields are ignored.
+fn request_body<T: serde::de::DeserializeOwned>(
   body: Result<Bytes, BytesRejection>,
-) -> Result<serde_json::Map<String, Value>, Refusal> {
+) -> Result<T, Refused> {
   let bytes = body.map_err(|rejection| {
     if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-      Refusal {
-        status: StatusCode::PAYLOAD_TOO_LARGE,
-        code: "too_large",
-        message: format!("request bodies are limited to {BODY_LIMIT} bytes"),
-      }
+      Refused::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "too_large",
+        Some(format!("request bodies are limited to {BODY_LIMIT} bytes")),
+      )
     } else {
       bad_request(rejection.body_text())
     }
   })?;
-  match serde_json::from_slice::<Value>(&bytes) {
-    Ok(Value::Object(object)) => Ok(object),
-    Ok(_) => Err(bad_request("the body must be a JSON object")),
-    Err(e) => Err(bad_request(format!("the body is not JSON: {e}"))),
-  }
+  let object = match serde_json::from_slice::<Value>(&bytes) {
+    Ok(object @ Value::Object(_)) => object,
+    Ok(_) => return Err(bad_request("the body must be a JSON object")),
+    Err(e) => return Err(bad_request(format!("the body is not JSON: {e}"))),
+  };
+  serde_json::from_value(object).map_err(|e| bad_request(e.to_string()))
 }
 
-/// A `sit_…` token field that can travel as a bearer header (a token that
-/// can't would make every dial fail and the sidecar retry forever).
-fn token_field(object: &serde_json::Map<String, Value>, field: &str) -> Result<String, Refusal> {
-  let token = match object.get(field) {
-    Some(Value::String(token)) => token,
-    Some(_) => return Err(bad_request(format!("`{field}` must be a string"))),
-    None => return Err(bad_request(format!("`{field}` is required"))),
-  };
+/// A `sit_…` token that can travel as a bearer header (a token that can't
+/// would make every dial fail and the sidecar retry forever).
+fn check_token(token: &str, field: &str) -> Result<(), Refused> {
   if !token.starts_with(INGEST_TOKEN_PREFIX)
     || HeaderValue::from_str(&format!("Bearer {token}")).is_err()
   {
@@ -268,7 +268,7 @@ fn token_field(object: &serde_json::Map<String, Value>, field: &str) -> Result<S
       "`{field}` is not a Sectr ingest token ({INGEST_TOKEN_PREFIX}…)"
     )));
   }
-  Ok(token.clone())
+  Ok(())
 }
 
 /// `POST /wake`: run one invocation, holding the request until it ends.
@@ -276,16 +276,15 @@ async fn wake(
   State(state): State<Arc<ServeState>>,
   body: Result<Bytes, BytesRejection>,
 ) -> Response {
-  let object = match object_body(body) {
-    Ok(object) => object,
-    Err(refusal) => return refusal.into_response(),
-  };
   // Unknown fields (an `ingest_url` from an older server included) are
   // ignored: the URL is the image's, never the request's.
-  let ingest_token = match token_field(&object, "ingest_token") {
-    Ok(token) => token,
-    Err(refusal) => return refusal.into_response(),
+  let WakeRequest { ingest_token } = match request_body(body) {
+    Ok(request) => request,
+    Err(refused) => return refused.into_response(),
   };
+  if let Err(refused) = check_token(&ingest_token, "ingest_token") {
+    return refused.into_response();
+  }
   let Ok(permit) = state.permit.clone().try_acquire_owned() else {
     tracing::info!("wake refused: a turn is already running");
     return busy();
@@ -319,7 +318,7 @@ async fn wake(
       RunExit::Boundary | RunExit::Reclaimed => WakeAnswer::TurnEnded,
       RunExit::Unauthorized => WakeAnswer::TokenRejected,
       RunExit::DialFailed(e) => WakeAnswer::DialFailed {
-        message: format!("dial {ingest_url}: {e}"),
+        message: Some(format!("dial {ingest_url}: {e}")),
       },
     };
     tracing::info!(
@@ -335,14 +334,7 @@ async fn wake(
     // Only a panic in the turn's own code gets here.
     Err(e) => {
       tracing::error!(error = %e, "wake task failed");
-      (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(sectr_common::endpoint::Refusal {
-          error: "internal".into(),
-          message: None,
-        }),
-      )
-        .into_response()
+      Refused::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", None).into_response()
     }
   }
 }
@@ -353,22 +345,19 @@ async fn manifest(
   State(state): State<Arc<ServeState>>,
   body: Result<Bytes, BytesRejection>,
 ) -> Response {
-  let object = match object_body(body) {
-    Ok(object) => object,
-    Err(refusal) => return refusal.into_response(),
+  let ManifestRequest {
+    registration_token: token,
+    entry,
+  } = match request_body(body) {
+    Ok(request) => request,
+    Err(refused) => return refused.into_response(),
   };
-  let token = match token_field(&object, "registration_token") {
-    Ok(token) => token,
-    Err(refusal) => return refusal.into_response(),
-  };
-  let entry = match object.get("entry") {
-    Some(Value::String(entry)) if !entry.is_empty() && !entry.contains('\0') => entry.clone(),
-    Some(Value::String(_)) => {
-      return bad_request("`entry` must be a module:attribute string").into_response();
-    }
-    Some(_) => return bad_request("`entry` must be a string").into_response(),
-    None => return bad_request("`entry` is required").into_response(),
-  };
+  if let Err(refused) = check_token(&token, "registration_token") {
+    return refused.into_response();
+  }
+  if entry.is_empty() || entry.contains('\0') {
+    return bad_request("`entry` must be a module:attribute string").into_response();
+  }
   let Ok(_permit) = state.permit.clone().try_acquire_owned() else {
     tracing::info!("manifest request refused: a turn is already running");
     return busy();

@@ -210,25 +210,17 @@ pub async fn whoami(api: &str, key: &str) -> anyhow::Result<Me> {
     s if !s.is_success() => bail!("the server answered {s}"),
     _ => {}
   }
-  let body: serde_json::Value = resp.json().await?;
-  let org = body.get("org").context("server /me response has no org")?;
+  let body = resp.bytes().await?;
+  let me: sectr_common::api::Me = serde_json::from_slice(&body)
+    .map_err(|e| anyhow::anyhow!("the server's /me response isn't one: {e}"))?;
+  let dashboard_url = me.dashboard_url.trim_end_matches('/').to_owned();
+  if dashboard_url.is_empty() {
+    bail!("server /me response has no dashboard_url");
+  }
   Ok(Me {
-    org_name: org
-      .get("name")
-      .and_then(|v| v.as_str())
-      .unwrap_or("unknown")
-      .to_owned(),
-    org_id: org
-      .get("id")
-      .and_then(|v| v.as_str())
-      .unwrap_or("?")
-      .to_owned(),
-    dashboard_url: body
-      .get("dashboard_url")
-      .and_then(|v| v.as_str())
-      .map(|url| url.trim_end_matches('/').to_owned())
-      .filter(|url| !url.is_empty())
-      .context("server /me response has no dashboard_url")?,
+    org_name: me.org.name,
+    org_id: me.org.id.to_string(),
+    dashboard_url,
   })
 }
 
@@ -380,7 +372,7 @@ mod tests {
     let app = axum::Router::new().route(
       "/me",
       axum::routing::get(|| async {
-        axum::Json(serde_json::json!({"org": {"id": "o", "name": "acme"}}))
+        axum::Json(serde_json::json!({"org": {"id": "0190d8a4-0000-7000-8000-000000000002", "name": "acme"}}))
       }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

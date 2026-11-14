@@ -417,6 +417,19 @@ pub struct OrgRef {
   pub name: String,
 }
 
+/// `GET /me`'s answer: the caller's org and the server's dashboard origin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Me {
+  pub org: OrgRef,
+  pub dashboard_url: String,
+}
+
+/// `PUT /secrets/{key}`'s body: the secret's value, never echoed back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretValue {
+  pub value: String,
+}
+
 /// Every API error's body: `{error}`, plus a machine-readable `code` where
 /// clients branch on the kind of refusal (429s, the beta cap).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
