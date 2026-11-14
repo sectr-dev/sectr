@@ -1518,6 +1518,11 @@ mod tests {
         .unwrap()
         .is_none()
     );
+    // Still listed, as revoked: the server's bootstrap relies on this to
+    // leave a revoked bootstrap key alone.
+    let listed = registry.list_api_keys(org.id).await.unwrap();
+    let revoked = listed.iter().find(|k| k.id == created.id).unwrap();
+    assert!(revoked.revoked_at.is_some());
     assert!(matches!(
       registry
         .revoke_api_key(other.id, invocation.id)
