@@ -58,6 +58,8 @@ Each turn runs in a new container, as uid 1000, with CPU, memory and lifetime li
 
 There's one organization per install. To give more people access, make more keys in Settings.
 
+To rotate the key `setup.sh` printed, make a new platform key in Settings, revoke the key named `bootstrap`, then delete the `SECTR_BOOTSTRAP_PLATFORM_KEY` line from `.env` and run `docker compose up -d`. A revoked key stays revoked: until the line is gone, the server logs at each start that the key is revoked, and doesn't bring it back.
+
 ## On a remote machine: URLs and TLS
 
 Sectr doesn't terminate TLS. As with most self-hosted software, put a reverse proxy in front of it. There are two Sectr-specific steps.

@@ -188,6 +188,9 @@ impl Registry for EncryptedRegistry {
   async fn find_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
     self.inner.find_api_key_by_hash(key_hash).await
   }
+  async fn find_any_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
+    self.inner.find_any_api_key_by_hash(key_hash).await
+  }
   async fn api_key_is_live(&self, key_id: Uuid) -> Result<bool> {
     self.inner.api_key_is_live(key_id).await
   }

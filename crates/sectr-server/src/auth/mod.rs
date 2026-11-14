@@ -355,7 +355,9 @@ impl FromRequestParts<AppState> for InvocationPrincipal {
 }
 
 /// Bootstrap: register a pre-provisioned platform key (and the single MVP
-/// org) if not already present. Idempotent — safe on every start.
+/// org) if not already present. Idempotent: safe on every start. A key
+/// that was registered and then revoked stays revoked; the server logs it
+/// and starts without it.
 pub async fn ensure_bootstrap_key(
   state: &AppState,
   key_value: &str,
@@ -363,25 +365,32 @@ pub async fn ensure_bootstrap_key(
 ) -> anyhow::Result<()> {
   const ORG_SLUG: &str = "default";
   let key_hash = crate::auth::keys::hash(key_value);
-  if state
-    .registry()
-    .find_api_key_by_hash(&key_hash)
-    .await?
-    .is_some()
-  {
-    tracing::info!(org = %org_name, "bootstrap platform key already registered");
-    return Ok(());
-  }
 
-  // Single MVP org: fixed slug, env-configured name.
-  let org = match state.registry().find_org_by_slug(ORG_SLUG).await? {
-    Some(org) => org,
-    None => state.registry().create_org(org_name, ORG_SLUG).await?,
-  };
-  state
-    .registry()
-    .create_api_key(org.id, None, ApiKeyKind::Platform, "bootstrap", &key_hash)
-    .await?;
-  tracing::info!(org_id = %org.id, "bootstrap platform key registered");
+  // Look the key up in every org, revoked ones included: the hash is
+  // unique across the table, and `find_api_key_by_hash` only finds live
+  // keys, so it would read a revoked key as missing and insert it again.
+  match state.registry().find_any_api_key_by_hash(&key_hash).await? {
+    Some(key) if key.revoked_at.is_some() => {
+      tracing::warn!(
+        key_id = %key.id,
+        "the key in SECTR_BOOTSTRAP_PLATFORM_KEY is revoked; remove that line from the server's environment"
+      );
+    }
+    Some(_) => {
+      tracing::info!(org = %org_name, "bootstrap platform key already registered");
+    }
+    None => {
+      // Single MVP org: fixed slug, env-configured name.
+      let org = match state.registry().find_org_by_slug(ORG_SLUG).await? {
+        Some(org) => org,
+        None => state.registry().create_org(org_name, ORG_SLUG).await?,
+      };
+      state
+        .registry()
+        .create_api_key(org.id, None, ApiKeyKind::Platform, "bootstrap", &key_hash)
+        .await?;
+      tracing::info!(org_id = %org.id, "bootstrap platform key registered");
+    }
+  }
   Ok(())
 }
