@@ -366,21 +366,10 @@ pub async fn ensure_bootstrap_key(
   const ORG_SLUG: &str = "default";
   let key_hash = crate::auth::keys::hash(key_value);
 
-  // Single MVP org: fixed slug, env-configured name.
-  let org = match state.registry().find_org_by_slug(ORG_SLUG).await? {
-    Some(org) => org,
-    None => state.registry().create_org(org_name, ORG_SLUG).await?,
-  };
-  // Look the key up among all of the org's keys, revoked ones included:
-  // `find_api_key_by_hash` only finds live keys, and inserting a revoked
-  // key's hash again breaks the table's unique hash.
-  let existing = state
-    .registry()
-    .list_api_keys(org.id)
-    .await?
-    .into_iter()
-    .find(|k| k.key_hash == key_hash);
-  match existing {
+  // Look the key up in every org, revoked ones included: the hash is
+  // unique across the table, and `find_api_key_by_hash` only finds live
+  // keys, so it would read a revoked key as missing and insert it again.
+  match state.registry().find_any_api_key_by_hash(&key_hash).await? {
     Some(key) if key.revoked_at.is_some() => {
       tracing::warn!(
         key_id = %key.id,
@@ -391,6 +380,11 @@ pub async fn ensure_bootstrap_key(
       tracing::info!(org = %org_name, "bootstrap platform key already registered");
     }
     None => {
+      // Single MVP org: fixed slug, env-configured name.
+      let org = match state.registry().find_org_by_slug(ORG_SLUG).await? {
+        Some(org) => org,
+        None => state.registry().create_org(org_name, ORG_SLUG).await?,
+      };
       state
         .registry()
         .create_api_key(org.id, None, ApiKeyKind::Platform, "bootstrap", &key_hash)

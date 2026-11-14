@@ -614,6 +614,38 @@ async fn http_bootstraps_the_first_platform_key() {
   assert!(keys[0].revoked_at.is_some());
   let (status, _) = req(&app, "GET", "/me", Some(&bootstrap_key), None).await;
   assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+  // A bootstrap key held by an org other than `default` (the hash is
+  // unique across every org): found there, not inserted again.
+  let elsewhere = keys::mint(ApiKeyKind::Platform);
+  let acme = state.registry().create_org("acme", "acme").await.unwrap();
+  let held = state
+    .registry()
+    .create_api_key(
+      acme.id,
+      None,
+      ApiKeyKind::Platform,
+      "bootstrap",
+      &keys::hash(&elsewhere),
+    )
+    .await
+    .unwrap();
+  state
+    .registry()
+    .revoke_api_key(acme.id, held.id)
+    .await
+    .unwrap();
+  crate::auth::ensure_bootstrap_key(&state, &elsewhere, "sectr")
+    .await
+    .unwrap();
+  assert_eq!(
+    state.registry().list_api_keys(acme.id).await.unwrap().len(),
+    1
+  );
+  assert_eq!(
+    state.registry().list_api_keys(org.id).await.unwrap().len(),
+    1
+  );
 }
 
 // An app's frontend (any origin) calls the session API with a user

@@ -836,6 +836,59 @@ impl Registry for PgRegistry {
     Ok(())
   }
 
+  async fn find_any_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
+    let row: Option<(
+      Uuid,
+      Uuid,
+      Option<Uuid>,
+      String,
+      String,
+      String,
+      Option<String>,
+      Option<DateTime<Utc>>,
+      DateTime<Utc>,
+      Option<DateTime<Utc>>,
+      Option<DateTime<Utc>>,
+    )> = sqlx::query_as(
+      "SELECT id, org_id, app_id, kind, name, key_hash, external_user_id, expires_at, created_at, last_used_at, revoked_at \
+             FROM api_keys WHERE key_hash = $1",
+    )
+    .bind(key_hash)
+    .fetch_optional(&self.pool)
+    .await?;
+    row
+      .map(
+        |(
+          id,
+          org_id,
+          app_id,
+          kind,
+          name,
+          key_hash,
+          external_user_id,
+          expires_at,
+          created_at,
+          last_used_at,
+          revoked_at,
+        )| {
+          Ok(ApiKey {
+            id,
+            org_id,
+            app_id,
+            kind: serde_json::from_value(Value::String(kind))?,
+            name,
+            key_hash,
+            external_user_id,
+            expires_at,
+            created_at,
+            last_used_at,
+            revoked_at,
+          })
+        },
+      )
+      .transpose()
+  }
+
   async fn find_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
     // One atomic statement: stamp `last_used_at` and return the live row
     // (revoked keys update nothing -> None; expired user tokens likewise
@@ -2071,11 +2124,28 @@ mod tests {
         .unwrap()
         .is_none()
     );
-    // Still listed, as revoked: the server's bootstrap relies on this to
-    // leave a revoked bootstrap key alone.
-    let listed = registry.list_api_keys(org.id).await.unwrap();
-    let revoked = listed.iter().find(|k| k.id == created.id).unwrap();
+    // The any-state lookup still finds it, as revoked, without stamping
+    // it (the server's bootstrap relies on this to leave it alone).
+    let revoked = registry
+      .find_any_api_key_by_hash(platform_hash)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(revoked.id, created.id);
     assert!(revoked.revoked_at.is_some());
+    let again = registry
+      .find_any_api_key_by_hash(platform_hash)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(again.last_used_at, revoked.last_used_at);
+    assert!(
+      registry
+        .find_any_api_key_by_hash("hash-unknown")
+        .await
+        .unwrap()
+        .is_none()
+    );
     // Cross-org revoke is NotFound (other org doesn't own it).
     assert!(matches!(
       registry

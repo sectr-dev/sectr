@@ -586,6 +586,11 @@ pub trait Registry: Send + Sync {
   /// Auth lookup by SHA-256 of the presented key; stamps `last_used_at`.
   /// Returns None for unknown or revoked keys.
   async fn find_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>>;
+  /// The key with this hash in any org, live or not (revoked, expired).
+  /// Read-only: it doesn't stamp `last_used_at`. Not for auth; for
+  /// checking whether a hash is already taken (the hash is unique across
+  /// the table).
+  async fn find_any_api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>>;
   /// Is this key still live (exists, not revoked, not expired)? Read-only
   /// — unlike [`Self::find_api_key_by_hash`] it does not stamp
   /// `last_used_at`. Used to end long-lived streams.
