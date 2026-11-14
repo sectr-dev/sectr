@@ -498,7 +498,7 @@ impl Renderer {
       EventPayload::ToolCall(c) => {
         self.line(&mut out, &format!("→ {} {}", c.name, trunc(&c.arguments)));
       }
-      EventPayload::ToolResult(r) => self.line(&mut out, &format!("← {}", trunc(&r.result))),
+      EventPayload::ToolResult(r) => self.line(&mut out, &format!("← {}", result_text(&r.result))),
       // The stream loop says it's paused, on stderr.
       EventPayload::ToolApprovalRequired(_) => self.end_line(&mut out),
       EventPayload::ToolApprovalGranted(_) => self.line(&mut out, "✓ approved"),
@@ -543,14 +543,28 @@ fn render_step(event: &Event) -> Step {
   }
 }
 
+/// A tool result as one line. A string prints as its text, not as a JSON
+/// string: adapters journal results as the text the model saw (a dict
+/// tool's result is its JSON text), so quoting it would escape every `"`.
+/// Its newlines print as `\n` to keep it on one line.
+fn result_text(v: &serde_json::Value) -> String {
+  match v {
+    serde_json::Value::String(s) => trunc_str(&s.replace('\n', "\\n")),
+    other => trunc(other),
+  }
+}
+
 fn trunc(v: &serde_json::Value) -> String {
-  let s = v.to_string();
+  trunc_str(&v.to_string())
+}
+
+fn trunc_str(s: &str) -> String {
   let chars: Vec<char> = s.chars().collect();
   if chars.len() > 120 {
     let head: String = chars.iter().take(120).collect();
     format!("{head}…")
   } else {
-    s
+    s.to_owned()
   }
 }
 
@@ -756,11 +770,31 @@ It shipped.
 → refund {\"order_id\":\"42\"}
 ✓ approved
 · resumed: approved by sectr send
-← \"refunded\"
+← refunded
 Refunded.
 ✓ turn complete
 "
     );
+  }
+
+  #[test]
+  fn a_string_result_prints_as_its_text() {
+    // What the Pydantic AI adapter journals for a dict-returning tool.
+    let journaled = serde_json::Value::String(r#"{"order_id":"42","status":"shipped"}"#.into());
+    assert_eq!(
+      result_text(&journaled),
+      r#"{"order_id":"42","status":"shipped"}"#
+    );
+    assert_eq!(
+      result_text(&"line one\nline two".into()),
+      r"line one\nline two"
+    );
+    assert_eq!(
+      result_text(&"x".repeat(121).into()),
+      format!("{}…", "x".repeat(120))
+    );
+    // A non-string result still prints as JSON.
+    assert_eq!(result_text(&serde_json::Value::Null), "null");
   }
 
   /// A stub `POST /sessions` answering each request from `answers` in
