@@ -4,6 +4,8 @@
 
 use std::net::SocketAddr;
 
+use sectr_common::usage_ping::{self, EnvSwitch};
+
 pub use crate::limits::LimitsConfig;
 
 #[derive(Debug, Clone)]
@@ -204,6 +206,14 @@ pub struct ServerConfig {
   /// PostHog ingest host (`SECTR_POSTHOG_HOST`, default the US cloud) —
   /// point at `https://eu.i.posthog.com` or a self-hosted instance.
   pub posthog_host: String,
+
+  /// Whether this server sends the anonymous usage ping (`usage_ping.rs`):
+  /// on unless `SECTR_TELEMETRY` is `off`/`false`/`0`/`no` or `DO_NOT_TRACK`
+  /// is set. Any other `SECTR_TELEMETRY` value is a startup error.
+  pub usage_pings: bool,
+
+  /// Where usage pings go (`SECTR_TELEMETRY_URL`, default Sectr's collector).
+  pub usage_ping_url: String,
 
   /// Discord webhook that gets a message per new account
   /// (`SECTR_SIGNUP_WEBHOOK_URL`; see `signup::SignupNotifier`). Optional:
@@ -580,6 +590,19 @@ impl ArtifactBackend {
   }
 }
 
+/// Whether usage pings are on, from what the environment says. A value that
+/// is neither on nor off fails startup: a typo in a privacy switch must not
+/// leave pings on.
+fn usage_pings_from(switch: EnvSwitch) -> anyhow::Result<bool> {
+  match switch {
+    EnvSwitch::Unset => Ok(true),
+    EnvSwitch::Off(_) => Ok(false),
+    EnvSwitch::Invalid(value) => {
+      anyhow::bail!("{}={value:?} is not on or off", usage_ping::SWITCH_ENV)
+    }
+  }
+}
+
 impl ServerConfig {
   pub fn from_env() -> anyhow::Result<Self> {
     let pg_url = std::env::var("SECTR_PG_URL")
@@ -671,6 +694,8 @@ impl ServerConfig {
         .ok()
         .filter(|h| !h.trim().is_empty())
         .unwrap_or_else(|| "https://us.i.posthog.com".into()),
+      usage_pings: usage_pings_from(usage_ping::env_switch(usage_ping::process_env))?,
+      usage_ping_url: usage_ping::url(usage_ping::process_env),
       signup_webhook_url: std::env::var("SECTR_SIGNUP_WEBHOOK_URL")
         .ok()
         .map(|u| u.trim().to_owned())
@@ -1199,6 +1224,28 @@ mod tests {
   fn platform_env_parses_e2b() {
     // from_env is private; the enum mapping is pinned via as_str.
     assert_eq!(PlatformKind::E2b.as_str(), "e2b");
+  }
+
+  #[test]
+  fn usage_pings_are_on_unless_switched_off() {
+    let from = |vars: &[(&str, &str)]| {
+      usage_pings_from(usage_ping::env_switch(|name| {
+        vars
+          .iter()
+          .find(|(k, _)| *k == name)
+          .map(|(_, v)| (*v).to_owned())
+      }))
+    };
+    assert!(from(&[]).unwrap());
+    assert!(from(&[("SECTR_TELEMETRY", "on")]).unwrap());
+    assert!(!from(&[("SECTR_TELEMETRY", "off")]).unwrap());
+    assert!(!from(&[("DO_NOT_TRACK", "1")]).unwrap());
+    assert_eq!(
+      from(&[("SECTR_TELEMETRY", "bogus")])
+        .unwrap_err()
+        .to_string(),
+      r#"SECTR_TELEMETRY="bogus" is not on or off"#
+    );
   }
 
   #[test]

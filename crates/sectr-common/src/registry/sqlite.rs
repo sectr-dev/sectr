@@ -1028,6 +1028,22 @@ impl Registry for SqliteRegistry {
     .await?;
     Ok(rows.into_iter().map(Self::lease).collect())
   }
+
+  async fn server_install_id(&self) -> Result<Uuid> {
+    sqlx::query(
+      "INSERT OR IGNORE INTO server_instance (singleton, install_id, created_at) \
+           VALUES (1, ?, ?)",
+    )
+    .bind(crate::usage_ping::new_install_id())
+    .bind(Utc::now())
+    .execute(&self.pool)
+    .await?;
+    Ok(
+      sqlx::query_scalar("SELECT install_id FROM server_instance")
+        .fetch_one(&self.pool)
+        .await?,
+    )
+  }
 }
 
 /// `(live leases of app_id, live leases platform-wide)`, of one kind
@@ -1212,6 +1228,27 @@ mod tests {
       &registry, &journal, org.id,
     )
     .await;
+  }
+
+  #[tokio::test]
+  async fn server_install_id_is_created_once() {
+    let (registry, ..) = registry().await;
+    let rows = || async {
+      sqlx::query_scalar::<_, i64>("SELECT count(*) FROM server_instance")
+        .fetch_one(&registry.pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(rows().await, 0, "no id until something asks for one");
+
+    let first = registry.server_install_id().await.unwrap();
+    assert_eq!(
+      first.get_version_num(),
+      4,
+      "random, with no timestamp in it"
+    );
+    assert_eq!(registry.server_install_id().await.unwrap(), first);
+    assert_eq!(rows().await, 1);
   }
 
   #[tokio::test]

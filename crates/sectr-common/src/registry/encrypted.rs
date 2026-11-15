@@ -197,6 +197,9 @@ impl Registry for EncryptedRegistry {
   async fn purge_expired_keys(&self, expired_before: DateTime<Utc>) -> Result<u64> {
     self.inner.purge_expired_keys(expired_before).await
   }
+  async fn server_install_id(&self) -> Result<Uuid> {
+    self.inner.server_install_id().await
+  }
   async fn create_user_token(
     &self,
     org_id: Uuid,

@@ -114,6 +114,8 @@ fn test_config() -> ServerConfig {
     platform: crate::config::PlatformKind::Docker,
     posthog_key: None,
     posthog_host: "https://us.i.posthog.com".into(),
+    usage_pings: false,
+    usage_ping_url: String::new(),
     signup_webhook_url: None,
     clerk: None,
     limits: crate::limits::LimitsConfig::none(),

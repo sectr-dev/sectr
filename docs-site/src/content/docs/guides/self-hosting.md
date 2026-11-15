@@ -119,6 +119,7 @@ These go in `.env`. Apply changes with `docker compose up -d`.
 | `SECTR_ENDPOINT_ALLOW_PRIVATE` | `false` | Allows endpoints on private addresses and plain `http`, for endpoints on your own network |
 | `SECTR_ENDPOINT_WAKE_DEADLINE_SECS` | `60` | How long an endpoint has to start a turn, cold start included. 5 to 90 |
 | `SECTR_ENDPOINT_TURN_TIMEOUT_SECS` | `3600` | The longest the server holds a turn's request to an endpoint open |
+| `SECTR_TELEMETRY` | On | Set to `off` to turn off the server's anonymous [usage ping](/reference/telemetry/): its version and a random install id, once a day |
 
 The defaults for `SECTR_MAX_CONCURRENT_SANDBOX_TURNS` and the runner limits allow up to 10 CPUs and 10 GB at once, so lower them on a smaller machine. A turn that would go over the limit is refused, and a client can retry it.
 
@@ -157,4 +158,6 @@ Remove old ones with `docker rmi` or `docker image prune`. If you remove the ima
 
 ## What it sends to Sectr
 
-Nothing. A self-hosted install has no telemetry: the server and dashboard contact no Sectr service. The CLI's `sectr dev` does fetch a TLS certificate for `local.sectr.dev`, and without a login it opens the hosted dashboard, where the page comes from Sectr but your browser talks only to your machine.
+One thing: an anonymous [usage ping](/reference/telemetry/). Once a day the server sends its version and a random install id, so we can count self-hosted servers by version. Nothing about your apps, sessions, users or machine is in it, and the server logs a line when it starts that says whether pings are on. To turn it off, set `SECTR_TELEMETRY=off` in `.env` and run `docker compose up -d`.
+
+Apart from that, the server and dashboard contact no Sectr service. The CLI sends the same kind of ping, which `sectr telemetry off` turns off. The CLI's `sectr dev` also fetches a TLS certificate for `local.sectr.dev`, and without a login it opens the hosted dashboard, where the page comes from Sectr but your browser talks only to your machine.

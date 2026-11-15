@@ -61,6 +61,8 @@ fn test_config(lease_ttl_secs: u64) -> crate::config::ServerConfig {
     platform: crate::config::PlatformKind::Docker,
     posthog_key: None,
     posthog_host: "https://us.i.posthog.com".into(),
+    usage_pings: false,
+    usage_ping_url: String::new(),
     signup_webhook_url: None,
     clerk: None,
     limits: crate::limits::LimitsConfig::none(),
@@ -1854,6 +1856,8 @@ async fn server_restart_durability_end_to_end() {
       )
       // Short TTL: leg 3's reclaim must fit the test budget.
       .env("SECTR_LEASE_TTL_SECS", "3")
+      // A test server isn't an install: no anonymous usage ping.
+      .env("SECTR_TELEMETRY", "off")
       .env("RUST_LOG", "warn")
       .stdout(std::process::Stdio::null())
       .stderr(log)

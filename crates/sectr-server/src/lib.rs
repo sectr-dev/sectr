@@ -28,6 +28,7 @@ pub mod secrets;
 pub mod sessions;
 pub mod signup;
 pub mod state;
+pub mod usage_ping;
 
 #[cfg(test)]
 pub mod test_pg;
