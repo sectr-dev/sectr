@@ -4,6 +4,10 @@
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+# No anonymous usage pings from the repo's own scripts: a build, smoke test or
+# release isn't someone using Sectr.
+export SECTR_TELEMETRY=off
+
 die() { echo "error: $*" >&2; exit 1; }
 log() { echo "==> $*" >&2; }
 

@@ -21,6 +21,7 @@ mod init;
 mod secrets;
 mod send;
 mod tail;
+mod telemetry;
 
 use clap::{Parser, Subcommand};
 
@@ -54,53 +55,37 @@ enum Commands {
   Deploy(deploy::DeployArgs),
   /// Manage the app's server-side secrets (write-only: set/list/rm).
   Secrets(secrets::SecretsArgs),
+  /// Anonymous usage pings: turn them on or off, or see exactly what one
+  /// sends (on/off/status).
+  Telemetry(telemetry::TelemetryArgs),
 }
 
 #[tokio::main]
 async fn main() {
   let cli = Cli::parse();
-  match cli.command {
-    Commands::Auth(args) => {
-      if let Err(e) = auth_cmd::run_auth(args).await {
-        eprintln!("sectr auth: {e:#}");
-        std::process::exit(1);
-      }
-    }
-    Commands::Init(args) => {
-      if let Err(e) = init::run_init(args).await {
-        eprintln!("sectr init: {e:#}");
-        std::process::exit(1);
-      }
-    }
-    Commands::Dev(args) => {
-      if let Err(e) = dev::run_dev(args).await {
-        eprintln!("sectr dev: {e:#}");
-        std::process::exit(1);
-      }
-    }
-    Commands::Send(args) => {
-      if let Err(e) = send::run_send(args).await {
-        eprintln!("sectr send: {e:#}");
-        std::process::exit(1);
-      }
-    }
-    Commands::Tail(args) => {
-      if let Err(e) = tail::run_tail(args).await {
-        eprintln!("sectr tail: {e:#}");
-        std::process::exit(1);
-      }
-    }
-    Commands::Deploy(args) => {
-      if let Err(e) = deploy::run_deploy(args).await {
-        eprintln!("sectr deploy: {e:#}");
-        std::process::exit(1);
-      }
-    }
-    Commands::Secrets(args) => {
-      if let Err(e) = secrets::run_secrets(args).await {
-        eprintln!("sectr secrets: {e:#}");
-        std::process::exit(1);
-      }
-    }
+  // The anonymous usage ping, when one is due, goes out while the command
+  // runs. `sectr telemetry` itself never pings.
+  let ping = match &cli.command {
+    Commands::Telemetry(_) => None,
+    _ => telemetry::prepare().map(telemetry::spawn),
+  };
+  let (name, result) = match cli.command {
+    Commands::Auth(args) => ("auth", auth_cmd::run_auth(args).await),
+    Commands::Init(args) => ("init", init::run_init(args).await),
+    Commands::Dev(args) => ("dev", dev::run_dev(args).await),
+    Commands::Send(args) => ("send", send::run_send(args).await),
+    Commands::Tail(args) => ("tail", tail::run_tail(args).await),
+    Commands::Deploy(args) => ("deploy", deploy::run_deploy(args).await),
+    Commands::Secrets(args) => ("secrets", secrets::run_secrets(args).await),
+    Commands::Telemetry(args) => ("telemetry", telemetry::run_telemetry(args)),
+  };
+  // One exit point, after the ping had its moment: exiting inside an arm
+  // would cut it off.
+  if let Some(ping) = ping {
+    ping.finish().await;
+  }
+  if let Err(e) = result {
+    eprintln!("sectr {name}: {e:#}");
+    std::process::exit(1);
   }
 }

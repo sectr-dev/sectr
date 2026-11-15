@@ -6,6 +6,10 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# No anonymous usage pings from anything a recipe runs, which covers CI: both
+# workflows run only through `just`. A check run isn't someone using Sectr.
+export SECTR_TELEMETRY := "off"
+
 # Base ref that path-aware checks diff against (CI overrides per event).
 base := env_var_or_default("CHECK_BASE", "origin/main")
 pg_bin := `ls -d /opt/homebrew/opt/postgresql@16/bin /usr/local/opt/postgresql@16/bin /usr/lib/postgresql/*/bin 2>/dev/null | head -1 || true`

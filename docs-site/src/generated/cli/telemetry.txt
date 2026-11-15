@@ -1,0 +1,12 @@
+Anonymous usage pings: turn them on or off, or see exactly what one sends (on/off/status)
+
+Usage: sectr telemetry <COMMAND>
+
+Commands:
+  on      Turn usage pings on, with a new install id
+  off     Turn usage pings off and delete the install id
+  status  Show whether usage pings are on, and exactly what one sends
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help

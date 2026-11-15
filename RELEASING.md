@@ -3,6 +3,10 @@
 Human runbook for checks and releases. CI logic
 lives in the `justfile`; GitHub workflows are thin wrappers around it.
 
+The `justfile` and `scripts/lib.sh` export `SECTR_TELEMETRY=off`, so nothing a
+recipe or release script runs sends an anonymous usage ping. CI runs only
+through `just`, which keeps it silent too.
+
 > Releases are cut from the dev machine
 > with `just release`; GitHub runs only the light `ci.yml` (`just check`), the
 > advisory `release-check.yml` on `release/**` branches. There are no release or deploy workflows in `.github/`.
