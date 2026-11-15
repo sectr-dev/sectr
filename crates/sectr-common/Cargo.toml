@@ -31,6 +31,9 @@ opentelemetry-appender-tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+# Anonymous usage pings (usage_ping): the CLI and the server send them
+# through this crate.
+reqwest.workspace = true
 bollard = { version = "0.19", default-features = false, features = ["chrono", "pipe"] }
 # GCS-backed ArtifactStore. Off by default so the
 # standard workspace build gains no GCP dependency weight; enable with
@@ -47,8 +50,5 @@ gcs = ["dep:google-cloud-storage", "dep:google-cloud-auth", "dep:bytes"]
 libc = "0.2"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-# Bucket setup for the fake-gcs-server tests (JSON API; the StorageControl
-# client defaults to gRPC, which the emulator doesn't speak).
-reqwest.workspace = true
 pgtemp = "0.7.1"
 libc = "0.2"

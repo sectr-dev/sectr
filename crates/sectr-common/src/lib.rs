@@ -15,6 +15,8 @@
 //! - [`registry`] — the relational model: all non-event tables of
 //!   `schema/data-model.sql` (sessions, deployments, leases, …). Consumed by
 //!   the server-role layer only.
+//! - [`usage_ping`] — the anonymous usage ping the CLI and the server send,
+//!   and the rule that turns it off.
 
 #![cfg_attr(
   test,
@@ -40,6 +42,7 @@ pub mod secret_cipher;
 pub mod sidecar;
 pub mod store;
 pub mod telemetry;
+pub mod usage_ping;
 
 #[cfg(test)]
 pub(crate) mod test_pg;

@@ -48,6 +48,7 @@ const COMMANDS = [
     ["secrets-set", ["secrets", "set"]],
     ["secrets-list", ["secrets", "list"]],
     ["secrets-rm", ["secrets", "rm"]],
+    ["telemetry", ["telemetry"]],
 ];
 
 execFileSync("cargo", ["build", "-p", "sectr-cli"], {

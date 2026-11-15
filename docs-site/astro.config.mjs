@@ -127,7 +127,13 @@ export default defineConfig({
                 {
                     label: "CLI reference",
                     collapsed: false,
-                    items: [{ label: "Commands", link: "/reference/cli/" }],
+                    items: [
+                        { label: "Commands", link: "/reference/cli/" },
+                        {
+                            label: "Usage pings",
+                            link: "/reference/telemetry/",
+                        },
+                    ],
                 },
                 {
                     label: "SDK reference",

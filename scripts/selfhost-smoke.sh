@@ -102,6 +102,8 @@ done
 cargo build -q -p sectr-cli
 sectr="${CARGO_TARGET_DIR:-$root/target}/debug/sectr"
 export XDG_CONFIG_HOME="$tmp/cli-config"
+# No anonymous usage pings from the smoke's CLI: a test run isn't an install.
+export SECTR_TELEMETRY=off
 unset SECTR_API_URL SECTR_PLATFORM_KEY SECTR_DASHBOARD_URL
 
 # --- A stack from what a user gets ------------------------------------------

@@ -38,15 +38,22 @@ pub struct Credentials {
   pub dashboard: String,
 }
 
-fn credentials_path() -> anyhow::Result<PathBuf> {
+/// The CLI's config directory: `$XDG_CONFIG_HOME/sectr`, else
+/// `~/.config/sectr`. Holds the credentials and the usage ping state.
+pub fn config_dir() -> anyhow::Result<PathBuf> {
   let base = match std::env::var("XDG_CONFIG_HOME") {
     Ok(dir) => PathBuf::from(dir),
     Err(_) => {
-      let home = std::env::var("HOME").context("no HOME — cannot locate credentials")?;
+      let home =
+        std::env::var("HOME").context("no HOME — cannot locate the sectr config directory")?;
       PathBuf::from(home).join(".config")
     }
   };
-  Ok(base.join("sectr").join("credentials.toml"))
+  Ok(base.join("sectr"))
+}
+
+fn credentials_path() -> anyhow::Result<PathBuf> {
+  Ok(config_dir()?.join("credentials.toml"))
 }
 
 /// Load stored credentials, if any (missing file = None; malformed file
