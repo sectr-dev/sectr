@@ -1106,6 +1106,24 @@ impl Registry for PgRegistry {
     .await?;
     Ok(rows.into_iter().map(Self::lease).collect())
   }
+
+  async fn server_install_id(&self) -> Result<Uuid> {
+    // Insert-if-absent, then read: two servers starting at once both insert,
+    // one row wins, and both read the winner.
+    sqlx::query(
+      "INSERT INTO server_instance (singleton, install_id, created_at) \
+           VALUES (true, $1, $2) ON CONFLICT (singleton) DO NOTHING",
+    )
+    .bind(crate::usage_ping::new_install_id())
+    .bind(now())
+    .execute(&self.pool)
+    .await?;
+    Ok(
+      sqlx::query_scalar("SELECT install_id FROM server_instance")
+        .fetch_one(&self.pool)
+        .await?,
+    )
+  }
 }
 
 /// Advisory-lock key (two-int form) serializing capped lease claims.
@@ -1590,6 +1608,35 @@ mod tests {
       .await
       .unwrap();
     Some((registry, org, app, deployment))
+  }
+
+  #[tokio::test]
+  async fn server_install_id_is_created_once() {
+    let Some((registry, ..)) = registry().await else {
+      eprintln!("skipping: no test Postgres (initdb not on PATH)");
+      return;
+    };
+    let rows = || async {
+      sqlx::query_scalar::<_, i64>("SELECT count(*) FROM server_instance")
+        .fetch_one(&registry.pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(rows().await, 0, "no id until something asks for one");
+
+    // Servers starting at once on one database all get the same id.
+    let ids = futures::future::join_all((0..8).map(|_| registry.server_install_id())).await;
+    let first = *ids[0].as_ref().unwrap();
+    assert_eq!(
+      first.get_version_num(),
+      4,
+      "random, with no timestamp in it"
+    );
+    for id in ids {
+      assert_eq!(id.unwrap(), first);
+    }
+    assert_eq!(registry.server_install_id().await.unwrap(), first);
+    assert_eq!(rows().await, 1);
   }
 
   #[tokio::test]

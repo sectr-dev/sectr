@@ -31,6 +31,7 @@ pub const SQLITE_MIGRATIONS: &[(i64, &str)] = &[
   (8, include_str!("sqlite/0008_cli_logins.sql")),
   (9, include_str!("sqlite/0009_endpoint_deployments.sql")),
   (10, include_str!("sqlite/0010_events_turn_starts.sql")),
+  (11, include_str!("sqlite/0011_server_instance.sql")),
 ];
 
 /// The ordered Postgres migration set: `(version, sql)` — a verbatim port of
@@ -47,6 +48,7 @@ pub const POSTGRES_MIGRATIONS: &[(i64, &str)] = &[
   (8, include_str!("postgres/0008_cli_logins.sql")),
   (9, include_str!("postgres/0009_endpoint_deployments.sql")),
   (10, include_str!("postgres/0010_events_turn_starts.sql")),
+  (11, include_str!("postgres/0011_server_instance.sql")),
 ];
 
 /// Checksums of migrations from before their leading comments were reworded.

@@ -679,4 +679,13 @@ pub trait Registry: Send + Sync {
   /// reconciler's scan input — the server-role layer consumes these to
   /// synthesize abandoned-turn ends; the engine never scans.
   async fn expired_leases(&self) -> Result<Vec<Lease>>;
+
+  // -- this server -------------------------------------------------------
+
+  /// This server's random install id for anonymous usage pings
+  /// ([`crate::usage_ping`]): created on the first call, and the same on
+  /// every call after. Servers sharing a database share one id, and
+  /// concurrent first calls all get the one that was stored. Only the ping
+  /// task calls this, so a server with pings off never creates an id.
+  async fn server_install_id(&self) -> Result<Uuid>;
 }

@@ -122,6 +122,8 @@ SECTR_SERVER_PORT=127.0.0.1:$server_port
 SECTR_DASHBOARD_PORT=127.0.0.1:$dashboard_port
 SECTR_PUBLIC_API_URL=http://localhost:$server_port
 SECTR_DASHBOARD_URL=http://localhost:$dashboard_port
+# The smoke's server isn't an install: no anonymous usage ping.
+SECTR_TELEMETRY=off
 ENV
 }
 

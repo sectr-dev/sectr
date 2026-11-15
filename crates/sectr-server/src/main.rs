@@ -255,6 +255,17 @@ async fn serve() -> anyhow::Result<()> {
     state.pg_registry().cloned(),
   ));
 
+  // The anonymous usage ping (docs: reference/telemetry): the version and a
+  // random install id, once a day. Logs whether it's on. SECTR_TELEMETRY=off
+  // or DO_NOT_TRACK turns it off.
+  tokio::spawn(sectr_server::usage_ping::run(
+    registry.clone(),
+    config.usage_pings,
+    config.usage_ping_url.clone(),
+    sectr_server::usage_ping::FIRST_PING_DELAY,
+    sectr_server::usage_ping::PING_INTERVAL,
+  ));
+
   // Bootstrap the first platform key out-of-band (idempotent; skip when
   // unset — keys can then only come from direct DB provisioning).
   if let Some(key) = &config.bootstrap_platform_key {
