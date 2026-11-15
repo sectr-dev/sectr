@@ -383,6 +383,10 @@ impl RunsOn {
   }
 }
 
+/// Where a new project's output points people with questions: a redirect to
+/// the current Discord invite, so an invite can change without a release.
+const DISCORD_URL: &str = "https://sectr.dev/discord";
+
 /// Entry point.
 pub async fn run_init(args: InitArgs) -> anyhow::Result<()> {
   run_init_in(&std::env::current_dir()?, args).await
@@ -575,6 +579,8 @@ async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
     let from = (frontend == Frontend::CopilotKit).then_some(agent_cd.as_str());
     crate::endpoint::print_next_steps(platform, &name, from);
   }
+  println!();
+  println!("Questions or feedback? Join the Sectr Discord: {DISCORD_URL}");
   Ok(())
 }
 

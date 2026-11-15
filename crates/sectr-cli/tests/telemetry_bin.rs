@@ -91,7 +91,6 @@ impl Machine {
 }
 
 const NOTICE: &str = "Sectr sends an anonymous usage ping at most once a day";
-const DISCORD: &str = "Join the Sectr Discord: https://sectr.dev/discord";
 
 fn install_id(path: &Path) -> String {
   let state: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -106,7 +105,6 @@ async fn a_fresh_install_pings_once_on_its_second_command() {
   // Run 1: the notice, and no ping.
   let (stderr, _) = machine.command(&[]).await;
   assert!(stderr.contains(NOTICE), "{stderr}");
-  assert!(stderr.contains(DISCORD), "{stderr}");
   assert!(
     seen.lock().unwrap().is_empty(),
     "the notice run sends nothing"
@@ -116,7 +114,6 @@ async fn a_fresh_install_pings_once_on_its_second_command() {
   // Run 2: one ping, with this binary's version and the id from the file.
   let (stderr, _) = machine.command(&[]).await;
   assert!(!stderr.contains(NOTICE), "the notice shows once: {stderr}");
-  assert!(!stderr.contains(DISCORD), "so does the Discord: {stderr}");
   assert_eq!(
     *seen.lock().unwrap(),
     vec![serde_json::json!({
@@ -139,7 +136,6 @@ async fn an_off_switch_sends_nothing_and_creates_no_file() {
     for _ in 0..2 {
       let (stderr, _) = machine.command(&[switch]).await;
       assert!(!stderr.contains(NOTICE), "{stderr}");
-      assert!(!stderr.contains(DISCORD), "{stderr}");
     }
     assert!(!machine.state_file().exists(), "{switch:?}");
   }
