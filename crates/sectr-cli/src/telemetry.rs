@@ -223,6 +223,18 @@ fn notice() -> String {
   )
 }
 
+/// The notice as printed: dark grey on a terminal, because it's background
+/// next to what the command itself prints, then a blank line to set it
+/// apart from that output.
+fn notice_block(color: bool) -> String {
+  use crossterm::style::Stylize as _;
+  if color {
+    format!("{}\n\n", notice().dark_grey())
+  } else {
+    format!("{}\n\n", notice())
+  }
+}
+
 fn state_path() -> anyhow::Result<PathBuf> {
   Ok(crate::auth::config_dir()?.join(FILE_NAME))
 }
@@ -267,7 +279,10 @@ pub fn prepare(quiet: bool) -> Option<PendingPing> {
       None
     }
     Decision::Notice => {
-      eprintln!("{}", notice());
+      use std::io::IsTerminal as _;
+      let color = std::io::stderr().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+      eprint!("{}", notice_block(color));
       None
     }
     Decision::Ping { install_id, wait } => Some(PendingPing {
@@ -728,6 +743,14 @@ mod tests {
       "{file_off}"
     );
     assert!(file_off.contains("Nothing is sent."), "{file_off}");
+  }
+
+  #[test]
+  fn the_notice_is_set_apart_by_a_blank_line() {
+    assert_eq!(notice_block(false), format!("{}\n\n", notice()));
+    let grey = notice_block(true);
+    assert!(grey.contains(&notice()), "{grey:?}");
+    assert!(grey.ends_with("\n\n"), "{grey:?}");
   }
 
   #[test]
