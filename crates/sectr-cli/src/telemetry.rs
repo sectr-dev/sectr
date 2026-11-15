@@ -361,10 +361,7 @@ pub fn run_telemetry(args: TelemetryArgs) -> anyhow::Result<()> {
       println!("Usage pings are off.");
     }
     TelemetryCommand::Status => {
-      print!(
-        "{}",
-        status(&path, &switch, &usage_ping::url(usage_ping::process_env))
-      );
+      print!("{}", status(&path, &switch));
     }
   }
   Ok(())
@@ -390,7 +387,7 @@ struct PingPreview<'a> {
 
 /// The text of `sectr telemetry status`. Reads the state file and writes
 /// nothing.
-fn status(path: &Path, switch: &EnvSwitch, url: &str) -> String {
+fn status(path: &Path, switch: &EnvSwitch) -> String {
   let loaded = load(path);
   let (on, why) = match (&loaded, env_off_reason(switch)) {
     (_, Some(reason)) => (false, reason),
@@ -408,7 +405,7 @@ fn status(path: &Path, switch: &EnvSwitch, url: &str) -> String {
     _ => None,
   };
   let mut out = format!(
-    "Usage pings are {} ({why}).\nCollector: {url}\n",
+    "Usage pings are {} ({why}).\n\n",
     if on { "on" } else { "off" }
   );
   let body = match install_id {
@@ -421,15 +418,15 @@ fn status(path: &Path, switch: &EnvSwitch, url: &str) -> String {
   }
   .unwrap_or_default();
   out.push_str(match (on, install_id) {
-    (true, Some(_)) => "A ping sends exactly this, at most once a day:\n",
+    (true, Some(_)) => "A ping sends exactly this, at most once per day:\n",
     (true, None) => {
-      "No install id yet: the next command creates one. A ping sends exactly this, at most once a \
-       day:\n"
+      "No install id yet: the next command creates one. A ping sends exactly this, at most once \
+       per day:\n"
     }
     (false, _) => "Nothing is sent. With pings on, one would send exactly this:\n",
   });
   out.push_str(&body);
-  out.push_str(&format!("\nDetails: {}\n", usage_ping::DOCS_URL));
+  out.push_str(&format!("\n\nDetails: {}\n", usage_ping::DOCS_URL));
   out
 }
 
@@ -703,11 +700,14 @@ mod tests {
   #[test]
   fn status_says_why_and_shows_the_body() {
     let (_dir, path) = dir();
-    let url = usage_ping::DEFAULT_URL;
 
-    let fresh = status(&path, &EnvSwitch::Unset, url);
+    let fresh = status(&path, &EnvSwitch::Unset);
     assert!(
-      fresh.starts_with("Usage pings are on (the default).\n"),
+      fresh.starts_with("Usage pings are on (the default).\n\nNo install id yet"),
+      "{fresh}"
+    );
+    assert!(
+      fresh.ends_with("}\n\nDetails: https://docs.sectr.dev/reference/telemetry/\n"),
       "{fresh}"
     );
     assert!(fresh.contains("No install id yet"), "{fresh}");
@@ -715,8 +715,11 @@ mod tests {
 
     store(&path, &State::on()).unwrap();
     let id = state(&path).install_id.unwrap();
-    let on = status(&path, &EnvSwitch::Unset, url);
-    assert!(on.contains(&format!("Collector: {url}\n")), "{on}");
+    let on = status(&path, &EnvSwitch::Unset);
+    assert!(
+      on.contains("A ping sends exactly this, at most once per day:\n{"),
+      "{on}"
+    );
     let start = on.find('{').unwrap();
     let end = on.rfind('}').unwrap();
     let body: serde_json::Value = serde_json::from_str(&on[start..=end]).unwrap();
@@ -729,15 +732,15 @@ mod tests {
       })
     );
 
-    let env_off = status(&path, &EnvSwitch::Off(usage_ping::DO_NOT_TRACK_ENV), url);
+    let env_off = status(&path, &EnvSwitch::Off(usage_ping::DO_NOT_TRACK_ENV));
     assert!(
-      env_off.starts_with("Usage pings are off (DO_NOT_TRACK is set).\n"),
+      env_off.starts_with("Usage pings are off (DO_NOT_TRACK is set).\n\n"),
       "{env_off}"
     );
     assert!(env_off.contains("Nothing is sent."), "{env_off}");
 
     store(&path, &State::off()).unwrap();
-    let file_off = status(&path, &EnvSwitch::Unset, url);
+    let file_off = status(&path, &EnvSwitch::Unset);
     assert!(
       file_off.starts_with("Usage pings are off (turned off in "),
       "{file_off}"

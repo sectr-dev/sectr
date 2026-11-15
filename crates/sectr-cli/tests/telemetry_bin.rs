@@ -199,7 +199,6 @@ async fn the_telemetry_command_and_version_never_ping() {
     stdout.starts_with("Usage pings are on (the default)."),
     "{stdout}"
   );
-  assert!(stdout.contains(&format!("Collector: {url}")), "{stdout}");
   assert!(!machine.state_file().exists(), "status writes nothing");
 
   // `on` makes the id, so the next real command would ping, but `status`
