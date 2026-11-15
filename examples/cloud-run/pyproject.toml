@@ -1,0 +1,10 @@
+[project]
+name = "cloud-run"
+version = "0.1.0"
+description = "Sectr agent: cloud-run"
+requires-python = ">=3.12"
+dependencies = [
+    "sectr[pydantic-ai]>=0.2.3",
+    # OpenAIChatModel for the real-model path
+    "pydantic-ai-slim[openai] >= 2.54",
+]

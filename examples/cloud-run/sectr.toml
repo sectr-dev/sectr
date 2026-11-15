@@ -1,0 +1,10 @@
+[app]
+name = "cloud-run"
+
+[agent]
+entry = "app:app"
+python = "3.12"
+
+[deploy]
+# Your compute endpoint's URL, once the image is deployed: `sectr deploy` registers it.
+endpoint = ""
