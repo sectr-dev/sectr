@@ -15,7 +15,7 @@ members = [
 # sdk-python/pyproject.toml and dashboard/package.json and --check guards
 # drift in CI. Release = `scripts/set-version.sh <ver>`, commit, tag `v<ver>`
 # (the tag drives the cargo-dist CLI release).
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/sectr-dev/sectr"

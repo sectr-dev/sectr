@@ -546,7 +546,7 @@ wheels = [
 
 [[package]]
 name = "sectr"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "../../sdk-python" }
 dependencies = [
     { name = "fastapi" },
