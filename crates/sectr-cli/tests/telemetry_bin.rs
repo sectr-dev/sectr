@@ -90,7 +90,7 @@ impl Machine {
   }
 }
 
-const NOTICE: &str = "Sectr sends an anonymous usage ping at most once a day";
+const NOTICE: &str = "Sectr sends an anonymous usage ping at most once per day";
 
 fn install_id(path: &Path) -> String {
   let state: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
