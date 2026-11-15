@@ -217,7 +217,7 @@ fn record_ping(path: &Path, install_id: Uuid, today: NaiveDate) {
 fn notice() -> String {
   format!(
     "Sectr sends an anonymous usage ping at most once per day (CLI version + random install ID \
-     only).\n  -> Turn it off with `sectr telemetry off` or `{}=off` ({})",
+     only).\n  -> Turn it off with `sectr telemetry off` or `{}=off`\n     {}",
     usage_ping::SWITCH_ENV,
     usage_ping::DOCS_URL
   )
@@ -758,6 +758,6 @@ mod tests {
     let notice = notice();
     assert!(notice.contains("`sectr telemetry off`"));
     assert!(notice.contains("`SECTR_TELEMETRY=off`"));
-    assert!(notice.ends_with("(https://docs.sectr.dev/reference/telemetry/)"));
+    assert!(notice.ends_with("\n     https://docs.sectr.dev/reference/telemetry/"));
   }
 }
