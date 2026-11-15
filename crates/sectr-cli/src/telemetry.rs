@@ -203,12 +203,25 @@ fn record_ping(path: &Path, install_id: Uuid, today: NaiveDate) {
   }
 }
 
+/// Where the CLI points people with questions: a redirect to the current
+/// Discord invite, so an invite can change without a release.
+const DISCORD_URL: &str = "https://sectr.dev/discord";
+
 fn notice() -> String {
   format!(
     "Sectr sends an anonymous usage ping at most once a day: the CLI version and a random install \
      id, nothing else. Turn it off with `sectr telemetry off` or `{}=off`. Details: {}",
     usage_ping::SWITCH_ENV,
     usage_ping::DOCS_URL
+  )
+}
+
+/// What the CLI prints the first time it runs on a machine: the usage ping
+/// notice, then where to ask questions. Shown once, with the notice.
+fn first_run_message() -> String {
+  format!(
+    "{}\n\nQuestions or feedback? Join the Sectr Discord: {DISCORD_URL}",
+    notice()
   )
 }
 
@@ -254,7 +267,7 @@ pub fn prepare() -> Option<PendingPing> {
       None
     }
     Decision::Notice => {
-      eprintln!("{}", notice());
+      eprintln!("{}", first_run_message());
       None
     }
     Decision::Ping { install_id, wait } => Some(PendingPing {
@@ -681,5 +694,12 @@ mod tests {
     assert!(notice.contains("`sectr telemetry off`"));
     assert!(notice.contains("`SECTR_TELEMETRY=off`"));
     assert!(notice.ends_with("https://docs.sectr.dev/reference/telemetry/"));
+  }
+
+  #[test]
+  fn the_first_run_message_ends_with_the_discord() {
+    let message = first_run_message();
+    assert!(message.starts_with(&notice()));
+    assert!(message.ends_with("Join the Sectr Discord: https://sectr.dev/discord"));
   }
 }
