@@ -129,6 +129,49 @@ async fn a_fresh_install_pings_once_on_its_second_command() {
 }
 
 #[tokio::test]
+async fn json_output_never_carries_the_notice() {
+  let (url, seen) = collector(Duration::ZERO).await;
+  let machine = Machine::new(&url);
+  let session = "0190d7a0-0000-7000-8000-000000000000";
+  let json_runs: [&[&str]; 2] = [
+    &["send", "--json", "hello"],
+    &["tail", "--json", "--session", session],
+  ];
+
+  // On a fresh machine, `--json` runs print nothing about pings, even on
+  // stderr, which a caller may merge into the JSON it parses. They fail
+  // fast here (no `sectr dev` running), which is all this needs.
+  for args in json_runs {
+    let (output, _) = machine.sectr(args, &[]).await;
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains(NOTICE), "{args:?}: {stderr}");
+    assert!(output.stdout.is_empty(), "{args:?}");
+  }
+  // Nor does a bad switch get a warning there.
+  let (output, _) = machine
+    .sectr(json_runs[0], &[("SECTR_TELEMETRY", "maybe")])
+    .await;
+  let stderr = String::from_utf8(output.stderr).unwrap();
+  assert!(!stderr.contains("SECTR_TELEMETRY"), "{stderr}");
+  assert!(
+    !machine.state_file().exists(),
+    "a fresh install is left alone"
+  );
+
+  // The first ordinary command shows the notice, as on any fresh machine.
+  let (stderr, _) = machine.command(&[]).await;
+  assert!(stderr.contains(NOTICE), "{stderr}");
+  assert!(seen.lock().unwrap().is_empty());
+
+  // After that, a `--json` run sends the day's ping, and still prints
+  // nothing about it.
+  let (output, _) = machine.sectr(json_runs[0], &[]).await;
+  let stderr = String::from_utf8(output.stderr).unwrap();
+  assert!(!stderr.contains(NOTICE), "{stderr}");
+  assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn an_off_switch_sends_nothing_and_creates_no_file() {
   let (url, seen) = collector(Duration::ZERO).await;
   for switch in [("SECTR_TELEMETRY", "off"), ("DO_NOT_TRACK", "1")] {

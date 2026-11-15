@@ -64,10 +64,13 @@ enum Commands {
 async fn main() {
   let cli = Cli::parse();
   // The anonymous usage ping, when one is due, goes out while the command
-  // runs. `sectr telemetry` itself never pings.
+  // runs. `sectr telemetry` itself never pings. A `--json` run prints
+  // nothing about it: a program is reading that output.
   let ping = match &cli.command {
     Commands::Telemetry(_) => None,
-    _ => telemetry::prepare().map(telemetry::spawn),
+    Commands::Send(args) => telemetry::prepare(args.json).map(telemetry::spawn),
+    Commands::Tail(args) => telemetry::prepare(args.json).map(telemetry::spawn),
+    _ => telemetry::prepare(false).map(telemetry::spawn),
   };
   let (name, result) = match cli.command {
     Commands::Auth(args) => ("auth", auth_cmd::run_auth(args).await),

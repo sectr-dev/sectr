@@ -142,10 +142,17 @@ enum Decision {
 }
 
 /// Decide, and record the decision in the state file where it needs to be.
-fn decide(path: &Path, switch: &EnvSwitch, today: NaiveDate) -> Decision {
+///
+/// `quiet` is a run whose output a program reads (`--json`): it prints
+/// nothing, so it can't show the notice. It leaves a fresh install untouched
+/// instead, and the first run that isn't quiet shows the notice. Until then,
+/// nothing is sent.
+fn decide(path: &Path, switch: &EnvSwitch, today: NaiveDate, quiet: bool) -> Decision {
   match switch {
     EnvSwitch::Unset => {}
     EnvSwitch::Off(_) => return Decision::Skip,
+    // Pings are off either way. A quiet run just doesn't say so.
+    EnvSwitch::Invalid(_) if quiet => return Decision::Skip,
     EnvSwitch::Invalid(value) => {
       return Decision::Warn(format!(
         "sectr: {}={value:?} is not on or off, so usage pings are off for this run",
@@ -155,7 +162,8 @@ fn decide(path: &Path, switch: &EnvSwitch, today: NaiveDate) -> Decision {
   }
   let mut state = match load(path) {
     Loaded::State(state) => state,
-    Loaded::Missing => return first_run(path, State::on()),
+    Loaded::Missing => return first_run(path, State::on(), quiet),
+    Loaded::Malformed if quiet => return Decision::Skip,
     Loaded::Malformed => {
       return Decision::Warn(format!(
         "sectr: {} couldn't be read, so usage pings are off. Run `sectr telemetry on` to replace \
@@ -169,7 +177,7 @@ fn decide(path: &Path, switch: &EnvSwitch, today: NaiveDate) -> Decision {
   }
   let Some(install_id) = state.install_id else {
     // On, but with no id (a hand-edited file): the same as a first run.
-    return first_run(path, State::on());
+    return first_run(path, State::on(), quiet);
   };
   if state.last_ping == Some(today) {
     return Decision::Skip;
@@ -184,7 +192,10 @@ fn decide(path: &Path, switch: &EnvSwitch, today: NaiveDate) -> Decision {
   Decision::Ping { install_id, wait }
 }
 
-fn first_run(path: &Path, state: State) -> Decision {
+fn first_run(path: &Path, state: State, quiet: bool) -> Decision {
+  if quiet {
+    return Decision::Skip;
+  }
   match store(path, &state) {
     Ok(()) => Decision::Notice,
     Err(_) => Decision::Skip,
@@ -243,11 +254,13 @@ pub struct SentPing {
 }
 
 /// Decide whether this run pings, printing the first-run notice or a warning
-/// to stderr when there is one.
-pub fn prepare() -> Option<PendingPing> {
+/// to stderr when there is one. A `quiet` run (`--json`) prints nothing at
+/// all, so a program reading its output never sees these lines, even with
+/// stderr merged into stdout.
+pub fn prepare(quiet: bool) -> Option<PendingPing> {
   let path = state_path().ok()?;
   let switch = usage_ping::env_switch(usage_ping::process_env);
-  match decide(&path, &switch, today()) {
+  match decide(&path, &switch, today(), quiet) {
     Decision::Skip => None,
     Decision::Warn(line) => {
       eprintln!("{line}");
@@ -441,7 +454,7 @@ mod tests {
     let on = EnvSwitch::Unset;
 
     // Run 1: the notice, a random id, no ping.
-    assert_eq!(decide(&path, &on, day(14)), Decision::Notice);
+    assert_eq!(decide(&path, &on, day(14), false), Decision::Notice);
     let created = state(&path);
     assert!(created.enabled);
     let id = created.install_id.expect("an install id");
@@ -450,32 +463,32 @@ mod tests {
     assert_eq!(created.last_attempt, None);
 
     // Run 2, the same day: pings, and waits for it at exit.
-    assert_eq!(expect_ping(decide(&path, &on, day(14))), (id, true));
+    assert_eq!(expect_ping(decide(&path, &on, day(14), false)), (id, true));
     record_ping(&path, id, day(14));
     assert_eq!(state(&path).last_ping, Some(day(14)));
 
     // Run 3, the same day: nothing.
-    assert_eq!(decide(&path, &on, day(14)), Decision::Skip);
+    assert_eq!(decide(&path, &on, day(14), false), Decision::Skip);
 
     // The next day: pings again, with the same id.
-    assert_eq!(expect_ping(decide(&path, &on, day(15))), (id, true));
+    assert_eq!(expect_ping(decide(&path, &on, day(15), false)), (id, true));
   }
 
   #[test]
   fn a_failed_ping_is_tried_again_without_waiting() {
     let (_dir, path) = dir();
     let on = EnvSwitch::Unset;
-    assert_eq!(decide(&path, &on, day(14)), Decision::Notice);
+    assert_eq!(decide(&path, &on, day(14), false), Decision::Notice);
 
     // Run 2's ping fails: nothing records a success.
-    let (id, wait) = expect_ping(decide(&path, &on, day(14)));
+    let (id, wait) = expect_ping(decide(&path, &on, day(14), false));
     assert!(wait);
     assert_eq!(state(&path).last_ping, None);
 
     // Run 3 tries again, but no longer holds up the command's exit.
-    assert_eq!(expect_ping(decide(&path, &on, day(14))), (id, false));
+    assert_eq!(expect_ping(decide(&path, &on, day(14), false)), (id, false));
     // The next day's first try waits again.
-    assert_eq!(expect_ping(decide(&path, &on, day(15))), (id, true));
+    assert_eq!(expect_ping(decide(&path, &on, day(15), false)), (id, true));
   }
 
   #[test]
@@ -485,9 +498,9 @@ mod tests {
       EnvSwitch::Off(usage_ping::SWITCH_ENV),
       EnvSwitch::Off(usage_ping::DO_NOT_TRACK_ENV),
     ] {
-      assert_eq!(decide(&path, &switch, day(14)), Decision::Skip);
+      assert_eq!(decide(&path, &switch, day(14), false), Decision::Skip);
     }
-    let warned = decide(&path, &EnvSwitch::Invalid("maybe".into()), day(14));
+    let warned = decide(&path, &EnvSwitch::Invalid("maybe".into()), day(14), false);
     assert!(
       matches!(&warned, Decision::Warn(line) if line.contains("SECTR_TELEMETRY=\"maybe\"")),
       "{warned:?}"
@@ -502,18 +515,48 @@ mod tests {
     let switch = usage_ping::env_switch(|name| (name == "CI").then(|| "true".to_owned()));
     assert_eq!(switch, EnvSwitch::Unset);
     let (_dir, path) = dir();
-    assert_eq!(decide(&path, &switch, day(14)), Decision::Notice);
+    assert_eq!(decide(&path, &switch, day(14), false), Decision::Notice);
     assert!(matches!(
-      decide(&path, &switch, day(14)),
+      decide(&path, &switch, day(14), false),
       Decision::Ping { .. }
     ));
+  }
+
+  #[test]
+  fn a_json_run_prints_nothing_and_leaves_a_fresh_install_alone() {
+    let (dir, path) = dir();
+    let on = EnvSwitch::Unset;
+
+    // Quiet runs on a fresh machine: no notice, no file, no ping.
+    assert_eq!(decide(&path, &on, day(14), true), Decision::Skip);
+    assert_eq!(decide(&path, &on, day(14), true), Decision::Skip);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+
+    // A quiet run with a bad switch or a bad file says nothing either.
+    assert_eq!(
+      decide(&path, &EnvSwitch::Invalid("maybe".into()), day(14), true),
+      Decision::Skip
+    );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "enabled = maybe\n").unwrap();
+    assert_eq!(decide(&path, &on, day(14), true), Decision::Skip);
+    std::fs::remove_file(&path).unwrap();
+
+    // The first run that isn't quiet shows the notice. After that, a quiet
+    // run pings like any other: sending prints nothing.
+    assert_eq!(decide(&path, &on, day(14), false), Decision::Notice);
+    let id = state(&path).install_id.unwrap();
+    assert_eq!(expect_ping(decide(&path, &on, day(14), true)), (id, true));
   }
 
   #[test]
   fn turned_off_in_the_file_sends_nothing() {
     let (_dir, path) = dir();
     store(&path, &State::off()).unwrap();
-    assert_eq!(decide(&path, &EnvSwitch::Unset, day(14)), Decision::Skip);
+    assert_eq!(
+      decide(&path, &EnvSwitch::Unset, day(14), false),
+      Decision::Skip
+    );
     assert_eq!(state(&path), State::off());
   }
 
@@ -522,7 +565,7 @@ mod tests {
     let (_dir, path) = dir();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "enabled = maybe\n").unwrap();
-    let decision = decide(&path, &EnvSwitch::Unset, day(14));
+    let decision = decide(&path, &EnvSwitch::Unset, day(14), false);
     assert!(
       matches!(&decision, Decision::Warn(line)
         if line.contains(&path.display().to_string()) && line.contains("sectr telemetry on")),
@@ -537,7 +580,10 @@ mod tests {
     let (_dir, path) = dir();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "enabled = true\n").unwrap();
-    assert_eq!(decide(&path, &EnvSwitch::Unset, day(14)), Decision::Notice);
+    assert_eq!(
+      decide(&path, &EnvSwitch::Unset, day(14), false),
+      Decision::Notice
+    );
     assert!(state(&path).install_id.is_some());
   }
 
@@ -552,7 +598,10 @@ mod tests {
       // Running as root: permissions don't bind, so there is nothing to test.
       return;
     }
-    assert_eq!(decide(&path, &EnvSwitch::Unset, day(14)), Decision::Skip);
+    assert_eq!(
+      decide(&path, &EnvSwitch::Unset, day(14), false),
+      Decision::Skip
+    );
     assert!(!path.exists());
 
     // An existing file that can't be rewritten: the try can't be recorded,
@@ -564,7 +613,10 @@ mod tests {
       std::fs::Permissions::from_mode(0o555),
     )
     .unwrap();
-    assert_eq!(decide(&path, &EnvSwitch::Unset, day(14)), Decision::Skip);
+    assert_eq!(
+      decide(&path, &EnvSwitch::Unset, day(14), false),
+      Decision::Skip
+    );
     std::fs::set_permissions(
       path.parent().unwrap(),
       std::fs::Permissions::from_mode(0o755),
@@ -596,7 +648,10 @@ mod tests {
   #[test]
   fn off_then_on_makes_a_different_id() {
     let (_dir, path) = dir();
-    assert_eq!(decide(&path, &EnvSwitch::Unset, day(14)), Decision::Notice);
+    assert_eq!(
+      decide(&path, &EnvSwitch::Unset, day(14), false),
+      Decision::Notice
+    );
     let first = state(&path).install_id.unwrap();
 
     store(&path, &State::off()).unwrap();
@@ -609,7 +664,7 @@ mod tests {
     assert_ne!(first, second);
     // Turned on by hand: no notice run, the next command pings.
     assert_eq!(
-      expect_ping(decide(&path, &EnvSwitch::Unset, day(14))),
+      expect_ping(decide(&path, &EnvSwitch::Unset, day(14), false)),
       (second, true)
     );
   }

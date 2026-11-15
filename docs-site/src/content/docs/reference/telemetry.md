@@ -35,6 +35,8 @@ At most once a day (UTC), when you run a command.
 
 The first time you run `sectr`, it prints a notice about usage pings and sends nothing. The next command sends the first ping. Each day after that, the first command you run sends one.
 
+A command run with `--json` (`sectr send`, `sectr tail`) never prints anything about pings, so its output stays plain JSON even with stderr merged in. On a new machine it doesn't show the notice either: the notice waits for the first command without `--json`, and nothing is sent before it.
+
 A ping goes out in the background while your command runs. If the collector can't be reached, the CLI waits for it at most half a second as the command ends, once a day, and tries again the next time you run a command.
 
 `sectr --help`, `sectr --version` and `sectr telemetry` never send a ping.
