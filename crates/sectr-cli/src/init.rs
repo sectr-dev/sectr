@@ -580,8 +580,25 @@ async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
     crate::endpoint::print_next_steps(platform, &name, from);
   }
   println!();
-  println!("Questions or feedback? Join the Sectr Discord: {DISCORD_URL}");
+  let color =
+    io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+  println!("{}", discord_line(color));
   Ok(())
+}
+
+/// The line that ends a new project's output. In color only on a terminal:
+/// output piped to a file or another program stays plain text.
+fn discord_line(color: bool) -> String {
+  use crossterm::style::Stylize;
+  if color {
+    format!(
+      "Questions or feedback? {} {}",
+      "Join the Sectr Discord:".magenta().bold(),
+      DISCORD_URL.cyan().underlined()
+    )
+  } else {
+    format!("Questions or feedback? Join the Sectr Discord: {DISCORD_URL}")
+  }
 }
 
 /// `--api` and `--key` name the server an endpoint's Dockerfile pins, so
@@ -1091,6 +1108,19 @@ mod tests {
     }
   }
 
+  #[test]
+  fn the_discord_line_is_plain_text_off_a_terminal() {
+    assert_eq!(
+      discord_line(false),
+      "Questions or feedback? Join the Sectr Discord: https://sectr.dev/discord"
+    );
+    let colored = discord_line(true);
+    assert!(colored.contains(DISCORD_URL), "{colored:?}");
+    assert!(
+      colored.starts_with("Questions or feedback? "),
+      "{colored:?}"
+    );
+  }
   #[test]
   fn scaffold_matrix_emits_all_files_with_stamps() {
     let version = env!("CARGO_PKG_VERSION");
