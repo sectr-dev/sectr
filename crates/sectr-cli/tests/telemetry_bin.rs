@@ -90,7 +90,7 @@ impl Machine {
   }
 }
 
-const NOTICE: &str = "Sectr sends an anonymous usage ping at most once per day";
+const NOTICE: &str = "Sectr sends anonymous telemetry at most once per day";
 
 fn install_id(path: &Path) -> String {
   let state: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -196,7 +196,7 @@ async fn the_telemetry_command_and_version_never_ping() {
   assert!(output.status.success());
   let stdout = String::from_utf8(output.stdout).unwrap();
   assert!(
-    stdout.starts_with("Usage pings are on (the default)."),
+    stdout.starts_with("Telemetry is on (the default)."),
     "{stdout}"
   );
   assert!(!machine.state_file().exists(), "status writes nothing");

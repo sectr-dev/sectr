@@ -32,12 +32,12 @@ pub async fn run(
   interval: Duration,
 ) {
   if !enabled {
-    tracing::info!("anonymous usage pings are off");
+    tracing::info!("anonymous telemetry is off");
     return;
   }
   tracing::info!(
-    "anonymous usage pings are on: the server version and a random install id, once a day, to \
-     {url}. Set {}=off to turn them off: {}",
+    "anonymous telemetry is on: the server version and a random install id, once a day, to \
+     {url}. Set {}=off to turn it off: {}",
     usage_ping::SWITCH_ENV,
     usage_ping::DOCS_URL
   );

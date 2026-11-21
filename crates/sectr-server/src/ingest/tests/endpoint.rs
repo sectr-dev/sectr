@@ -1237,7 +1237,7 @@ async fn registration_failures_land_on_the_row() {
     (
       json!({"outcome": "dial_failed", "message": "connection refused"}),
       format!(
-        "couldn't reach {ingest}: connection refused. Check that your platform allows outbound"
+        "couldn't reach {ingest}: connection refused. Check that your compute provider allows outbound"
       ),
     ),
     (

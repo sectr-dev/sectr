@@ -102,9 +102,9 @@ fn store(path: &Path, state: &State) -> anyhow::Result<()> {
   let dir = path.parent().context("the state file has no directory")?;
   std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
   let body = format!(
-    "# Sectr's anonymous usage pings. `sectr telemetry status` explains this file.\n# {}\n{}",
+    "# Sectr's anonymous telemetry. `sectr telemetry status` explains this file.\n# {}\n{}",
     usage_ping::DOCS_URL,
-    toml::to_string(state).context("serialize the usage ping state")?
+    toml::to_string(state).context("serialize the telemetry state")?
   );
   let tmp = dir.join(format!("{FILE_NAME}.{}.tmp", std::process::id()));
   let written = write_private(&tmp, &body).and_then(|()| std::fs::rename(&tmp, path));
@@ -155,7 +155,7 @@ fn decide(path: &Path, switch: &EnvSwitch, today: NaiveDate, quiet: bool) -> Dec
     EnvSwitch::Invalid(_) if quiet => return Decision::Skip,
     EnvSwitch::Invalid(value) => {
       return Decision::Warn(format!(
-        "sectr: {}={value:?} is not on or off, so usage pings are off for this run",
+        "sectr: {}={value:?} is not on or off, so telemetry is off for this run",
         usage_ping::SWITCH_ENV
       ));
     }
@@ -166,7 +166,7 @@ fn decide(path: &Path, switch: &EnvSwitch, today: NaiveDate, quiet: bool) -> Dec
     Loaded::Malformed if quiet => return Decision::Skip,
     Loaded::Malformed => {
       return Decision::Warn(format!(
-        "sectr: {} couldn't be read, so usage pings are off. Run `sectr telemetry on` to replace \
+        "sectr: {} couldn't be read, so telemetry is off. Run `sectr telemetry on` to replace \
          it, or delete it.",
         path.display()
       ));
@@ -216,7 +216,7 @@ fn record_ping(path: &Path, install_id: Uuid, today: NaiveDate) {
 
 fn notice() -> String {
   format!(
-    "Sectr sends an anonymous usage ping at most once per day (CLI version + random install ID \
+    "Sectr sends anonymous telemetry at most once per day (CLI version + random install ID \
      only).\n  -> Turn it off with `sectr telemetry off` or `{}=off`\n     {}",
     usage_ping::SWITCH_ENV,
     usage_ping::DOCS_URL
@@ -336,11 +336,11 @@ pub struct TelemetryArgs {
 
 #[derive(Subcommand, Debug)]
 enum TelemetryCommand {
-  /// Turn usage pings on, with a new install id.
+  /// Turn telemetry on, with a new install id.
   On,
-  /// Turn usage pings off and delete the install id.
+  /// Turn telemetry off and delete the install id.
   Off,
-  /// Show whether usage pings are on, and exactly what one sends.
+  /// Show whether telemetry is on, and exactly what it sends.
   Status,
 }
 
@@ -351,14 +351,14 @@ pub fn run_telemetry(args: TelemetryArgs) -> anyhow::Result<()> {
   match args.command {
     TelemetryCommand::On => {
       store(&path, &State::on())?;
-      println!("Usage pings are on.");
+      println!("Telemetry is on.");
       if let Some(reason) = env_off_reason(&switch) {
-        println!("They stay off in this environment: {reason}.");
+        println!("It stays off in this environment: {reason}.");
       }
     }
     TelemetryCommand::Off => {
       store(&path, &State::off())?;
-      println!("Usage pings are off.");
+      println!("Telemetry is off.");
     }
     TelemetryCommand::Status => {
       print!("{}", status(&path, &switch));
@@ -405,7 +405,7 @@ fn status(path: &Path, switch: &EnvSwitch) -> String {
     _ => None,
   };
   let mut out = format!(
-    "Usage pings are {} ({why}).\n\n",
+    "Telemetry is {} ({why}).\n\n",
     if on { "on" } else { "off" }
   );
   let body = match install_id {
@@ -418,12 +418,12 @@ fn status(path: &Path, switch: &EnvSwitch) -> String {
   }
   .unwrap_or_default();
   out.push_str(match (on, install_id) {
-    (true, Some(_)) => "A ping sends exactly this, at most once per day:\n",
+    (true, Some(_)) => "It sends exactly this, at most once per day:\n",
     (true, None) => {
-      "No install id yet: the next command creates one. A ping sends exactly this, at most once \
-       per day:\n"
+      "No install id yet: the next command creates one. It sends exactly this, at most once per \
+       day:\n"
     }
-    (false, _) => "Nothing is sent. With pings on, one would send exactly this:\n",
+    (false, _) => "Nothing is sent. With telemetry on, it would send exactly this:\n",
   });
   out.push_str(&body);
   out.push_str(&format!("\n\nDetails: {}\n", usage_ping::DOCS_URL));
@@ -653,7 +653,7 @@ mod tests {
     assert!(
       std::fs::read_to_string(&path)
         .unwrap()
-        .starts_with("# Sectr's anonymous usage pings.")
+        .starts_with("# Sectr's anonymous telemetry.")
     );
   }
 
@@ -703,7 +703,7 @@ mod tests {
 
     let fresh = status(&path, &EnvSwitch::Unset);
     assert!(
-      fresh.starts_with("Usage pings are on (the default).\n\nNo install id yet"),
+      fresh.starts_with("Telemetry is on (the default).\n\nNo install id yet"),
       "{fresh}"
     );
     assert!(
@@ -717,7 +717,7 @@ mod tests {
     let id = state(&path).install_id.unwrap();
     let on = status(&path, &EnvSwitch::Unset);
     assert!(
-      on.contains("A ping sends exactly this, at most once per day:\n{"),
+      on.contains("It sends exactly this, at most once per day:\n{"),
       "{on}"
     );
     let start = on.find('{').unwrap();
@@ -734,7 +734,7 @@ mod tests {
 
     let env_off = status(&path, &EnvSwitch::Off(usage_ping::DO_NOT_TRACK_ENV));
     assert!(
-      env_off.starts_with("Usage pings are off (DO_NOT_TRACK is set).\n\n"),
+      env_off.starts_with("Telemetry is off (DO_NOT_TRACK is set).\n\n"),
       "{env_off}"
     );
     assert!(env_off.contains("Nothing is sent."), "{env_off}");
@@ -742,7 +742,7 @@ mod tests {
     store(&path, &State::off()).unwrap();
     let file_off = status(&path, &EnvSwitch::Unset);
     assert!(
-      file_off.starts_with("Usage pings are off (turned off in "),
+      file_off.starts_with("Telemetry is off (turned off in "),
       "{file_off}"
     );
     assert!(file_off.contains("Nothing is sent."), "{file_off}");

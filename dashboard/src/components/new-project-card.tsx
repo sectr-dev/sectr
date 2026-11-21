@@ -586,7 +586,7 @@ function endpointDeploySteps(platform: string): Step[] {
                     lang="toml"
                 />
             ),
-            note: "The URL your platform gave the deployed image: your compute endpoint.",
+            note: "The URL your compute provider gave the deployed image: your compute endpoint.",
         },
         {
             title: "Register it with Sectr",
@@ -771,7 +771,7 @@ function DeployBody({ initialFramework }: { initialFramework?: FrameworkId }) {
         ...(endpoint
             ? [
                   {
-                      title: "Add the files for your platform",
+                      title: "Add the files for your compute provider",
                       command: `sectr init --endpoint ${runsOn}`,
                       note: "Run it next to sectr.toml. Adds a Dockerfile and .dockerignore, and [deploy] endpoint to sectr.toml.",
                   },
