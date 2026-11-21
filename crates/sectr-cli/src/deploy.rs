@@ -223,7 +223,7 @@ pub(crate) fn deploy_mode(sectr_toml: &str) -> anyhow::Result<Mode> {
 fn unset_endpoint_message() -> String {
   format!(
     "registering your compute endpoint ([deploy] endpoint in sectr.toml), but it's empty.\n  \
-     1. build the image from the Dockerfile and deploy it on your platform (guide: {})\n  \
+     1. build the image from the Dockerfile and deploy it on your compute provider (guide: {})\n  \
      2. put its URL in sectr.toml: [deploy] endpoint = \"https://…\"\n  \
      3. run `sectr deploy` again",
     crate::endpoint::GUIDE
@@ -789,7 +789,7 @@ mod tests {
   async fn a_failed_registration_names_registration_and_hints() {
     let error = format!(
       "your compute endpoint's sidecar {} wss://ingest.example.com/ingest: timed out. Check that your \
-       platform allows outbound connections.",
+       compute provider allows outbound connections.",
       sectr_common::endpoint::DIAL_FAILED
     );
     let target = endpoint_stub(

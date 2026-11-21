@@ -240,8 +240,8 @@ async fn register_and_activate(
     }
     ManifestAnswer::DialFailed { message } => {
       return Err(format!(
-        "your compute endpoint's sidecar {DIAL_FAILED} {ingest_url}: {message}. Check that your platform \
-         allows outbound connections."
+        "your compute endpoint's sidecar {DIAL_FAILED} {ingest_url}: {message}. Check that your compute \
+         provider allows outbound connections."
       ));
     }
     ManifestAnswer::ImportFailed {

@@ -34,7 +34,7 @@ impl Platform {
       "cloud-run" => Ok(Platform::CloudRun),
       "container" => Ok(Platform::Container),
       other => bail!(
-        "unknown endpoint platform {other:?} — the platforms are `lambda`, `cloud-run` and \
+        "unknown compute provider {other:?} — the providers are `lambda`, `cloud-run` and \
          `container`"
       ),
     }
@@ -116,7 +116,7 @@ impl Platform {
         // amd64 host can't run.
         vec![
           format!("docker build --platform linux/amd64 -t {app_name} ."),
-          "(--platform linux/arm64 instead if your platform runs on Arm)".to_owned(),
+          "(--platform linux/arm64 instead if your compute provider runs on Arm)".to_owned(),
         ],
         vec![
           "run it with its port published and PORT set (8080 by default), behind HTTPS, \

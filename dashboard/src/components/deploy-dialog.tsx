@@ -54,7 +54,7 @@ export function DeployDialog({
           <DialogDescription>
             {endpoint ? (
               <>
-                Redeploy your image on your platform, then run this in the
+                Redeploy your image on your compute provider, then run this in the
                 project&apos;s directory to register{" "}
                 <span className="font-mono text-xs">v{nextVersion}</span>.
               </>

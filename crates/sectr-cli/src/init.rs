@@ -69,7 +69,8 @@ pub struct InitArgs {
   /// Omitted → `none` with --template, else an interactive picker.
   #[arg(long)]
   pub frontend: Option<String>,
-  /// Run it on your own platform: `lambda`, `cloud-run` or `container`.
+  /// Run it on your own compute provider: `lambda`, `cloud-run` or
+  /// `container`.
   /// Adds a Dockerfile pinned to your server and `[deploy] endpoint` to
   /// sectr.toml; in an existing project (a sectr.toml here, no name), adds
   /// only those. Needs a server (`sectr auth login`, or --api).
@@ -77,12 +78,12 @@ pub struct InitArgs {
   #[arg(long)]
   pub endpoint: Option<String>,
   /// The server whose base image and ingest URL a compute endpoint's Dockerfile
-  /// pins (so only for a project on your own platform). Defaults through
+  /// pins (so only for a project on your own compute provider). Defaults through
   /// `sectr auth login` (or SECTR_API_URL).
   #[arg(long)]
   pub api: Option<String>,
   /// Platform API key (`skp_…`) for that server (so only for a project on
-  /// your own platform). Defaults through `sectr auth login` (or
+  /// your own compute provider). Defaults through `sectr auth login` (or
   /// SECTR_PLATFORM_KEY).
   #[arg(long)]
   pub key: Option<String>,
@@ -455,7 +456,7 @@ async fn run_init_in(cwd: &Path, args: InitArgs) -> anyhow::Result<()> {
           let runs_on = pick(
             "Where will it run?",
             "no terminal for the where-it-runs picker — pass --endpoint lambda, \
-             cloud-run or container to run it on your own platform",
+             cloud-run or container to run it on your own compute provider",
             RunsOn::picker_items(),
           )?;
           println!("→ runs on: {}", runs_on.arg());
@@ -606,7 +607,7 @@ fn discord_line(color: bool) -> String {
 fn server_flags_fit(args: &InitArgs, runs_on: RunsOn) -> anyhow::Result<()> {
   if runs_on == RunsOn::Sectr && (args.api.is_some() || args.key.is_some()) {
     bail!(
-      "--api and --key only apply to a project that runs on your own platform (--endpoint), \
+      "--api and --key only apply to a project that runs on your own compute provider (--endpoint), \
        whose Dockerfile pins that server; a project on Sectr Run meets its server at \
        `sectr deploy`, which takes them too"
     );
@@ -922,7 +923,7 @@ fn ensure_target_dir(target: &Path, force: bool) -> anyhow::Result<()> {
       .is_none();
     if !empty && !force {
       let existing_project = if target.join("sectr.toml").is_file() {
-        "\nto run that project on your own platform, cd into it and use \
+        "\nto run that project on your own compute provider, cd into it and use \
          `sectr init --endpoint lambda|cloud-run|container`"
       } else {
         ""

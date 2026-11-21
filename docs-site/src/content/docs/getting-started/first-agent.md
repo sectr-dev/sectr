@@ -78,10 +78,12 @@ python = "3.12"
   and `sectr secrets`.
 - **`[agent] entry`** is where your `AgentApp` lives, as `module:attribute`.
 
-Optional keys come up later: `[deploy] approval_tools`, to
-[gate tools by config](/guides/approvals/#marking-as-gated-in-deployment-config),
-`[deploy] endpoint`, to [run it on your own compute](/guides/your-own-compute/),
-and `[dev] port`, to [pin the local port](/guides/local-dev/#ports).
+Optional keys come up later:
+
+- **`[deploy] approval_tools`**, to
+  [gate tools by config](/guides/approvals/#marking-as-gated-in-deployment-config).
+- **`[deploy] endpoint`**, to [run it on your own compute](/guides/your-own-compute/).
+- **`[dev] port`**, to [pin the local port](/guides/local-dev/#ports).
 
 ## Serving the agent
 

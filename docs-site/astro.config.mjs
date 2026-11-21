@@ -130,7 +130,7 @@ export default defineConfig({
                     items: [
                         { label: "Commands", link: "/reference/cli/" },
                         {
-                            label: "Usage pings",
+                            label: "Telemetry",
                             link: "/reference/telemetry/",
                         },
                     ],
@@ -191,10 +191,13 @@ export default defineConfig({
                             link: "/guides/approvals/",
                         },
                         {
-                            label: "Your own compute",
+                            label: "Agents on your own compute",
                             link: "/guides/your-own-compute/",
                         },
-                        { label: "Self-hosting", link: "/guides/self-hosting/" },
+                        {
+                            label: "Self-hosting Sectr",
+                            link: "/guides/self-hosting/",
+                        },
                         // {
                         //     label: "Choosing a framework",
                         //     link: "/guides/framework-adapters/",

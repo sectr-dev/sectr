@@ -39,7 +39,7 @@ enum Commands {
   /// Scaffold a new agent project: framework, frontend and where-it-runs
   /// pickers (or --template / --frontend / --endpoint), file emission, `uv
   /// sync`, and a smoke inspect. `--endpoint` in an existing project adds
-  /// the files to run it on your own platform. See `init --help`.
+  /// the files to run it on your own compute provider. See `init --help`.
   Init(init::InitArgs),
   /// Run the app locally end-to-end: SQLite journal, subprocess runner,
   /// gateway for clients. See `dev --help`.
@@ -55,8 +55,8 @@ enum Commands {
   Deploy(deploy::DeployArgs),
   /// Manage the app's server-side secrets (write-only: set/list/rm).
   Secrets(secrets::SecretsArgs),
-  /// Anonymous usage pings: turn them on or off, or see exactly what one
-  /// sends (on/off/status).
+  /// Anonymous telemetry: turn it on or off, or see exactly what it sends
+  /// (on/off/status).
   Telemetry(telemetry::TelemetryArgs),
 }
 
