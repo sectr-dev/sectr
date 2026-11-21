@@ -5,8 +5,8 @@ description: Concurrency, capacity and rate limits on the Sectr API, the 429 err
 
 <!-- This was last checked for drift at commit 185df8e09c033928fa23fb53105ea8e3d99d3f36. -->
 
-Sectr is **free during the beta**, and a few guardrails keep it fair and
-available for everyone. Limits are **server policy**: they apply on
+Hosted Sectr has a [free tier](https://sectr.dev/pricing/), and a few
+guardrails keep it fair and available for everyone. Limits are **server policy**: they apply on
 `api.sectr.dev`; the local `sectr dev` gateway never returns them.
 
 ## Defaults
