@@ -354,7 +354,7 @@ function LoginCard({
       {emailStep}
 
       <p className="text-center text-xs text-faint-foreground">
-        Free during beta. By continuing you agree to the{" "}
+        Free tier, no card needed. By continuing you agree to the{" "}
         <a
           href="https://sectr.dev/terms/"
           target="_blank"
