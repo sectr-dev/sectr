@@ -13,7 +13,8 @@ available for everyone. Limits are **server policy**: they apply on
 
 | Limit | Default | Applies to |
 | --- | --- | --- |
-| Concurrent turns per project | 3 | every credential of the project |
+| Concurrent turns per project, on Sectr Run | 3 | every credential of the project |
+| Concurrent turns per project, on [your own compute](/guides/your-own-compute/) | 20 | every credential of the project |
 | Concurrent turns, platform-wide | set by Sectr (capacity) | all projects |
 | Session creation per end user | 60 / hour, burst 10 | [user tokens](/reference/api/auth/) (`sks_`), per `(project, user)` |
 | Session creation per project | 600 / hour, burst 60 | [invocation keys](/reference/api/auth/) (`ski_`), shared by everyone using that key |
@@ -49,12 +50,3 @@ creates no session either.
 Wait at least `Retry-After` seconds, then retry the same request, with a
 little jitter. Don't retry in a tight loop. In a browser UI, surface a
 "busy, retrying…" state rather than an error.
-
-## Signup
-
-<!-- skill: skip section — about signing up for Sectr, not using it -->
-
-Sectr caps the number of beta accounts. When the cap is reached, signup
-returns `403` with `{"error": "...", "code": "beta_full"}`. Join the waitlist
-at [sectr.dev/alpha](https://sectr.dev/alpha). Existing accounts are
-unaffected.

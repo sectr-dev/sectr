@@ -21,7 +21,7 @@ import secretsRm from "../../../generated/cli/secrets-rm.txt?raw";
 import telemetry from "../../../generated/cli/telemetry.txt?raw";
 
 Below is the full CLI command reference. For the
-workflows behind the commands, get setup with
+workflows behind the commands, get set up with
 [install](/getting-started/install/), and the understand [the Sectr dev loop](/getting-started/first-agent/).
 
 ## Authenticating the CLI
@@ -58,7 +58,7 @@ sectr auth login --api http://localhost:8080
 
 ### `sectr dev`
 
-`sectr dev` needs no server or login. It opens the dashboard from `--dashboard` or `SECTR_DASHBOARD_URL`, then your login's dashboard, then [app.sectr.dev](https://app.sectr.dev). Your agent and its data stay on your machine either way, because the browser talks directly to the local gateway.
+`sectr dev` needs no server or login. It opens your login's dashboard, or [app.sectr.dev](https://app.sectr.dev) if you aren't logged in. Your agent and its data stay on your machine either way, because the browser talks directly to the local gateway.
 
 <Code code={dev} lang="text" />
 
@@ -88,14 +88,14 @@ sectr auth login --api http://localhost:8080
 
 ### `sectr deploy`
 
-`sectr deploy` packages the project and ships it to Sectr Run, which builds and runs it. With `[deploy] endpoint` in `sectr.toml`, it uploads nothing: your agent runs on your own AWS Lambda, Google Cloud Run or container platform (your compute endpoint), and this registers its URL. `sectr init --endpoint <platform>` sets a project up for it. See [Run it on your own compute](/guides/your-own-compute/).
+`sectr deploy` packages the project and ships it to Sectr Run, which builds and runs it. With `[deploy] endpoint` in `sectr.toml`, it uploads nothing: your agent runs on your own AWS Lambda, Google Cloud Run or container platform (your compute endpoint), and this registers its URL with Sectr. `sectr init --endpoint <platform>` sets a project up for it. See [Agents on your own compute](/guides/your-own-compute/).
 
 <Code code={deploy} lang="text" />
 
-## Usage Pings
+## Telemetry
 
 ### `sectr telemetry`
 
-The CLI sends an anonymous ping at most once a day: its version and a random install id. [Usage pings](/reference/telemetry/) lists exactly what's sent. `sectr telemetry status` shows whether pings are on and the exact body of one, and `sectr telemetry off` turns them off.
+The CLI sends one anonymous request at most once a day: its version and a random install id. [Telemetry](/reference/telemetry/) lists exactly what's sent. `sectr telemetry status` shows whether telemetry is on and the exact body it sends, and `sectr telemetry off` turns it off.
 
 <Code code={telemetry} lang="text" />
